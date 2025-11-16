@@ -25,6 +25,13 @@
   :type 'key-sequence
   :group 'benedict)
 
+(defcustom benedict-provider 'openrouter
+  "Symbol identifying the provider to use for chat interactions."
+  :type 'symbol
+  :group 'benedict)
+
+(require 'benedict-provider)
+
 ;; Faces (initial, minimal)
 (defface benedict-chat-user
   '((t :inherit default :weight bold))
@@ -37,6 +44,10 @@
 (defface benedict-chat-system
   '((t :inherit shadow))
   "Face for system messages in chat buffers.")
+
+(defface benedict-chat-error
+  '((t :inherit error :weight bold))
+  "Face for error responses in chat buffers.")
 
 ;; Error hierarchy
 (define-error 'benedict-error "Benedict error")
@@ -63,6 +74,9 @@
 
 ;; Autoload interactive entry points to avoid load-order issues
 (autoload 'benedict-chat "benedict-chat" "Open Benedict chat buffer." t)
+
+(require 'benedict-provider-openrouter)
+(require 'benedict-provider-fake)
 
 (provide 'benedict)
 ;;; benedict.el ends here

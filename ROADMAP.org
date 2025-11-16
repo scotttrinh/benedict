@@ -43,11 +43,12 @@ Acceptance:
 
 * Phase 2 — First Real Provider (non-streaming)
 Tasks:
-- OpenAI‑compatible backend using url-retrieve; error handling; retries with backoff
+- OpenRouter backend using url-retrieve; error handling; retries with backoff
 - Auth integration: auth-source search; env var fallback; redact in messages
 - Chat buffer roles: user/assistant/system; retry last; copy to kill-ring
 - Non-streaming rendering; code fences; basic markdown-lite font-lock
 - Project context collection: region/defun/buffer; project.el root; simple templates
+- Manual testing plan: document credential setup, buffer commands, and checklist for exercising a real OpenRouter request
 Acceptance:
 - Users can configure endpoint and model, send prompts, and receive full responses
 - Per-project settings respected; context preview before send togglable
@@ -152,6 +153,6 @@ Acceptance:
 
 * Open Questions
 - Minimum Emacs version? (27.1+ recommended; streaming smoother on 28+)
-- Which provider first for best DX? (OpenAI‑compatible vs anthropic/raw SSE)
+- Which provider first for best DX? (Defaulting to OpenRouter for breadth; evaluate Anthropic/raw SSE later)
 - DB location by default? (XDG data dir: ~/.local/share/benedict/benedict.sqlite; allow per-project override at .benedict/benedict.sqlite)
 - How strict should default approvals be? (lean safe; allow per-project relax)

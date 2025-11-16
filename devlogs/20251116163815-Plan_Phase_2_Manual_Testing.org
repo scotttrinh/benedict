@@ -1,0 +1,29 @@
+#+TITLE: Plan — Phase 2 (Manual Testing Readiness for OpenRouter)
+#+AUTHOR: Benedict maintainers
+#+LANGUAGE: en
+
+* Objective
+Finish wiring the OpenRouter provider into the chat workflow, document the configuration steps, and complete enough validation hooks so we can manually exercise a real OpenRouter model end-to-end from Emacs.
+
+* Success Criteria
+- Chat buffers send accumulated messages through `benedict-provider-openrouter` and render assistant/error responses with metadata.
+- README/ROADMAP include the concrete OpenRouter configuration checklist (auth-source + env) so a tester can follow along.
+- Manual test script exists in devlog notes outlining prerequisites, commands, and expected observations.
+- Provider logging clearly redacts secrets and surfaces request/response identifiers useful for debugging.
+
+* Work Breakdown
+1. **Wire provider dispatch**: Extend `benedict-chat.el` so message submission serializes to the provider schema, calls `benedict-provider-dispatch`, and handles callbacks to insert assistant/error entries (respecting retry metadata).
+2. **Message state & retry plumbing**: Introduce buffer-local store of messages (role/content/plist) plus helpers for retry-last and copy-last actions; ensure commands degrade gracefully without history.
+3. **Doc updates**: Refresh `README.org` and `ROADMAP.org` with OpenRouter setup steps (API key creation, auth-source snippet, env fallback) and explicitly call out manual test instructions (temporary section until automation exists).
+4. **Manual test checklist**: Add devlog notes describing how to run a live test (set env, launch Emacs, invoke `benedict-chat`, send prompt, capture outcome) including troubleshooting tips.
+5. **Verification pass**: Perform a local dry-run using mock/fake provider invocation (if real network creds unavailable) to confirm serialization; once creds supplied, run at least one real request and capture findings in devlog.
+
+* Risks
+- Missing credentials/config might block manual testing → mitigate with thorough documentation and fallback error guidance inside chat buffer.
+- Provider errors surfacing in minibuffer only → ensure inline error message insertion before manual testing sign-off.
+
+* Exit Checklist
+- [ ] `benedict-chat.el` dispatches through provider and records provider metadata per message.
+- [ ] README/ROADMAP describe OpenRouter setup and manual test expectations.
+- [ ] Devlog entry captures the manual test procedure + any blockers.
+- [ ] Basic manual session attempted (or blocked reason documented), with observations logged.

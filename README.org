@@ -93,19 +93,62 @@ Example: registering a tool (sketch)
 - Provenance: log tool invocations with redacted args and outcomes
 
 * Quickstart (Early MVP, subject to change)
-- Install: MELPA (planned). Until then, clone and add to load-path
-- Enable minor mode: benedict-mode for ask/transform shortcuts; benedict-chat to open a chat buffer
-- Echo provider for local testing (no network): sends back transformed input
-- Streaming provider later; OpenAI‑compatible as first real backend
+- Install: MELPA (planned). Until then, clone and add to load-path.
+- Enable minor mode: =benedict-mode= for ask/transform shortcuts; =M-x benedict-chat= opens the chat buffer.
+- Configure the OpenRouter provider (default): add an auth-source entry or set =$OPENROUTER_API_KEY= so Benedict can talk to multiple models through one endpoint.
+- Manual testing: once wired, send prompts from the chat buffer and inspect the provider metadata/latency inline; retry or copy outputs via keybindings.
 
-Example init (placeholder):
+Example init:
 #+begin_src elisp
 (use-package benedict
   :commands (benedict-chat benedict-mode)
   :custom
-  (benedict-provider 'echo) ; or 'openai with proper config
+  ;; Phase 2 defaults to the OpenRouter backend
+  (benedict-provider 'openrouter)
   (benedict-keymap-prefix (kbd "C-c C-b")))
 #+end_src
+
+** Configure OpenRouter access
+Benedict looks for credentials in =~/.authinfo= (or any auth-source backend) first, then falls back to the environment variable listed in =benedict-provider-openrouter-env-var= (=OPENROUTER_API_KEY= by default).
+
+Auth-source example (machine derived from =benedict-provider-openrouter-endpoint=):
+#+begin_src text
+machine openrouter.ai login openrouter password sk-or-1234567890abcdef
+#+end_src
+
+Environment variable fallback:
+#+begin_src sh
+export OPENROUTER_API_KEY="sk-or-1234567890abcdef"
+#+end_src
+
+Optional customization knobs (see =M-x customize-group RET benedict-provider-openrouter=) let you change the endpoint, default model (e.g., =deepseek/chat=), or temperature for manual runs.
+
+** Manual testing (non-streaming)
+1. Configure credentials as above and evaluate the Benedict init snippet (or load via =use-package!=).
+2. Run =M-x benedict-chat= to open the chat buffer (Phase 2 wires the send command to OpenRouter).
+3. Type =C-c C-s= (or =M-x benedict-chat-send-prompt=) and enter a question like “Summarize org-mode bullet syntax.”
+4. Watch for role-tagged lines in the chat buffer; metadata lines show the model, latency, and token usage when available.
+5. Use =g r= to retry the last request (replays the same payload) or =w= to copy the last assistant response into the kill ring.
+6. Problems? Inline error blocks include retry hints; the minibuffer also logs redacted provider diagnostics. Capture any findings in the devlogs for future automation.
+
+** Fake/test provider (offline + automated checks)
+Need to iterate without network or write automated tests? Switch to the fake provider:
+#+begin_src elisp
+(setq benedict-provider 'fake) ; echo backend with simulated latency
+#+end_src
+
+The fake backend:
+- Echoes the last user prompt with metadata similar to OpenRouter (model, latency, usage).
+- Is asynchronous by default (tunable via =benedict-provider-fake-latency-seconds=) so callbacks/UX behave like the real backend.
+- Offers helpers for deterministic tests — e.g., enqueue scripted successes/errors:
+  #+begin_src elisp
+  (benedict-provider-fake-with-script
+      (list (list :type 'success :content "hi")
+            (list :type 'error :message "nope" :code "fake_error")))
+    (benedict-chat-send-prompt "Hello"))
+  #+end_src
+
+For ERT/Buttercup, require =benedict-provider-fake=, set =(setq benedict-provider 'fake)=, and use =benedict-provider-fake-enqueue-response= / =...-enqueue-error= or the =...-with-script= macro to control outputs. This ensures chat/provider code paths are covered without relying on real OpenRouter keys.
 
 * Doom Emacs Dev Setup (WIP)
 
