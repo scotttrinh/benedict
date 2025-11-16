@@ -20,7 +20,7 @@
   :group 'applications
   :prefix "benedict-")
 
-(defcustom benedict-keymap-prefix (kbd "C-c b")
+(defcustom benedict-keymap-prefix (kbd "C-c C-b")
   "Prefix key for Benedict commands when `benedict-mode' is active."
   :type 'key-sequence
   :group 'benedict)
@@ -43,9 +43,15 @@
 (define-error 'benedict-provider-error "Benedict provider error" 'benedict-error)
 
 ;; Minor mode
+(defvar benedict-prefix-map
+  (let ((map (make-sparse-keymap)))
+    (define-key map (kbd "c") #'benedict-chat)
+    map)
+  "Prefix map for Benedict commands.")
+
 (defvar benedict-mode-map
   (let ((m (make-sparse-keymap)))
-    (define-key m (kbd "C-c b c") #'benedict-chat)
+    (define-key m benedict-keymap-prefix benedict-prefix-map)
     m)
   "Keymap for `benedict-mode'.")
 
@@ -55,8 +61,8 @@
   :lighter " Benedict"
   :keymap benedict-mode-map)
 
-;; Forward declarations to avoid load-order issues
-(declare-function benedict-chat "benedict-chat")
+;; Autoload interactive entry points to avoid load-order issues
+(autoload 'benedict-chat "benedict-chat" "Open Benedict chat buffer." t)
 
 (provide 'benedict)
 ;;; benedict.el ends here
