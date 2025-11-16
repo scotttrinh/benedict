@@ -18,7 +18,7 @@ This roadmap is a living plan that breaks down the aspirational vision in README
 - v0.3.0 (Alpha+): Streaming support, markdown/code rendering polish, cancellation
 - v0.4.0 (Beta): Tooling: search/apply-diff/magit actions; provenance; profiles
 - v0.5.0 (Beta): Multi-provider registry; local endpoints; robust errors
-- v1.0.0: Persistence/history, UX polish, extensibility API, docs/CI/MELPA release
+- v1.0.0: SQLite-backed persistence/history, UX polish, extensibility API, docs/CI/MELPA release
 
 * Phase 0 — Spike & Design (docs only)
 Deliverables:
@@ -35,7 +35,7 @@ Tasks:
 - benedict-chat-mode: buffer creation, message rendering (simple), send command
 - benedict-mode minor mode: ask region/defun; echo transform locally
 - Tool registry (skeleton): register, list; call with plist args; approval stubs
-- Persistence stub: in-memory store, optional JSON save/load
+- Persistence stub: in-memory store; lay down SQLite schema (sqlite.el), migrations scaffold
 Acceptance:
 - M-x benedict-chat opens a buffer; typing and sending creates an echo response
 - benedict-ask-region sends region and shows response; no network required
@@ -93,7 +93,7 @@ Acceptance:
 
 * Phase 7 — Persistence, History, UX Polish
 Tasks:
-- Thread histories: JSON files; resume; per-project quick switch
+- Thread histories: SQLite DB (sqlite.el, WAL); normalized tables; FTS search; per-project quick switch; file watchers and after-save hooks for incremental reindex
 - Snippet library for prompts; message pinning; attachments (files/regions)
 - Faces/themes tweaks; customization group tidy; command palette via transient
 Acceptance:
@@ -153,5 +153,5 @@ Acceptance:
 * Open Questions
 - Minimum Emacs version? (27.1+ recommended; streaming smoother on 28+)
 - Which provider first for best DX? (OpenAI‑compatible vs anthropic/raw SSE)
-- Where to store thread data by default? (~/.emacs.d/benedict vs .benedict/)
+- DB location by default? (XDG data dir: ~/.local/share/benedict/benedict.sqlite; allow per-project override at .benedict/benedict.sqlite)
 - How strict should default approvals be? (lean safe; allow per-project relax)

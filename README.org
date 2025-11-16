@@ -20,7 +20,7 @@ Status: pre‑alpha, design‑driven. This README describes the vision and inter
 - Tool calls map to Elisp capabilities with approval policies and diff previews
 - Project & git context: project.el, ripgrep, Magit, xref/imenu integration
 - Provider‑agnostic: OpenAI/Anthropic/OpenRouter/local endpoints via a small interface
-- Persistence: per-thread histories, per-project settings, reproducible actions
+ - Persistence: SQLite-backed per-thread histories, per-project settings, reproducible actions
 
 * Emacs‑Native Tools & Workflows
 Typical agent tools → Emacs-native capabilities:
@@ -66,7 +66,7 @@ Unique tools we plan to expose:
 - Provider interface: create-session, send, stream, cancel; capability flags (tools, images)
 - HTTP/Streaming: url-retrieve for non-streaming; make-process + curl -N/SSE for streaming
 - Tool registry: map provider tool_calls → Elisp functions with schemas and approvals
-- Persistence: JSON under ~/.emacs.d/benedict/ and/or .benedict/ per project
+- Persistence: SQLite (sqlite.el, WAL) under XDG data dir (~/.local/share/benedict/benedict.sqlite) and/or per-project .benedict/benedict.sqlite; normalized tables (files/nodes/links/tags/aliases/refs), FTS5; migrations via PRAGMA user_version
 - Rendering: markdown-lite with code fences → prog-mode font-lock; action buttons
 - Telemetry: timings, token counts (if available), errors surfaced in buffer and echo area
 
@@ -112,4 +112,4 @@ Example init (placeholder):
 - Tests: ERT/Buttercup, recorded fixtures; network tests skippable
 
 * License
-MIT (planned). If your organization requires a different license, open an issue to discuss.
+GPL
