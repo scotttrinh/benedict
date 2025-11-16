@@ -8,6 +8,11 @@ Benedict is an Emacs package that brings a truly native Emacs experience for int
 
 Status: pre‑alpha, design‑driven. This README describes the vision and interfaces we want to build. See ROADMAP.org for phased delivery.
 
+* Why 'Benedict'?
+- A play on "curse" and "cursor"—we aim for the opposite: a benediction.
+- Etymology (Merriam-Webster): from Late Latin benediction-, benedictio, from benedicere "to bless," from Latin, "to speak well of," from bene "well" (akin to Latin bonus "good") + dicere "to say".
+- The project is about creating goodness from text—turning words, buffers, and diffs into helpful outcomes.
+
 * Why Emacs?
 - Everything is a buffer and scriptable via Elisp; agents can compose existing packages
 - Rich ecosystem: Magit, diff/ediff, ripgrep, project.el, org, compile, helpful
