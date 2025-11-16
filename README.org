@@ -107,6 +107,45 @@ Example init (placeholder):
   (benedict-keymap-prefix (kbd "C-c b")))
 #+end_src
 
+* Doom Emacs Dev Setup (WIP)
+
+For development with a local, non-MELPA checkout, choose one of the following. Option 1 is simplest for rapid iteration; Option 2 integrates with Doom/straight’s build pipeline.
+
+Option 1 — Add repo to load-path (simplest)
+#+begin_src elisp
+;; config.el
+(add-to-list 'load-path "/Users/scotttrinh/github.com/scotttrinh/benedict")
+
+;; Optional: lazy-load entry points
+(use-package! benedict
+  :commands (benedict-chat benedict-mode))
+#+end_src
+
+- Reload config (M-x doom/reload or restart). Then: M-x benedict-chat
+- When you add new files, ensure benedict.el requires them or add subdirs to load-path
+
+Option 2 — Symlink into straight’s repos (integrated)
+#+begin_src sh
+ln -s ~/github.com/scotttrinh/benedict \
+      ~/.config/emacs/.local/straight/repos/benedict
+#+end_src
+
+#+begin_src elisp
+;; packages.el
+(package! benedict :recipe (:local-repo "benedict"))
+
+;; config.el
+(use-package! benedict
+  :commands (benedict-chat benedict-mode))
+#+end_src
+
+- Run: doom sync, then restart Emacs (or M-x doom/reload)
+- Straight treats the symlinked folder as the source; autoloads/byte-compile happen normally
+
+Notes
+- For faster iteration, prefer Option 1 to bypass straight’s native compilation
+- Once ready to dogfood via straight, switch to Option 2 with no repo changes
+
 * Project Status
 - Pre‑alpha; API and UX may change quickly
 - See ROADMAP.org for phases and acceptance criteria
