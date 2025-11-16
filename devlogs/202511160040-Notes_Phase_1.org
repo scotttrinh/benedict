@@ -1,0 +1,25 @@
+#+TITLE: Notes — Phase 1 Kickoff
+#+AUTHOR: Benedict maintainers
+#+LANGUAGE: en
+#+OPTIONS: toc:nil num:nil ^:{}
+
+* Summary (2025-11-16)
+- Added Doom Emacs dev setup instructions to README.org
+- Scaffolded initial Phase 1 files: benedict.el, benedict-chat.el, benedict-tools.el
+- Chat buffer opens and supports echo via C-c C-s (prompted). Minor mode binds C-c b c
+
+* What Worked
+- Using `add-to-list 'load-path` for Doom dev is straightforward; no need to touch straight.el
+- Buffer scaffolding with `special-mode` keeps things simple while we iterate
+- Minimal tool registry compiles and registers a demo tool for later use
+
+* Hiccups / Adaptations
+- Shell mkdir in this environment errored due to a wasm/tree-sitter quirk; direct file writes succeeded and created devlogs implicitly
+- Deferred a full “type-in-buffer + RET sends” input UI to the next iteration; current flow uses minibuffer prompt via C-c C-s
+- Provider abstraction left for next step; echo is local inside chat for now
+
+* Next Steps
+- Wire a simple provider interface and move echo into benedict-provider-echo.el
+- Flesh out benedict-mode ask-region/defun commands and route to chat buffer
+- Add autoload cookies to entry points and ensure load order via requires
+- Add ERT tests for chat open/send and tools registry
