@@ -1,0 +1,157 @@
+#+TITLE: Benedict Roadmap
+#+AUTHOR: Benedict maintainers
+#+LANGUAGE: en
+#+OPTIONS: toc:3 num:t ^:{}
+
+This roadmap is a living plan that breaks down the aspirational vision in README.org into concrete phases, tasks, and acceptance criteria.
+
+* Guiding Principles
+- Emacs-first: buffers, faces, keymaps, and established UIs (Magit, diff/ediff, compile)
+- Safe-by-default: preview all writes; explicit approvals; provenance logging
+- Provider-agnostic: minimal interface; feature flags; degrade gracefully
+- Progressive delivery: ship useful slices early; keep APIs stable where possible
+- Testable: ERT/Buttercup with recorded fixtures; network tests opt-in
+
+* Version Targets
+- v0.1.0 (Pre‑alpha): Echo provider, chat buffer, minimal tool registry, diff preview
+- v0.2.0 (Alpha): First real provider (non-streaming), basic approvals, project context
+- v0.3.0 (Alpha+): Streaming support, markdown/code rendering polish, cancellation
+- v0.4.0 (Beta): Tooling: search/apply-diff/magit actions; provenance; profiles
+- v0.5.0 (Beta): Multi-provider registry; local endpoints; robust errors
+- v1.0.0: Persistence/history, UX polish, extensibility API, docs/CI/MELPA release
+
+* Phase 0 — Spike & Design (docs only)
+Deliverables:
+- Package namespace, defgroup/defcustom plan, faces and keymap conventions
+- Provider interface sketch; tool registry schema and approval states
+- Streaming plan (url-retrieve vs make-process + curl -N/SSE)
+- Security posture: key management via auth-source; redaction helpers; logging policy
+Acceptance:
+- README.org and this ROADMAP.org merged; example snippets compile in isolation
+
+* Phase 1 — Package Skeleton & Echo Provider
+Tasks:
+- Create benedict.el with autoloads, defgroup, faces, keymaps, error types
+- benedict-chat-mode: buffer creation, message rendering (simple), send command
+- benedict-mode minor mode: ask region/defun; echo transform locally
+- Tool registry (skeleton): register, list; call with plist args; approval stubs
+- Persistence stub: in-memory store, optional JSON save/load
+Acceptance:
+- M-x benedict-chat opens a buffer; typing and sending creates an echo response
+- benedict-ask-region sends region and shows response; no network required
+- Tools can be listed and invoked; approval UI shows a placeholder dialog
+
+* Phase 2 — First Real Provider (non-streaming)
+Tasks:
+- OpenAI‑compatible backend using url-retrieve; error handling; retries with backoff
+- Auth integration: auth-source search; env var fallback; redact in messages
+- Chat buffer roles: user/assistant/system; retry last; copy to kill-ring
+- Non-streaming rendering; code fences; basic markdown-lite font-lock
+- Project context collection: region/defun/buffer; project.el root; simple templates
+Acceptance:
+- Users can configure endpoint and model, send prompts, and receive full responses
+- Per-project settings respected; context preview before send togglable
+- Errors are surfaced inline with actionable messages
+
+* Phase 3 — Streaming & Rendering
+Tasks:
+- SSE via make-process + curl -N or provider-native streams; chunk parser
+- Incremental rendering with throttling; cursor stability; cancel/timeout
+- Code block rendering; language detection from fences; actions: copy/apply-snippet
+- Modeline status: tokens (if available), duration, provider name
+Acceptance:
+- Streaming feels smooth; cancel works reliably; no UI stutter on large outputs
+- Code fences font-lock; interaction buttons work; copy applies correct region
+
+* Phase 4 — Context & Project Integration
+Tasks:
+- Commands: ask region/defun/buffer/project; keymap prefix (default C-c b)
+- xref/imenu/treesit context providers; configurable slice sizes; elide large files
+- Git context: current branch, staged/unstaged diffs; preview what will be sent
+- Profiles: coding/writing/review; system prompts; per-project defaults
+Acceptance:
+- Context_pack preview shows what will be sent; toggles apply; provider receives slices
+- Ask commands aware of region/defun; responses differ by profile
+
+* Phase 5 — Tools & Approvals (OpenCode‑inspired)
+Tasks:
+- Toolcall protocol: JSON args → plist; schema validation; approval policies: auto/confirm/always
+- Built-ins: search_project (ripgrep), propose_edits (unified diff), apply_diff (diff-mode/ediff)
+- Approval UI: transient menu + diff/ediff buffer; provenance logged to thread metadata
+- Magit actions (safe subset): stage hunks, commit with suggested message; no pushes initially
+Acceptance:
+- Agent can request search/edit; user sees approvals; diffs apply correctly; Magit reflects changes
+- Provenance shows who/what/when with redacted args
+
+* Phase 6 — Multi‑Provider & Local Models
+Tasks:
+- Provider registry, selection, feature flags (tools, images, long contexts)
+- Anthropic/OpenRouter; local OpenAI‑compatible (vLLM, llama.cpp server)
+- Capability discovery; graceful degradation if a feature is unavailable
+Acceptance:
+- Switching providers is one command/customize; features adapt without errors
+
+* Phase 7 — Persistence, History, UX Polish
+Tasks:
+- Thread histories: JSON files; resume; per-project quick switch
+- Snippet library for prompts; message pinning; attachments (files/regions)
+- Faces/themes tweaks; customization group tidy; command palette via transient
+Acceptance:
+- Threads persist across sessions; switching projects restores context; UX feels consistent
+
+* Phase 8 — Extensibility API
+Tasks:
+- Public APIs: register tools, providers, context providers, prompts, renderers
+- Hooks for pre/post-send; transformers; model routing
+- Examples and minimal docs for extension authors
+Acceptance:
+- Third-party package can register a tool and have it show up with approvals
+
+* Phase 9 — Packaging, Docs, Release
+Tasks:
+- MELPA recipe; package-lint and Checkdoc clean
+- CI: ERT/Buttercup; recorded fixtures; byte-compile on matrix of Emacs versions
+- User guide and cookbook; GIFs; contribution guide and issue templates
+Acceptance:
+- Package is installable via MELPA; docs guide a new user from zero to success
+
+* Emacs‑Specific Integrations (Details)
+- diff/ediff: unified diff application with hunk-level approvals; ediff-quit behavior tuned to leave buffers clean
+- Magit: use transients; avoid raw git shell when a Magit function exists; respect user config
+- ripgrep: prefer ripgrep.el/consult-ripgrep; return structured matches; open in occur/grep buffers on demand
+- projectile/project.el: default to project.el; support projectile if present; never hard require
+- org: org-capture templates for decisions; org-link back to files and lines
+- helpful/describe-*: use for doc lookups; attach outputs to chat
+- compile/recompile: run commands in compilation-mode; parse errors
+
+* Security & Approvals (Operational)
+- Policies: auto (read-only), confirm (project writes, network with file contents), always (cross-project writes, pushes)
+- Data boundary preview: display outbound context; redaction helpers (paths, emails, secrets)
+- Key management: auth-source first, env next; never write secrets to disk; mask in logs
+- Provenance: thread-local log with timestamps, tool names, outcomes; optional commit trailers
+
+* Testing Strategy
+- Unit tests (ERT) for providers, tool registry, schema validation
+- Integration tests (Buttercup) for chat buffer rendering and approvals
+- Recorded responses for providers; golden files for rendering; network tests behind a flag
+- UI contracts: ensure keymaps and transients are bound and discoverable
+
+* Risks & Mitigations
+- Streaming stability: favor make-process + curl fallback; parse SSE robustly; expose cancel
+- Provider drift: capability flags; versioned adapter layer; good error messages
+- Performance: throttle rendering; chunk aggregation; avoid blocking redisplay
+- Safety: approvals everywhere; tight scopes; no automatic writes without previews
+
+* Milestones & Dates (Tentative)
+- M1 (v0.1.0): 2–3 weeks — skeleton + echo + basic chat
+- M2 (v0.2.0): +2–3 weeks — non-streaming provider + context
+- M3 (v0.3.0): +2 weeks — streaming + rendering polish
+- M4 (v0.4.0): +3–4 weeks — tools/approvals + Magit
+- M5 (v0.5.0): +3 weeks — multi-provider + local
+- M6 (v1.0.0): +4–6 weeks — persistence + extensibility + docs/CI
+
+* Open Questions
+- Minimum Emacs version? (27.1+ recommended; streaming smoother on 28+)
+- Which provider first for best DX? (OpenAI‑compatible vs anthropic/raw SSE)
+- Where to store thread data by default? (~/.emacs.d/benedict vs .benedict/)
+- How strict should default approvals be? (lean safe; allow per-project relax)

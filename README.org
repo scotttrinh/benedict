@@ -1,0 +1,115 @@
+#+TITLE: Benedict — Emacs‑Native Agents
+#+AUTHOR: Benedict maintainers
+#+LANGUAGE: en
+#+OPTIONS: toc:2 num:nil ^:{}
+
+* Benedict
+Benedict is an Emacs package that brings a truly native Emacs experience for interacting with AI agents: chat, refactors, diffs, search, tests, and approvals — all inside Emacs buffers, keymaps, and familiar UIs. It is not a thin CLI wrapper; it is Emacs-first.
+
+Status: pre‑alpha, design‑driven. This README describes the vision and interfaces we want to build. See ROADMAP.org for phased delivery.
+
+* Why Emacs?
+- Everything is a buffer and scriptable via Elisp; agents can compose existing packages
+- Rich ecosystem: Magit, diff/ediff, ripgrep, project.el, org, compile, helpful
+- Safe-by-default flows: preview edits, approve actions, track provenance
+- Local-first: support remote providers and local OpenAI‑compatible backends
+
+* Core Ideas (Aspirational)
+- Chat buffers with streaming responses, markdown/code rendering, retry/cancel
+- Region/defun/buffer/project-aware actions: ask, explain, transform, refactor
+- Tool calls map to Elisp capabilities with approval policies and diff previews
+- Project & git context: project.el, ripgrep, Magit, xref/imenu integration
+- Provider‑agnostic: OpenAI/Anthropic/OpenRouter/local endpoints via a small interface
+- Persistence: per-thread histories, per-project settings, reproducible actions
+
+* Emacs‑Native Tools & Workflows
+Typical agent tools → Emacs-native capabilities:
+- Files/Buffers
+  - read_file, list_files → project.el (project-files), dired listings, buffer slices (narrow)
+  - write_file/apply_patch → diff-mode/ediff preview; accept/reject hunks; optional Magit stage
+  - open_paths → find-file, dired-find-file, find-file-at-point
+- Project/Git
+  - git_status/diff/commit → Magit (magit-status, magit-diff, magit-commit); Forge for PRs
+  - branch/checkout/rebase → Magit transients; safe, guided flows
+- Search/Navigation
+  - search_text → ripgrep.el/consult-ripgrep; occur for in-buffer; xref/imenu/treesit for symbols
+  - jump_to_symbol → xref, imenu, eglot/lsp when available
+- Editing/Refactors
+  - transform_region → overlays or ediff preview; preserve indent/comments
+  - format_code → format-all/reformatter; language mode formatters
+  - snippet_insert → yasnippet; code fences to snippet
+- Build/Run/Tests
+  - run_command → make-process/compile with compilation-mode
+  - run_tests → projectile-test-project; clickable diagnostics
+- UI/Completion
+  - ask_user_choice → completing-read; transient menus for complex flows
+  - stream_render → incremental overlays with throttling; modeline status
+- Knowledge/Docs
+  - get_docstring → helpful/describe-symbol; eldoc; attach to chat
+  - notes/capture → org-capture for decisions, prompts, diffs
+
+Unique tools we plan to expose:
+- propose_edits: Agent returns unified diff → diff-mode/ediff → Apply/Stage/Reject/Explain; provenance logged
+- search_project: ripgrep with globs; results as (file line col preview); open candidates
+- context_pack: Gather region/defun/file header/git diff/README; preview before send
+- magit_actions: High-level stage/commit/branch via Magit; agent suggests message
+- compile_run: Run targets; summarize diagnostics; jump-to-first-error
+- code_map: Outline and call sites via xref/imenu/treesit
+- apply_snippet: Insert fenced code into correct buffer with mode hooks
+- explain_diff: Summarize a diff into bullets; link to files
+- doc_lookup: Language-specific docs (helpful, pydoc, go doc, cargo doc)
+- interactive_select: completing-read gateway for one-of-N choices
+- security_gate: Mandatory approval for destructive ops; show proposed change + egress summary
+- elisp_eval (restricted): Whitelisted helpers; opt-in per project
+
+* Architecture Overview (Planned)
+- Provider interface: create-session, send, stream, cancel; capability flags (tools, images)
+- HTTP/Streaming: url-retrieve for non-streaming; make-process + curl -N/SSE for streaming
+- Tool registry: map provider tool_calls → Elisp functions with schemas and approvals
+- Persistence: JSON under ~/.emacs.d/benedict/ and/or .benedict/ per project
+- Rendering: markdown-lite with code fences → prog-mode font-lock; action buttons
+- Telemetry: timings, token counts (if available), errors surfaced in buffer and echo area
+
+Example: registering a tool (sketch)
+#+begin_src elisp
+(benedict-register-tool
+ :name "search_project"
+ :doc "Search project files with ripgrep."
+ :schema '((query . string) (glob . (optional string)) (limit . (optional integer)))
+ :call #'benedict/tools-search-project
+ :approval 'auto)
+#+end_src
+
+* Security & Privacy
+- Keys via auth-source or env vars; never written to disk; masked in logs
+- Approval policies: auto (read-only), confirm (writes, network with file content), always (cross-project writes, pushes)
+- Diff/ediff previews for file changes; explicit user action required to apply
+- Data boundary preview: show what will be sent; redaction helpers
+- Provenance: log tool invocations with redacted args and outcomes
+
+* Quickstart (Early MVP, subject to change)
+- Install: MELPA (planned). Until then, clone and add to load-path
+- Enable minor mode: benedict-mode for ask/transform shortcuts; benedict-chat to open a chat buffer
+- Echo provider for local testing (no network): sends back transformed input
+- Streaming provider later; OpenAI‑compatible as first real backend
+
+Example init (placeholder):
+#+begin_src elisp
+(use-package benedict
+  :commands (benedict-chat benedict-mode)
+  :custom
+  (benedict-provider 'echo) ; or 'openai with proper config
+  (benedict-keymap-prefix (kbd "C-c b")))
+#+end_src
+
+* Project Status
+- Pre‑alpha; API and UX may change quickly
+- See ROADMAP.org for phases and acceptance criteria
+
+* Contributing
+- Issues and discussions welcome; design-first proposals encouraged
+- Style: idiomatic Elisp, clear docstrings, careful user-facing errors
+- Tests: ERT/Buttercup, recorded fixtures; network tests skippable
+
+* License
+MIT (planned). If your organization requires a different license, open an issue to discuss.
