@@ -136,6 +136,23 @@ Optional customization knobs (see =M-x customize-group RET benedict-provider-ope
 5. Use =g r= to retry the last request (replays the same payload) or =w= to copy the last assistant response into the kill ring.
 6. Problems? Inline error blocks include retry hints; the minibuffer also logs redacted provider diagnostics. Capture any findings in the devlogs for future automation.
 
+** Streaming with OpenRouter (Phase 3)
+Streaming is now enabled for OpenRouter by default so you can watch responses arrive incrementally alongside “Thinking…” reasoning blocks. To try it locally:
+
+1. Ensure =curl= is installed and on your =$PATH=. Any recent build (7.60+) that supports =--no-buffer= and =--fail-with-body= works. macOS 14+ ships a new-enough version; other systems can install via Homebrew/Nix.
+2. Confirm credentials as in the previous section, then visit =M-x customize-group RET benedict-provider-openrouter=.
+3. Verify or tweak these defcustoms:
+   - =benedict-provider-openrouter-enable-streaming= → =t= (default). Set to =nil= to force legacy non-streaming behavior.
+   - =benedict-provider-openrouter-curl-program= → path to =curl= if it is not discoverable via =$PATH=.
+   - =benedict-provider-openrouter-streaming-extra-args= → optional list of extra flags (e.g., proxy settings) appended to the curl command.
+4. Open =M-x benedict-chat= and send a prompt. When streaming works you will see:
+   - Progress logged at =trace= level (=benedict-provider-log-level=) with =:stream-start= / =:delta= / =:stream-complete= events.
+   - Thinking blocks appearing before the final assistant message whenever OpenRouter emits reasoning payloads.
+5. If curl is missing or streaming fails mid-request, Benedict automatically falls back to the non-streaming =url-retrieve= path; you can also set =:stream nil= on individual requests if you write your own client code.
+6. Cancellation (=g c= inside the chat buffer) now signals curl via the provider’s =:cancel= hook, so long-running responses can be interrupted cleanly.
+
+Tip: when reporting bugs, capture both =*Messages*= output with =benedict-provider-log-level= set to =trace= and the stderr buffer named =*benedict-openrouter-<request>-stderr*= for easier diagnosis of curl/HTTP issues.
+
 ** Fake/test provider (offline + automated checks)
 Need to iterate without network or write automated tests? Switch to the fake provider:
 #+begin_src elisp

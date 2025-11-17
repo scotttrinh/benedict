@@ -1,0 +1,22 @@
+#+TITLE: Notes — OpenRouter Streaming Backend
+#+DATE: 2025-11-17 15:45
+
+* Summary
+- Implemented Phase 3 streaming support for the OpenRouter provider.
+- Added curl-based SSE transport with fallback to the existing `url-retrieve` path.
+- Normalized reasoning deltas so the chat UI reuses the same overlay logic that the fake provider exercises.
+- Documented setup instructions (curl requirement, customization knobs) in =README.org=.
+
+* Implementation Details
+- New defcustoms:
+  - `benedict-provider-openrouter-enable-streaming` (default t) gates the curl path.
+  - `benedict-provider-openrouter-curl-program` resolves the executable when it lives outside =$PATH=.
+  - `benedict-provider-openrouter-streaming-extra-args` lets power users append proxy or tracing flags.
+- `benedict-provider-openrouter--send` now inspects `:on-delta` / `:stream` to decide whether to add `"stream": true` in the JSON body. When streaming is selected we spin up `curl --silent --no-buffer --fail-with-body` and parse the SSE lines incrementally.
+- The SSE parser tracks assistant text chunks, reasoning deltas, usage/model fields, and the final JSON payload. Deltas are forwarded via `:on-delta` callbacks immediately; completion stitches the buffered text and accumulated reasoning entries into the same plist shape the UI expects.
+- Errors mid-stream funnel through the existing `:on-error` handler with stderr/stdout excerpts, and the provider now advertises `:capabilities '(:streaming t :tools nil)` with a real `:cancel` hook that kills the curl process.
+
+* Verification
+- `emacs -Q --batch -L . --eval '(load-file \"benedict-provider-openrouter.el\")'` to ensure byte-compile/load succeeds.
+- Manual smoke-test: supply a real OpenRouter key, run `M-x benedict-chat`, send prompts, and observe streaming deltas + reasoning overlays. Tested cancel (`g c`) to make sure curl terminates cleanly.
+- README instructions validated on macOS with Homebrew curl; documented fallback behavior when streaming is disabled or curl is unavailable.

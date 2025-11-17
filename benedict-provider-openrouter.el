@@ -67,6 +67,28 @@ Set to nil to skip matching on :user."
   :type 'string
   :group 'benedict-provider-openrouter)
 
+(defcustom benedict-provider-openrouter-enable-streaming t
+  "When non-nil, enable streaming via curl for OpenRouter requests.
+Streaming requires a working curl executable and is used only when the
+request handler provides an :on-delta callback (unless :stream nil is
+explicitly set on the request)."
+  :type 'boolean
+  :group 'benedict-provider-openrouter)
+
+(defcustom benedict-provider-openrouter-curl-program "curl"
+  "Executable used to issue streaming requests.
+Must support --no-buffer/--fail-with-body (curl 7.60+)."
+  :type 'file
+  :group 'benedict-provider-openrouter)
+
+(defcustom benedict-provider-openrouter-streaming-extra-args nil
+  "Additional arguments appended to the streaming curl command."
+  :type '(repeat string)
+  :group 'benedict-provider-openrouter)
+
+(defconst benedict-provider-openrouter--stream-log-limit 32768
+  "Maximum number of bytes to retain from streaming stdout for diagnostics.")
+
 (defconst benedict-provider-openrouter--retryable-status-codes
   '(408 409 425 429 500 502 503 504)
   "HTTP status codes considered retryable for OpenRouter requests.")
@@ -83,9 +105,10 @@ Set to nil to skip matching on :user."
     (_provider request &key on-success on-error on-delta on-complete)
   "Dispatch REQUEST to OpenRouter.
 ON-SUCCESS/ON-ERROR/ON-DELTA/ON-COMPLETE mirror `benedict-provider-dispatch'.
-Currently non-streaming; ON-DELTA is unused and ON-COMPLETE takes precedence."
+When streaming is enabled, callbacks receive incremental deltas via curl."
   (let* ((credential (benedict-provider-openrouter--resolve-credential))
-         (payload (benedict-provider-openrouter--encode-payload request))
+         (streaming (benedict-provider-openrouter--streaming-request-p request on-delta))
+         (payload (benedict-provider-openrouter--encode-payload request streaming))
          (request-id (or (plist-get request :request-id)
                          (benedict-provider-openrouter--next-request-id)))
          (context (list :request request
@@ -96,11 +119,15 @@ Currently non-streaming; ON-DELTA is unused and ON-COMPLETE takes precedence."
                         :on-error on-error
                         :on-delta on-delta
                         :on-complete on-complete
+                        :streaming streaming
+                        :mode (if streaming 'stream 'http)
                         :attempt 1
                         :max-attempts (max 1 (+ 1 (max 0 benedict-provider-openrouter-max-retries)))
                         :start-time (current-time)
                         :provider 'openrouter)))
-    (benedict-provider-openrouter--perform-request context)
+    (if streaming
+        (benedict-provider-openrouter--start-stream context)
+      (benedict-provider-openrouter--perform-request context))
     context))
 
 (defun benedict-provider-openrouter--perform-request (context)
@@ -151,6 +178,491 @@ Currently non-streaming; ON-DELTA is unused and ON-COMPLETE takes precedence."
                    context http-status ""))))))
       (when (buffer-live-p buffer)
         (kill-buffer buffer)))))
+
+(defun benedict-provider-openrouter--streaming-available-p ()
+  "Return non-nil when streaming prerequisites are satisfied."
+  (and benedict-provider-openrouter-enable-streaming
+       (executable-find benedict-provider-openrouter-curl-program)))
+
+(defun benedict-provider-openrouter--streaming-request-p (request on-delta)
+  "Return non-nil when REQUEST should use streaming with ON-DELTA callback."
+  (let ((explicit (plist-member request :stream)))
+    (cond
+     (explicit
+      (and (plist-get request :stream)
+           (benedict-provider-openrouter--streaming-available-p)))
+     (t
+      (and on-delta
+           (benedict-provider-openrouter--streaming-available-p))))))
+
+(defun benedict-provider-openrouter--start-stream (context)
+  "Launch the streaming curl process for CONTEXT."
+  (if (not (benedict-provider-openrouter--streaming-available-p))
+      (progn
+        (setf (plist-get context :streaming) nil)
+        (setf (plist-get context :mode) 'http)
+        (benedict-provider-openrouter--perform-request context)
+        context)
+    (let ((token (plist-get (plist-get context :credential) :token))
+          (payload (plist-get context :payload)))
+      (setf (plist-get context :partial) ""
+            (plist-get context :stdout-log) ""
+            (plist-get context :message-chunks) nil
+            (plist-get context :reasoning-counter) 0
+            (plist-get context :reasoning-entries) nil
+            (plist-get context :reasoning-order) nil
+            (plist-get context :stream-complete) nil
+            (plist-get context :mode) 'stream)
+      (let* ((command (benedict-provider-openrouter--make-curl-command
+                       token payload))
+             (stderr-buffer (generate-new-buffer
+                             (format " *benedict-openrouter-%s-stderr*"
+                                     (plist-get context :request-id)))))
+        (benedict-provider-log-debug
+         'openrouter :stream-start
+         :request-id (plist-get context :request-id)
+         :endpoint benedict-provider-openrouter-endpoint)
+        (condition-case err
+            (let ((process
+                   (make-process
+                    :name (format "benedict-openrouter-%s"
+                                  (plist-get context :request-id))
+                    :buffer nil
+                    :command command
+                    :stderr stderr-buffer
+                    :coding 'utf-8
+                    :noquery t
+                    :connection-type 'pipe
+                    :filter #'benedict-provider-openrouter--curl-filter
+                    :sentinel #'benedict-provider-openrouter--curl-sentinel)))
+              (process-put process 'benedict-provider-openrouter-context context)
+              (setf (plist-get context :process) process
+                    (plist-get context :stderr-buffer) stderr-buffer)
+              context)
+          (error
+           (benedict-provider-log
+            'openrouter 'error :stream-start-failed
+            :request-id (plist-get context :request-id)
+            :message (error-message-string err))
+           (when (buffer-live-p stderr-buffer)
+             (kill-buffer stderr-buffer))
+           (setf (plist-get context :streaming) nil)
+           (setf (plist-get context :mode) 'http)
+           (benedict-provider-openrouter--perform-request context)
+           context))))))
+
+(defun benedict-provider-openrouter--make-curl-command (token payload)
+  "Return a curl command list using TOKEN and PAYLOAD."
+  (let ((headers (copy-sequence (benedict-provider-openrouter--build-headers token))))
+    (push (cons "Accept" "text/event-stream") headers)
+    (append
+     (list benedict-provider-openrouter-curl-program
+           "--silent" "--show-error" "--no-buffer" "--fail-with-body"
+           "-X" "POST")
+     (cl-mapcan (lambda (header)
+                  (list "-H"
+                        (format "%s: %s" (car header) (cdr header))))
+                headers)
+     benedict-provider-openrouter-streaming-extra-args
+     (list "--data-binary" payload benedict-provider-openrouter-endpoint))))
+
+(defun benedict-provider-openrouter--curl-filter (process chunk)
+  "Process streaming CHUNK for PROCESS."
+  (let ((context (process-get process 'benedict-provider-openrouter-context)))
+    (when context
+      (benedict-provider-openrouter--append-stream-log context chunk)
+      (benedict-provider-openrouter--stream-handle-data
+       context (string-replace "\r" "" chunk)))))
+
+(defun benedict-provider-openrouter--curl-sentinel (process event)
+  "Handle PROCESS sentinel EVENT."
+  (let ((context (process-get process 'benedict-provider-openrouter-context)))
+    (when context
+      (benedict-provider-openrouter--stream-handle-sentinel context event))))
+
+(defun benedict-provider-openrouter--append-stream-log (context chunk)
+  "Append CHUNK to CONTEXT stdout log capped at `benedict-provider-openrouter--stream-log-limit'."
+  (let* ((log (or (plist-get context :stdout-log) ""))
+         (combined (concat log chunk))
+         (limit benedict-provider-openrouter--stream-log-limit))
+    (setf (plist-get context :stdout-log)
+          (if (> (length combined) limit)
+              (substring combined (- (length combined) limit))
+            combined))))
+
+(defun benedict-provider-openrouter--stream-handle-data (context chunk)
+  "Process streaming data CHUNK for CONTEXT."
+  (let ((buffer (concat (or (plist-get context :partial) "") chunk))
+        (continue t))
+    (while continue
+      (let ((pos (string-match "\n\n" buffer)))
+        (if (null pos)
+            (setq continue nil)
+          (let ((event (substring buffer 0 pos)))
+            (setq buffer (substring buffer (+ pos 2)))
+            (unless (string-empty-p event)
+              (benedict-provider-openrouter--process-sse-block context event))))))
+    (setf (plist-get context :partial) buffer)))
+
+(defun benedict-provider-openrouter--process-sse-block (context block)
+  "Parse SSE BLOCK and dispatch for CONTEXT."
+  (let ((lines (split-string block "\n"))
+        (data-lines nil)
+        (event-type nil))
+    (dolist (line lines)
+      (cond
+       ((string-prefix-p "data:" line)
+        (push (string-trim-left (substring line 5)) data-lines))
+       ((string-prefix-p "event:" line)
+        (setq event-type (string-trim (substring line 6))))
+       ((string-prefix-p ":" line)
+        ;; Comment - ignore
+        nil)
+       ((string-empty-p line)
+        nil)
+       (t
+        (push (string-trim line) data-lines))))
+    (let ((payload (string-join (nreverse (delq nil data-lines)) "\n")))
+      (when (> (length payload) 0)
+        (benedict-provider-openrouter--handle-sse-payload context payload event-type)))))
+
+(defun benedict-provider-openrouter--handle-sse-payload (context payload _event)
+  "Handle SSE PAYLOAD for CONTEXT."
+  (if (string= payload "[DONE]")
+      (benedict-provider-openrouter--stream-handle-done context)
+    (condition-case err
+        (let ((json (json-parse-string payload :object-type 'plist :array-type 'list
+                                       :null-object nil :false-object :json-false)))
+          (benedict-provider-openrouter--stream-handle-json context json))
+      (json-parse-error
+       (benedict-provider-log
+        'openrouter 'warn :stream-parse-error
+        :request-id (plist-get context :request-id)
+        :payload payload
+        :error err)))))
+
+(defun benedict-provider-openrouter--stream-handle-json (context event)
+  "Handle parsed streaming EVENT for CONTEXT."
+  (unless (plist-get context :stream-complete)
+    (setf (plist-get context :raw-last) event)
+    (if-let ((error-block (plist-get event :error)))
+        (benedict-provider-openrouter--stream-handle-error context error-block nil)
+      (progn
+        (when-let ((model (plist-get event :model)))
+          (setf (plist-get context :model) model))
+        (when-let ((usage (plist-get event :usage)))
+          (setf (plist-get context :usage) usage))
+        (let ((choices (benedict-provider-openrouter--normalize-seq
+                        (plist-get event :choices))))
+          (when choices
+            (let ((normalized (benedict-provider-openrouter--normalize-delta-choices
+                               context choices)))
+              (when (functionp (plist-get context :on-delta))
+                (let ((payload (benedict-provider-openrouter--stream-build-delta-payload
+                                context event normalized)))
+                  (funcall (plist-get context :on-delta) payload))))))))))
+
+(defun benedict-provider-openrouter--normalize-delta-choices (context choices)
+  "Return normalized CHOICES for CONTEXT."
+  (let (result)
+    (cl-loop for choice in choices
+             for idx from 0
+             do (push (benedict-provider-openrouter--normalize-delta-choice
+                       context choice idx)
+                      result))
+    (nreverse result)))
+
+(defun benedict-provider-openrouter--normalize-delta-choice (context choice index)
+  "Normalize a single CHOICE for CONTEXT with INDEX."
+  (let* ((normalized (copy-tree choice t))
+         (delta (plist-get normalized :delta)))
+    (plist-put normalized :index (or (plist-get normalized :index) index))
+    (when delta
+      (benedict-provider-openrouter--accumulate-message-from-delta context delta)
+      (let ((details (benedict-provider-openrouter--normalize-reasoning-delta
+                      context delta)))
+        (when details
+          (plist-put delta :reasoning_details (apply #'vector details)))))
+    (when-let ((message (plist-get normalized :message)))
+      (benedict-provider-openrouter--store-final-message context message))
+    normalized))
+
+(defun benedict-provider-openrouter--normalize-reasoning-delta (context delta)
+  "Extract reasoning details from DELTA for CONTEXT."
+  (let (details)
+    (dolist (entry (benedict-provider-openrouter--extract-reasoning-details delta))
+      (when-let ((detail (benedict-provider-openrouter--prepare-reasoning-detail
+                          context entry)))
+        (push detail details)))
+    (nreverse details)))
+
+(defun benedict-provider-openrouter--extract-reasoning-details (delta)
+  "Return raw reasoning entries extracted from DELTA."
+  (let (result)
+    (dolist (key '(:reasoning_details :reasoning :reasoning_content :thinking :thoughts))
+      (setq result (nconc result
+                          (benedict-provider-openrouter--normalize-seq
+                           (plist-get delta key)))))
+    (when-let ((content (plist-get delta :content)))
+      (dolist (entry (benedict-provider-openrouter--normalize-seq content))
+        (when (benedict-provider-openrouter--reasoning-content-entry-p entry)
+          (push entry result))))
+    (nreverse result)))
+
+(defun benedict-provider-openrouter--reasoning-content-entry-p (entry)
+  "Return non-nil when ENTRY looks like a reasoning content block."
+  (when (and entry (listp entry))
+    (when-let ((type (plist-get entry :type)))
+      (let ((normalized (downcase (format "%s" type))))
+        (or (string-prefix-p "thinking" normalized)
+            (string-prefix-p "reasoning" normalized))))))
+
+(defun benedict-provider-openrouter--prepare-reasoning-detail (context entry)
+  "Normalize reasoning ENTRY for CONTEXT, returning a detail plist."
+  (cond
+   ((null entry) nil)
+   ((stringp entry)
+    (benedict-provider-openrouter--prepare-reasoning-detail
+     context (list :type "reasoning.text" :text entry)))
+  ((listp entry)
+    (let* ((detail (copy-tree entry t))
+           (type (or (plist-get detail :type) "reasoning.text")))
+      (plist-put detail :type type)
+      (unless (plist-get detail :format)
+        (plist-put detail :format "openrouter-reasoning"))
+      (let ((text (plist-get detail :text))
+            (summary (plist-get detail :summary))
+            (data (plist-get detail :data)))
+        (unless (or text summary data)
+          (let ((content (plist-get detail :content)))
+            (cond
+             ((stringp content)
+              (setq text content))
+             (content
+              (setq text
+                    (mapconcat
+                     (lambda (piece)
+                       (cond
+                        ((stringp piece) piece)
+                        ((listp piece)
+                         (or (plist-get piece :text)
+                             (plist-get piece :content)
+                             ""))
+                        (t "")))
+                     (benedict-provider-openrouter--normalize-seq content) ""))))))
+        (when text
+        (plist-put detail :text text)))
+      (if (or (plist-get detail :text)
+              (plist-get detail :summary)
+              (plist-get detail :data))
+          (let ((id (or (plist-get detail :id)
+                        (benedict-provider-openrouter--next-reasoning-id context))))
+            (plist-put detail :id id)
+            (plist-put detail :index
+                       (or (plist-get detail :index)
+                           (benedict-provider-openrouter--register-reasoning-id
+                            context id)))
+            (benedict-provider-openrouter--accumulate-reasoning-entry context detail)
+            detail)
+        nil)))
+   (t nil)))
+
+(defun benedict-provider-openrouter--register-reasoning-id (context id)
+  "Register reasoning ID for CONTEXT and return its index."
+  (let ((order (plist-get context :reasoning-order)))
+    (unless (cl-member id order :test #'equal)
+      (setq order (append order (list id)))
+      (setf (plist-get context :reasoning-order) order))
+    (cl-position id order :test #'equal)))
+
+(defun benedict-provider-openrouter--next-reasoning-id (context)
+  "Return a new reasoning identifier for CONTEXT."
+  (let ((counter (or (plist-get context :reasoning-counter) 0)))
+    (setf (plist-get context :reasoning-counter) (1+ counter))
+    (format "%s-thinking-%d" (plist-get context :request-id) counter)))
+
+(defun benedict-provider-openrouter--accumulate-reasoning-entry (context detail)
+  "Accumulate DETAIL chunks into CONTEXT final reasoning state."
+  (let* ((entries (plist-get context :reasoning-entries))
+         (id (plist-get detail :id))
+         (existing (cl-assoc id entries :test #'equal)))
+    (unless existing
+      (setq existing (cons id (copy-tree detail t)))
+      (push existing entries)
+      (setf (plist-get context :reasoning-entries) entries))
+    (dolist (key '(:text :summary :data))
+      (when-let ((chunk (plist-get detail key)))
+        (let ((current (plist-get (cdr existing) key)))
+          (plist-put (cdr existing) key
+                     (if current (concat current chunk) chunk)))))
+    (cdr existing)))
+
+(defun benedict-provider-openrouter--accumulate-message-from-delta (context delta)
+  "Append assistant message text from DELTA for CONTEXT."
+  (when-let ((role (plist-get delta :role)))
+    (setf (plist-get context :role)
+          (intern (downcase (format "%s" role)))))
+  (when-let ((text (benedict-provider-openrouter--delta-text delta)))
+    (unless (string-empty-p text)
+      (setf (plist-get context :message-chunks)
+            (cons text (plist-get context :message-chunks))))))
+
+(defun benedict-provider-openrouter--delta-text (delta)
+  "Extract user-visible text from DELTA."
+  (cond
+   ((plist-member delta :content)
+    (let ((content (plist-get delta :content)))
+      (cond
+       ((stringp content) content)
+       (content
+        (mapconcat
+         (lambda (entry)
+           (cond
+            ((stringp entry) entry)
+            ((listp entry)
+             (or (plist-get entry :text)
+                 (plist-get entry :content)
+                 ""))
+            (t "")))
+         (benedict-provider-openrouter--normalize-seq content) "")))))
+   ((plist-member delta :text)
+    (plist-get delta :text))
+   (t nil)))
+
+(defun benedict-provider-openrouter--store-final-message (context message)
+  "Remember final MESSAGE for CONTEXT if present."
+  (setf (plist-get context :final-message) message)
+  (when-let ((content (plist-get message :content)))
+    (cond
+     ((stringp content)
+      (setf (plist-get context :final-message-text) content))
+     (content
+      (let ((text (mapconcat
+                   (lambda (entry)
+                     (cond
+                      ((stringp entry) entry)
+                      ((listp entry) (or (plist-get entry :text) ""))
+                      (t "")))
+                   (benedict-provider-openrouter--normalize-seq content) "")))
+        (setf (plist-get context :final-message-text) text))))))
+
+(defun benedict-provider-openrouter--stream-build-delta-payload (context event choices)
+  "Build delta payload for CONTEXT using EVENT and normalized CHOICES."
+  (let ((payload (copy-tree event t)))
+    (plist-put payload :provider 'openrouter)
+    (plist-put payload :model (or (plist-get payload :model)
+                                  (plist-get context :model)
+                                  benedict-provider-openrouter-default-model))
+    (plist-put payload :choices (apply #'vector choices))
+    payload))
+
+(defun benedict-provider-openrouter--stream-handle-done (context)
+  "Handle end-of-stream for CONTEXT."
+  (unless (plist-get context :stream-complete)
+    (setf (plist-get context :stream-complete) t)
+    (benedict-provider-openrouter--finalize-stream context)))
+
+(defun benedict-provider-openrouter--stream-handle-sentinel (context event)
+  "Process process sentinel EVENT for CONTEXT."
+  (cond
+   ((plist-get context :stream-complete)
+    (benedict-provider-openrouter--stream-cleanup context))
+   ((and (stringp event)
+         (string-match-p "finished" event))
+    (benedict-provider-openrouter--stream-handle-done context))
+   (t
+    (let ((stderr (benedict-provider-openrouter--stream-read-stderr context)))
+      (benedict-provider-openrouter--stream-handle-error
+       context nil (or stderr (string-trim event)))))))
+
+(defun benedict-provider-openrouter--stream-read-stderr (context)
+  "Return stderr contents for CONTEXT."
+  (let ((buffer (plist-get context :stderr-buffer)))
+    (when (buffer-live-p buffer)
+      (with-current-buffer buffer
+        (prog1 (string-trim (buffer-string))
+          (erase-buffer))))))
+
+(defun benedict-provider-openrouter--stream-handle-error (context error-block message)
+  "Emit an error for CONTEXT.
+ERROR-BLOCK is the parsed JSON block when available.  MESSAGE is a fallback string."
+  (setf (plist-get context :stream-complete) t)
+  (let* ((payload (list :type 'stream
+                        :provider 'openrouter
+                        :message (or message
+                                     (plist-get error-block :message)
+                                     "Streaming request failed")
+                        :code (plist-get error-block :code)
+                        :status (plist-get error-block :status)
+                        :retryable nil
+                        :body (plist-get context :stdout-log))))
+    (benedict-provider-log
+     'openrouter 'error :stream-error
+     :request-id (plist-get context :request-id)
+     :message (plist-get payload :message)
+     :code (plist-get payload :code))
+    (benedict-provider-openrouter--stream-cleanup context)
+    (when (functionp (plist-get context :on-error))
+      (funcall (plist-get context :on-error) payload))))
+
+(defun benedict-provider-openrouter--finalize-stream (context)
+  "Finalize streaming CONTEXT and deliver completion callback."
+  (let* ((chunks (plist-get context :message-chunks))
+         (content (or (plist-get context :final-message-text)
+                      (mapconcat #'identity (nreverse chunks) "")))
+         (role (or (plist-get context :role) 'assistant))
+         (message (or (plist-get context :final-message)
+                      (list :role role :content content)))
+         (thinking (benedict-provider-openrouter--finalize-reasoning context))
+         (latency (float-time (time-subtract (current-time)
+                                             (plist-get context :start-time))))
+         (result (list :message message
+                       :model (or (plist-get context :model)
+                                  benedict-provider-openrouter-default-model)
+                       :provider 'openrouter
+                       :usage (plist-get context :usage)
+                       :thinking thinking
+                       :latency latency
+                       :raw (plist-get context :raw-last)
+                       :empty-response (string-empty-p (or content "")))))
+    (benedict-provider-log
+     'openrouter 'info :stream-complete
+     :request-id (plist-get context :request-id)
+     :latency latency
+     :model (plist-get result :model)
+     :content-bytes (length (or content "")))
+    (benedict-provider-openrouter--stream-cleanup context)
+    (let ((on-complete (plist-get context :on-complete))
+          (on-success (plist-get context :on-success)))
+      (cond
+       ((functionp on-complete) (funcall on-complete result))
+       ((functionp on-success) (funcall on-success result))))))
+
+(defun benedict-provider-openrouter--finalize-reasoning (context)
+  "Return accumulated reasoning payload for CONTEXT."
+  (let ((order (plist-get context :reasoning-order))
+        (entries (plist-get context :reasoning-entries)))
+    (when (and order entries)
+      (let (result)
+        (dolist (id order (nreverse result))
+          (when-let ((entry (cdr (cl-assoc id entries :test #'equal))))
+            (push (copy-tree entry t) result)))))))
+
+(defun benedict-provider-openrouter--stream-cleanup (context)
+  "Tear down streaming resources for CONTEXT."
+  (when-let ((process (plist-get context :process)))
+    (when (process-live-p process)
+      (set-process-sentinel process nil)
+      (delete-process process)))
+  (when-let ((stderr (plist-get context :stderr-buffer)))
+    (when (buffer-live-p stderr)
+      (kill-buffer stderr))))
+
+(defun benedict-provider-openrouter--cancel (_provider handle)
+  "Cancel HANDLE (best-effort)."
+  (when (and handle (plist-get handle :process))
+    (setf (plist-get handle :stream-complete) t)
+    (benedict-provider-openrouter--stream-cleanup handle)))
 
 (defun benedict-provider-openrouter--log-http-response (context status headers body)
   "Emit a structured log for STATUS/HEADERS/BODY tied to CONTEXT."
@@ -362,13 +874,14 @@ Currently non-streaming; ON-DELTA is unused and ON-COMPLETE takes precedence."
          header)))
    (copy-sequence headers)))
 
-(defun benedict-provider-openrouter--encode-payload (request)
-  "Return JSON payload string for REQUEST."
+(defun benedict-provider-openrouter--encode-payload (request &optional stream)
+  "Return JSON payload string for REQUEST.
+When STREAM is non-nil, include the \"stream\": true flag in the payload."
   (encode-coding-string
-   (json-encode (benedict-provider-openrouter--build-body request))
+   (json-encode (benedict-provider-openrouter--build-body request stream))
    'utf-8))
 
-(defun benedict-provider-openrouter--build-body (request)
+(defun benedict-provider-openrouter--build-body (request &optional stream)
   "Build an alist for REQUEST."
   (let ((messages (plist-get request :messages)))
     (unless (and (listp messages) messages)
@@ -377,6 +890,8 @@ Currently non-streaming; ON-DELTA is unused and ON-COMPLETE takes precedence."
                                   benedict-provider-openrouter-default-model))
                   ("messages" . ,(mapcar #'benedict-provider-openrouter--serialize-message
                                          messages)))))
+      (when stream
+        (push '("stream" . t) body))
       (let ((temperature (if (plist-member request :temperature)
                              (plist-get request :temperature)
                            benedict-provider-openrouter-default-temperature)))
@@ -422,6 +937,14 @@ Currently non-streaming; ON-DELTA is unused and ON-COMPLETE takes precedence."
    ((symbolp key) (symbol-name key))
    ((stringp key) key)
    (t (format "%s" key))))
+
+(defun benedict-provider-openrouter--normalize-seq (value)
+  "Return VALUE coerced into a list."
+  (cond
+   ((null value) nil)
+   ((listp value) value)
+   ((vectorp value) (append value nil))
+   (t (list value))))
 
 (defun benedict-provider-openrouter--decode-message (message)
   "Convert MESSAGE alist to Benedict's internal plist."
@@ -480,8 +1003,8 @@ Currently non-streaming; ON-DELTA is unused and ON-COMPLETE takes precedence."
   :id 'openrouter
   :name "OpenRouter"
   :send #'benedict-provider-openrouter--send
-  :capabilities '(:streaming nil :tools nil)
-  :cancel #'ignore))
+  :capabilities '(:streaming t :tools nil)
+  :cancel #'benedict-provider-openrouter--cancel))
 
 (provide 'benedict-provider-openrouter)
 ;;; benedict-provider-openrouter.el ends here
