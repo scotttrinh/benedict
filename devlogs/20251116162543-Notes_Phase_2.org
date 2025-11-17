@@ -16,3 +16,7 @@
 - Captured a dedicated plan for Phase 2 testing infrastructure (devlogs/20251116164831-Plan_Phase_2_Testing_Infrastructure.org) so fake-provider work and ERT coverage are first-class tasks.
 - Implemented benedict-provider-fake.el: async echo backend with scripted responses/errors, helpers for enqueueing behaviors, and registration under `benedict-provider` so manual chats/tests can run offline.
 - README now documents how to switch to `'fake` and use the scripting helpers; initial ERT smoke tests (`test/benedict-provider-fake-test.el`) pass via batch Emacs runs, so we can keep iterating offline before wiring contexts/markdown.
+
+* 2025-11-16 (Debugging notes + provider fix)
+- Squashed the paren mismatch in `benedict-provider-openrouter--build-body` that Doom/byte-compilers were flagging (bad `let` body). File now loads cleanly and OpenRouter payloads serialize again.
+- Added a README debugging section aimed at Doom users (turn on `debug-on-error` / `debug-on-load`, inspect defcustoms via `describe-variable`) so future configuration issues are easier to diagnose.
