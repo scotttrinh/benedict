@@ -32,6 +32,9 @@ Each entry includes :role, :content, :time, optional :metadata, and UI state.")
 (defvar-local benedict-chat--thinking-items nil
   "Hash table mapping reasoning/think identifiers to chat items.")
 
+(defvar-local benedict-chat--streaming-message nil
+  "Plist describing the in-progress streaming assistant message.")
+
 (defvar-local benedict-chat--active-request-id nil
   "Identifier for the in-flight provider request, if any.")
 
@@ -194,6 +197,58 @@ This does not affect provider message history."
                               ""))
          (face (benedict-chat--face-for-role role metadata)))
     (benedict-chat--render-block item header face)))
+
+(defun benedict-chat--refresh-message-header (item)
+  "Update ITEM's header line using current metadata."
+  (let ((header-start (plist-get item :header-start))
+        (header-end (plist-get item :header-end)))
+    (when (and header-start header-end
+               (marker-position header-start)
+               (marker-position header-end))
+      (let* ((role (benedict-chat--normalize-role (plist-get item :role)))
+             (metadata (plist-get item :metadata))
+             (summary (benedict-chat--format-metadata-line metadata " · "))
+             (header (string-join (delq nil (list (capitalize (symbol-name role))
+                                                  summary))
+                                  ""))
+             (face (benedict-chat--face-for-role role metadata))
+             (start (marker-position header-start))
+             (end (marker-position header-end)))
+        (let ((inhibit-read-only t))
+          (save-excursion
+            (goto-char start)
+            (delete-region start end)
+            (insert (propertize header 'face face))
+            (set-marker header-end (point))))))))
+
+(defun benedict-chat--write-message-item-content (item text)
+  "Replace ITEM's content block with TEXT."
+  (let ((content-start (plist-get item :content-start))
+        (content-end (plist-get item :content-end)))
+    (when (and content-start content-end
+               (marker-position content-start)
+               (marker-position content-end))
+      (let ((inhibit-read-only t)
+            (start (marker-position content-start))
+            (end (marker-position content-end)))
+        (save-excursion
+          (goto-char start)
+          (delete-region start end)
+          (when (and text (> (length text) 0))
+            (insert text))
+          (unless (bolp)
+            (insert "\n"))
+          (set-marker content-end (point))))
+      (benedict-chat--decorate-message item))))
+
+(defun benedict-chat--replace-message-content (message text)
+  "Replace MESSAGE's rendered content with TEXT."
+  (let ((item (plist-get message :item))
+        (payload (or text "")))
+    (when item
+      (benedict-chat--write-message-item-content item payload))
+    (plist-put message :content payload)
+    (plist-put message :display-content nil)))
 
 (defun benedict-chat--render-thinking (item)
   "Render ITEM as a thinking block."
@@ -523,6 +578,158 @@ When REPLACE is non-nil, replace the entire block contents."
             (push normalized details)))))
     (nreverse details)))
 
+(defun benedict-chat--delta-choice-text (choice)
+  "Return flattened user-visible text for CHOICE delta."
+  (or (plist-get choice :text)
+      (let ((delta (plist-get choice :delta)))
+        (when delta
+          (benedict-chat--delta-text-from-delta delta)))))
+
+(defun benedict-chat--delta-text-from-delta (delta)
+  "Extract string content from DELTA plist."
+  (cond
+   ((plist-member delta :content)
+    (let ((content (plist-get delta :content)))
+      (cond
+       ((stringp content) content)
+       (content
+        (mapconcat #'benedict-chat--delta-content-entry-text
+                   (benedict-chat--normalize-seq content)
+                   "")))))
+   ((plist-member delta :text)
+    (plist-get delta :text))
+   (t nil)))
+
+(defun benedict-chat--delta-content-entry-text (entry)
+  "Return the visible text stored within ENTRY."
+  (cond
+   ((stringp entry) entry)
+   ((listp entry)
+    (or (plist-get entry :text)
+        (plist-get entry :content)
+        ""))
+   (t "")))
+
+(defun benedict-chat--collect-delta-message-content (payload)
+  "Return concatenated assistant message text contained in PAYLOAD."
+  (let (chunks)
+    (dolist (choice (benedict-chat--normalize-seq (plist-get payload :choices)))
+      (let ((text (benedict-chat--delta-choice-text choice)))
+        (when (and text (> (length text) 0))
+          (push text chunks))))
+    (when-let ((direct (plist-get payload :content)))
+      (cond
+       ((stringp direct)
+        (when (> (length direct) 0)
+          (push direct chunks)))
+       ((listp direct)
+        (dolist (entry direct)
+          (when (and (stringp entry) (> (length entry) 0))
+            (push entry chunks))))
+       ((vectorp direct)
+        (dolist (entry (append direct nil))
+          (when (and (stringp entry) (> (length entry) 0))
+            (push entry chunks))))))
+    (when chunks
+      (mapconcat #'identity (nreverse chunks) ""))))
+
+;; -------------------------------------------------------------------
+;; Streaming assistant message helpers
+
+(defun benedict-chat--streaming-reset ()
+  "Clear any active streaming message state."
+  (setq benedict-chat--streaming-message nil))
+
+(defun benedict-chat--streaming-merge-metadata (payload)
+  "Return merged metadata for PAYLOAD and existing streaming state."
+  (let* ((state benedict-chat--streaming-message)
+         (current (plist-get state :metadata))
+         (provider (or (plist-get payload :provider)
+                       (plist-get current :provider)))
+         (model (or (plist-get payload :model)
+                    (plist-get current :model))))
+    (benedict-chat--metadata :provider provider :model model)))
+
+(defun benedict-chat--streaming-apply-metadata (payload)
+  "Update streaming metadata and header for PAYLOAD."
+  (when-let ((message (plist-get benedict-chat--streaming-message :message)))
+    (let* ((metadata (benedict-chat--streaming-merge-metadata payload))
+           (state (plist-put benedict-chat--streaming-message :metadata metadata)))
+      (setq benedict-chat--streaming-message state)
+      (plist-put message :metadata metadata)
+      (when-let ((item (plist-get message :item)))
+        (plist-put item :metadata metadata)
+        (benedict-chat--refresh-message-header item)))))
+
+(defun benedict-chat--streaming-ensure-message (payload)
+  "Ensure a placeholder assistant message exists for PAYLOAD."
+  (unless (plist-get benedict-chat--streaming-message :message)
+    (let* ((metadata (benedict-chat--metadata
+                      :provider (plist-get payload :provider)
+                      :model (plist-get payload :model)))
+           (record (list :role 'assistant
+                         :content ""
+                         :display-content nil
+                         :time (current-time)
+                         :metadata metadata)))
+      (setq record (benedict-chat--record-message record))
+      (setq benedict-chat--streaming-message
+            (list :message record
+                  :content ""
+                  :metadata metadata))))
+  (benedict-chat--streaming-apply-metadata payload)
+  (plist-get benedict-chat--streaming-message :message))
+
+(defun benedict-chat--streaming-append-text (payload text)
+  "Append TEXT for PAYLOAD to the streaming assistant message."
+  (when (and text (> (length text) 0))
+    (when-let ((message (benedict-chat--streaming-ensure-message payload)))
+      (let* ((state benedict-chat--streaming-message)
+             (current (or (plist-get state :content) ""))
+             (updated (concat current text)))
+        (setq state (plist-put state :content updated))
+        (setq benedict-chat--streaming-message state)
+        (benedict-chat--replace-message-content message updated)))))
+
+(defun benedict-chat--complete-streaming-message (metadata content display-content empty-response)
+  "Finalize the streaming assistant message with METADATA and CONTENT.
+DISPLAY-CONTENT replaces the visible text when EMPTY-RESPONSE is non-nil."
+  (when-let ((message (plist-get benedict-chat--streaming-message :message)))
+    (let* ((state benedict-chat--streaming-message)
+           (fallback (or (plist-get state :content) ""))
+           (actual (or content fallback ""))
+           (visible (if empty-response
+                        (or display-content actual)
+                      actual)))
+      (benedict-chat--replace-message-content message visible)
+      (plist-put message :content actual)
+      (if empty-response
+          (plist-put message :display-content visible)
+        (plist-put message :display-content nil))
+      (plist-put message :metadata metadata)
+      (plist-put message :time (current-time))
+      (when-let ((item (plist-get message :item)))
+        (plist-put item :metadata metadata)
+        (benedict-chat--refresh-message-header item))))
+  (benedict-chat--streaming-reset))
+
+(defun benedict-chat--fail-streaming-message (content metadata)
+  "Replace the streaming message with error CONTENT and METADATA.
+Returns non-nil when an active streaming entry handled the error."
+  (let ((handled nil))
+    (when-let ((message (plist-get benedict-chat--streaming-message :message)))
+      (setq handled t)
+      (benedict-chat--replace-message-content message content)
+      (plist-put message :content content)
+      (plist-put message :display-content nil)
+      (plist-put message :metadata metadata)
+      (plist-put message :time (current-time))
+      (when-let ((item (plist-get message :item)))
+        (plist-put item :metadata metadata)
+        (benedict-chat--refresh-message-header item)))
+    (benedict-chat--streaming-reset)
+    handled))
+
 (defun benedict-chat--decorate-message (item)
   "Apply markdown-lite decorations for ITEM."
   (let* ((start-marker (plist-get item :content-start))
@@ -735,39 +942,61 @@ LANGUAGE is the identifier included in the fence (may be nil)."
                        :provider (plist-get payload :provider)
                        :model (plist-get payload :model))))
         (dolist (detail details)
-          (benedict-chat--display-thinking-detail detail metadata t))))))
+          (benedict-chat--display-thinking-detail detail metadata t)))))
+  (when-let ((text (benedict-chat--collect-delta-message-content payload)))
+    (unless (string-empty-p text)
+      (benedict-chat--streaming-append-text payload text))))
 
 (defun benedict-chat--handle-provider-success (result)
   "Handle RESULT returned from the provider."
   (setq benedict-chat--pending-request nil)
   (setq benedict-chat--active-request-id nil)
   (let* ((message (plist-get result :message))
+         (stream-state benedict-chat--streaming-message)
+         (stream-text (and stream-state (plist-get stream-state :content)))
          (role (benedict-chat--normalize-role (plist-get message :role)))
          (content (or (plist-get message :content) ""))
          (thinking (benedict-chat--normalize-thinking-payload
                     (plist-get result :thinking)))
+         (provider (plist-get result :provider))
+         (model (plist-get result :model))
+         (latency (plist-get result :latency))
+         (usage (plist-get result :usage))
          (empty-response (or (plist-get result :empty-response)
                              (string-blank-p content)))
          (display-content (if empty-response
                               (benedict-chat--empty-response-text thinking)
                             content))
          (metadata (benedict-chat--metadata
-                    :provider (plist-get result :provider)
-                    :model (plist-get result :model)
-                    :latency (plist-get result :latency)
-                    :usage (plist-get result :usage)
+                    :provider provider
+                    :model model
+                    :latency latency
+                    :usage usage
                     :empty-response empty-response)))
+    (when (and stream-text
+               (not (string-empty-p stream-text))
+               (string-blank-p (or (plist-get message :content) "")))
+      (setq content stream-text)
+      (setq empty-response nil)
+      (setq display-content content)
+      (setq metadata (benedict-chat--metadata
+                      :provider provider
+                      :model model
+                      :latency latency
+                      :usage usage
+                      :empty-response empty-response)))
     (when thinking
       (let ((thinking-metadata (plist-put (copy-sequence metadata) :thinking t)))
         (dolist (detail thinking)
           (benedict-chat--display-thinking-detail detail thinking-metadata nil))))
-    (let ((record (list :role role
-                        :content content
-                        :time (current-time)
-                        :metadata metadata)))
-      (when empty-response
-        (setq record (plist-put record :display-content display-content)))
-      (benedict-chat--record-message record))
+    (if (plist-get benedict-chat--streaming-message :message)
+        (benedict-chat--complete-streaming-message metadata content display-content empty-response)
+      (let ((record (list :role role
+                          :content content
+                          :time (current-time)
+                          :metadata metadata
+                          :display-content (and empty-response display-content))))
+        (benedict-chat--record-message record)))
     (message "Benedict: %s replied via %s"
              (if (plist-get metadata :model)
                  (plist-get metadata :model)
@@ -799,8 +1028,9 @@ LANGUAGE is the identifier included in the fence (may be nil)."
                    :status (plist-get payload :status)
                    :code (plist-get payload :code)
                    :retryable (plist-get payload :retryable))))
-    (benedict-chat--record-message
-     (list :role 'assistant :content content :time (current-time) :metadata metadata))
+    (unless (benedict-chat--fail-streaming-message content metadata)
+      (benedict-chat--record-message
+       (list :role 'assistant :content content :time (current-time) :metadata metadata)))
     (message "Benedict provider error: %s" content)))
 
 (defun benedict-chat--start-dispatch (request &optional retry)
@@ -810,6 +1040,7 @@ LANGUAGE is the identifier included in the fence (may be nil)."
     (setq benedict-chat--request-seq (1+ benedict-chat--request-seq))
     (setq benedict-chat--active-request-id benedict-chat--request-seq)
     (setq benedict-chat--thinking-temp-counter 0)
+    (benedict-chat--streaming-reset)
     (setq benedict-chat--last-dispatch
           (list :request request :timestamp (current-time) :retry retry))
     (message "Benedict: contacting %s%s..."

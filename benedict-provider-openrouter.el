@@ -378,7 +378,10 @@ When streaming is enabled, callbacks receive incremental deltas via curl."
          (delta (plist-get normalized :delta)))
     (plist-put normalized :index (or (plist-get normalized :index) index))
     (when delta
-      (benedict-provider-openrouter--accumulate-message-from-delta context delta)
+      (when-let ((chunk (benedict-provider-openrouter--accumulate-message-from-delta
+                         context delta)))
+        (plist-put normalized :text chunk)
+        (plist-put delta :text chunk))
       (let ((details (benedict-provider-openrouter--normalize-reasoning-delta
                       context delta)))
         (when details
@@ -502,10 +505,11 @@ When streaming is enabled, callbacks receive incremental deltas via curl."
   (when-let ((role (plist-get delta :role)))
     (setf (plist-get context :role)
           (intern (downcase (format "%s" role)))))
-  (when-let ((text (benedict-provider-openrouter--delta-text delta)))
-    (unless (string-empty-p text)
+  (let ((text (benedict-provider-openrouter--delta-text delta)))
+    (when (and text (not (string-empty-p text)))
       (setf (plist-get context :message-chunks)
-            (cons text (plist-get context :message-chunks))))))
+            (cons text (plist-get context :message-chunks)))
+      text)))
 
 (defun benedict-provider-openrouter--delta-text (delta)
   "Extract user-visible text from DELTA."
