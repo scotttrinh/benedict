@@ -97,6 +97,24 @@ Tips
   - Tools registry: register/list/call roundtrip.
 - Keep UI non-blocking; prefer `make-process` or `url-retrieve` for IO in later phases.
 
+### Running the automated test suite
+
+- Default runner:  
+  ```sh
+  emacs -Q --batch -l test/run-tests.el
+  ```  
+  This bootstraps the repo-local `.elpa/` (for `ert-async`), loads every `*-test.el`, and exits non-zero on a failure.
+- The runner prints every asynchronous test’s progress (look for `benedict-chat-*` first). When debugging, re-run with `EDEBUG=1` or add `(message ...)` calls, but remove noisy logging before you ship.
+- If you add new tests, make sure they can run in batch (no interactive prompts, no buffers left behind).
+
+### Markers, overlays, and folding (read this before editing chat UI)
+
+- Whenever you insert complex UI like folded “Thinking” blocks, store `:content-start` and `:content-end` as markers that use **correct stickiness**. For example, thinking content should use a front-non-sticky marker at the start and a rear-sticky marker for the end so streaming append operations do not invert the region.
+- Capture `:content-end` immediately after inserting the block’s payload, then keep that marker front-sticky while you append closing dividers/newlines. Once the scaffolding is in place, flip it back to rear-sticky so later updates extend the overlay without swallowing the next message.
+- If a block installs an overlay, **always** update it whenever you mutate the block’s text. Forgetting to move the overlay leads to `args-out-of-range` errors once Emacs tries to adjust it during timers.
+- When regenerating content (e.g., final reasoning replaces streamed chunks), delete text between the stored markers rather than rewriting the entire block; this keeps downstream markers (buttons, block dividers) valid.
+- New streaming UI must survive timers firing after the buffer is killed. Audit every `run-at-time` callback to guard with `(buffer-live-p buffer)` before touching markers.
+
 ## How To Manually Test Right Now
 
 - Enable `benedict-mode` and run `C-c C-b c` to open chat (`M-x benedict-chat` also works).

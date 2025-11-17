@@ -49,6 +49,22 @@
   '((t :inherit error :weight bold))
   "Face for error responses in chat buffers.")
 
+(defface benedict-chat-block-divider
+  '((t :inherit shadow))
+  "Face for divider lines separating chat blocks.")
+
+(defface benedict-chat-code-block
+  '((t :inherit (fixed-pitch font-lock-string-face)))
+  "Face for content inside fenced code blocks.")
+
+(defface benedict-chat-button
+  '((t :inherit link :weight semi-bold))
+  "Face for inline chat action buttons.")
+
+(defface benedict-chat-thinking
+  '((t :inherit italic))
+  "Face for thinking blocks in chat buffers.")
+
 ;; Error hierarchy
 (define-error 'benedict-error "Benedict error")
 (define-error 'benedict-provider-error "Benedict provider error" 'benedict-error)

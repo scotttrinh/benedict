@@ -1,0 +1,17 @@
+#+TITLE: Notes — Thinking Toggle Overlay Bug
+#+DATE: 2025-11-17
+
+* Context
+- Regression: thinking folds looked correct initially, but after clicking *Show thinking* and then *Hide thinking*, the assistant message disappeared along with the reasoning block.
+- Impact: reproducible in the chat buffer UI and untested previously; folding overlays started covering everything past the thinking block which confused users.
+
+* Bug
+- Root cause: =:content-end= markers were captured *after* we appended the closing divider + newline, so the thoughts overlay extended all the way to the assistant header.
+- When the user hid the reasoning overlay again, the invisibility spec hid the overlay region, which now included the assistant divider + content, making it look like the message vanished.
+
+* Fix
+- While rendering the block, capture the end marker right after inserting the thinking text, temporarily make it front-sticky while the trailing divider/newline are added, then flip it back to rear-sticky so future streaming appends still work.
+- Added `benedict-chat-thinking-toggle-hides-only-reasoning` as a deterministic unit test; it toggles the fold twice and asserts the overlay bounds never overrun the assistant block.
+
+* Verification
+- =emacs -Q --batch -l test/run-tests.el=

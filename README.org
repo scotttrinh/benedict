@@ -103,7 +103,6 @@ Example: registering a tool (sketch)
 - Enable minor mode: =benedict-mode= for ask/transform shortcuts; =M-x benedict-chat= opens the chat buffer.
 - Configure the OpenRouter provider (default): add an auth-source entry or set =$OPENROUTER_API_KEY= so Benedict can talk to multiple models through one endpoint.
 - Manual testing: once wired, send prompts from the chat buffer and inspect the provider metadata/latency inline; retry or copy outputs via keybindings.
-
 Example init:
 #+begin_src elisp
 (use-package benedict
@@ -155,6 +154,19 @@ The fake backend:
   #+end_src
 
 For ERT/Buttercup, require =benedict-provider-fake=, set =(setq benedict-provider 'fake)=, and use =benedict-provider-fake-enqueue-response= / =...-enqueue-error= or the =...-with-script= macro to control outputs. This ensures chat/provider code paths are covered without relying on real OpenRouter keys.
+
+** Provider logs & traffic debugging
+All providers emit structured logs through a shared defcustom, so you can trace network failures or retry loops without patching code.
+
+- Set =benedict-provider-log-level= (Customize → Benedict → Benedict Provider) to =debug= or =trace= to enable logging. The default =nil= silences everything.
+- Logs appear in =~*Messages*= (or via =M-x view-echo-area-messages=) and include JSON payloads: request ids, attempts, masked headers, payload sizes, HTTP statuses, and retry decisions.
+- =debug= covers request/response lifecycle, retries, completions, and errors; =trace= adds streaming deltas (e.g., reasoning chunks from the fake provider).
+- Because logs use `message`, they follow =message-log-max=. Increase that variable if you need deeper history.
+
+Example init snippet:
+#+begin_src elisp
+(setq benedict-provider-log-level 'debug)   ; emit per-request diagnostics
+#+end_src
 
 * Tests
 Benedict uses =package.el= for dev/test dependencies. The test runner installs =ert-async= from MELPA into =.elpa/= inside the repo and executes every =*-test.el= file.

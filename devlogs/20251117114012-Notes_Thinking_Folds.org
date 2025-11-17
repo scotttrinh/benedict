@@ -1,0 +1,21 @@
+#+TITLE: Notes — Thinking Fold Streaming Fix
+#+DATE: 2025-11-17
+
+* Context
+- Task: collapse streamed “Thinking” output into a single folded block with a toggle, matching OpenRouter’s reasoning payloads.
+- Files touched: =benedict-chat.el= (UI), =benedict-provider-fake.el= (reasoning stream), =test/benedict-chat-test.el= (ERT).
+
+* What Went Wrong
+- **Marker stickiness**: the original thinking block reused =:content-start= / =:content-end= markers that were both rear-sticky. When we replaced streamed text with the final reasoning payload, Emacs reinserted text *before* the start marker, shrinking the overlay to zero and causing =args-out-of-range= errors from timer callbacks.
+- **Overlay refresh**: thinking overlays were anchored to =:end= (the whole block) instead of the actual content region. When a delta shortened the block, the overlay tried to stretch beyond buffer boundaries and exploded inside async timers.
+- **Fake provider payload shape**: scripted =:thinking= entries were plain strings, while the UI now expects OpenRouter-style objects with =:id=, =:type=, and incremental chunk arrays. Tests initially passed because the UI recorded each string as a separate item, so our folding work never ran.
+
+* Solution
+- Normalize thinking details regardless of source: every delta/final payload is coerced into a plist with an =:id= and chunk list so the same marker/overlay can be reused.
+- Store markers with explicit stickiness (front-non-sticky start, rear-sticky end) and always run =benedict-chat--update-thinking-overlay= after text mutations.
+- Teach the fake provider to emit reasoning deltas during streaming and to stitch the chunks into the final payload, which exercised the folding logic.
+- Add regression tests for scripted thinking as well as streamed reasoning; both tests toggle the fold to ensure the overlay survives timer churn.
+
+* Verification
+- =emacs -Q --batch -l test/run-tests.el=
+- Manual buffer smoke-test: streamed fake provider response now shows a single “Thinking…” block with a “Show thinking” button; toggling reveals incremental content and the final answer always appears after it.

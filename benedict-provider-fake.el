@@ -31,6 +31,14 @@
   :type 'number
   :group 'benedict-provider-fake)
 
+(defvar benedict-provider-fake--request-counter 0
+  "Internal counter for correlating fake provider logs.")
+
+(defun benedict-provider-fake--next-request-id ()
+  "Return a unique identifier for fake provider logs."
+  (format "fake-%06d"
+          (cl-incf benedict-provider-fake--request-counter)))
+
 (defvar benedict-provider-fake-script nil
   "Queue of scripted responses for deterministic tests.
 Each entry is a plist describing either a success (:type 'success) or
@@ -89,21 +97,117 @@ SCRIPT entries are consumed FIFO."
       ("completion_tokens" . ,completion)
       ("total_tokens" . ,(+ prompt completion)))))
 
-(defun benedict-provider-fake--success-payload (request entry start-time latency)
+(defun benedict-provider-fake--normalize-list (value)
+  "Return VALUE coerced into a list."
+  (cond
+   ((null value) nil)
+   ((listp value) value)
+   ((vectorp value) (append value nil))
+   (t (list value))))
+
+(defun benedict-provider-fake--normalize-thinking-entry (entry id index)
+  "Normalize a scripted thinking ENTRY using fallback ID and INDEX."
+  (cond
+   ((null entry) nil)
+   ((stringp entry)
+    (list :id id
+          :type "reasoning.text"
+          :format "anthropic-claude-v1"
+          :index index
+          :chunks (list entry)))
+   ((listp entry)
+    (let* ((detail (copy-tree entry))
+           (chunks (or (plist-get detail :chunks)
+                       (when-let ((text (or (plist-get detail :text)
+                                            (plist-get detail :summary)
+                                            (plist-get detail :data))))
+                         (list text)))))
+      (plist-put detail :id (or (plist-get detail :id) id))
+      (plist-put detail :type (or (plist-get detail :type) "reasoning.text"))
+      (plist-put detail :format (or (plist-get detail :format) "anthropic-claude-v1"))
+      (plist-put detail :index (or (plist-get detail :index) index))
+      (plist-put detail :chunks (or (benedict-provider-fake--normalize-list chunks)
+                                    (list "")))
+      detail))
+   (t nil)))
+
+(defun benedict-provider-fake--normalize-thinking (thinking)
+  "Return THINKING normalized into detail plists with chunk lists."
+  (let ((counter 0))
+    (cond
+     ((null thinking) nil)
+     ((stringp thinking)
+      (list (benedict-provider-fake--normalize-thinking-entry thinking
+                                                              (format "fake-thinking-%d" counter)
+                                                              counter)))
+     ((vectorp thinking)
+      (benedict-provider-fake--normalize-thinking (append thinking nil)))
+     ((and (listp thinking)
+           (cl-every #'stringp thinking))
+      (list (benedict-provider-fake--normalize-thinking-entry
+             (string-join thinking "\n\n")
+             (format "fake-thinking-%d" counter)
+             counter)))
+     ((listp thinking)
+      (let (details)
+        (dolist (entry thinking (nreverse details))
+          (let* ((detail-id (format "fake-thinking-%d" counter))
+                 (detail (benedict-provider-fake--normalize-thinking-entry entry detail-id counter)))
+            (setq counter (1+ counter))
+            (when detail
+              (push detail details))))))
+     (t nil))))
+
+(defun benedict-provider-fake--finalize-thinking (details)
+  "Produce the final thinking payload from DETAILS."
+  (when details
+    (mapcar
+     (lambda (detail)
+       (let* ((type (downcase (format "%s" (plist-get detail :type))))
+              (chunks (or (plist-get detail :chunks) '("")))
+              (text (mapconcat #'identity chunks "")))
+         (plist-put detail :chunks nil)
+         (pcase type
+           ("reasoning.summary" (plist-put detail :summary text))
+           ("reasoning.encrypted" (plist-put detail :data text))
+           (_ (plist-put detail :text text)))
+         detail))
+     (copy-tree details))))
+
+(defun benedict-provider-fake--make-reasoning-delta (detail chunk model)
+  "Build a delta payload for DETAIL chunk CHUNK with MODEL."
+  (let* ((type (downcase (format "%s" (plist-get detail :type))))
+         (base (list :id (plist-get detail :id)
+                     :type (plist-get detail :type)
+                     :format (plist-get detail :format)
+                     :index (plist-get detail :index))))
+    (pcase type
+      ("reasoning.summary" (plist-put base :summary chunk))
+      ("reasoning.encrypted" (plist-put base :data chunk))
+      (_ (plist-put base :text chunk)))
+    (list :provider 'fake
+          :model model
+          :choices (vector (list :index 0
+                                 :delta (list :reasoning_details (vector base)))))))
+
+(defun benedict-provider-fake--success-payload (request entry start-time latency thinking)
   "Create a success payload using REQUEST, ENTRY, START-TIME, and LATENCY."
   (let* ((messages (plist-get request :messages))
          (content (or (plist-get entry :content)
                       (format "Fake echo: %s"
                               (benedict-provider-fake--last-user-content messages))))
+         (role (or (plist-get entry :role) 'assistant))
          (model (or (plist-get entry :model)
                     benedict-provider-fake-default-model))
          (usage (or (plist-get entry :usage)
                     (benedict-provider-fake--build-usage messages content)))
-         (message (list :role 'assistant :content content)))
+         (final-thinking (or thinking (plist-get entry :thinking)))
+         (message (list :role role :content content)))
     (list :message message
           :model model
           :provider 'fake
           :usage usage
+          :thinking final-thinking
           :latency (or (plist-get entry :latency)
                        (or latency (float-time (time-subtract (current-time) start-time)))))))
 
@@ -127,7 +231,23 @@ Returns a handle plist with :request, :entry, :provider, and :timers."
          (chunks (plist-get entry :chunks))
          (chunk-delay (or (plist-get entry :chunk-delay) benedict-provider-fake-streaming-chunk-delay))
          (chunk-offset (or (plist-get entry :chunk-offset) 0.0))
+         (model (or (plist-get entry :model) benedict-provider-fake-default-model))
+         (thinking-details (benedict-provider-fake--normalize-thinking (plist-get entry :thinking)))
+         (final-thinking (benedict-provider-fake--finalize-thinking thinking-details))
+         (request-id (or (plist-get request :request-id)
+                         (benedict-provider-fake--next-request-id)))
          (timers nil))
+    
+    (benedict-provider-log-debug
+     'fake :request
+     :request-id request-id
+     :entry-type (plist-get entry :type)
+     :model model
+     :message-count (length (or (plist-get request :messages) '()))
+     :chunk-count (length (or chunks '()))
+     :thinking-count (length thinking-details)
+     :delay delay
+     :chunk-delay chunk-delay)
     
     ;; Helper to schedule callbacks and track timers
     (cl-labels
@@ -143,11 +263,19 @@ Returns a handle plist with :request, :entry, :provider, and :timers."
             (when (functionp on-error)
               (register delay
                         (lambda ()
-                          (funcall on-error (benedict-provider-fake--error-payload entry))))))
+                          (let ((payload (benedict-provider-fake--error-payload entry)))
+                            (benedict-provider-log
+                             'fake 'warn :response
+                             :request-id request-id
+                             :type 'error
+                             :message (plist-get payload :message)
+                             :status (plist-get payload :status))
+                            (funcall on-error payload))))))
         ;; Success branch - MUST wrap in progn too!
         (progn
           (let ((last-chunk-time chunk-offset)
-                (chunk-count 0))
+                (chunk-count 0)
+                (last-thinking-time chunk-offset))
             ;; Schedule chunk emissions if chunks are provided
             (when chunks
               (dolist (chunk chunks)
@@ -155,6 +283,12 @@ Returns a handle plist with :request, :entry, :provider, and :timers."
                       (chunk-idx chunk-count))
                   (register last-chunk-time
                             (lambda ()
+                              (benedict-provider-log-trace
+                               'fake :delta
+                               :request-id request-id
+                               :kind 'message
+                               :index chunk-idx
+                               :chunk chunk-content)
                               (when (functionp on-delta)
                                 (funcall on-delta
                                          (list :content chunk-content
@@ -163,15 +297,41 @@ Returns a handle plist with :request, :entry, :provider, and :timers."
                                                :done nil)))))
                   (setq last-chunk-time (+ last-chunk-time chunk-delay))
                   (setq chunk-count (1+ chunk-count)))))
+            ;; Schedule reasoning chunks
+            (when thinking-details
+              (dolist (detail thinking-details)
+                (dolist (chunk (plist-get detail :chunks))
+                  (let* ((chunk-text (or chunk ""))
+                         (delta (benedict-provider-fake--make-reasoning-delta detail chunk-text model)))
+                    (register last-thinking-time
+                              (lambda ()
+                                (benedict-provider-log-trace
+                                 'fake :delta
+                                 :request-id request-id
+                                 :kind 'thinking
+                                 :detail (plist-get detail :id)
+                                 :chunk chunk-text)
+                                (when (functionp on-delta)
+                                  (funcall on-delta delta)))))
+                  (setq last-thinking-time (+ last-thinking-time chunk-delay)))))
             
             ;; Schedule completion callback
             (let ((completion-delay (if chunks
-                                        (max delay last-chunk-time)
-                                      delay)))
+                                        (max delay last-chunk-time last-thinking-time)
+                                      (max delay last-thinking-time))))
               (register completion-delay
                         (lambda ()
                           (let ((payload (benedict-provider-fake--success-payload
-                                          request entry start-time delay)))
+                                          request entry start-time delay final-thinking)))
+                            (benedict-provider-log
+                             'fake 'info :completion
+                             :request-id request-id
+                             :model (plist-get payload :model)
+                             :latency (plist-get payload :latency)
+                             :usage (plist-get payload :usage)
+                             :content (plist-get (plist-get payload :message) :content)
+                             :chunk-count chunk-count
+                             :thinking-blocks (and final-thinking (length final-thinking)))
                             (if (functionp on-complete)
                                 (funcall on-complete payload)
                               (when (functionp on-success)
@@ -180,6 +340,7 @@ Returns a handle plist with :request, :entry, :provider, and :timers."
     ;; Return handle with timers for cancellation
     (list :request request
           :entry entry
+          :request-id request-id
           :provider 'fake
           :timers timers)))
 

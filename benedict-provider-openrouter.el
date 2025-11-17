@@ -71,6 +71,14 @@ Set to nil to skip matching on :user."
   '(408 409 425 429 500 502 503 504)
   "HTTP status codes considered retryable for OpenRouter requests.")
 
+(defvar benedict-provider-openrouter--request-counter 0
+  "Internal counter to correlate OpenRouter log events.")
+
+(defun benedict-provider-openrouter--next-request-id ()
+  "Return a unique request identifier for OpenRouter logs."
+  (format "openrouter-%06d"
+          (cl-incf benedict-provider-openrouter--request-counter)))
+
 (cl-defun benedict-provider-openrouter--send
     (_provider request &key on-success on-error on-delta on-complete)
   "Dispatch REQUEST to OpenRouter.
@@ -78,9 +86,12 @@ ON-SUCCESS/ON-ERROR/ON-DELTA/ON-COMPLETE mirror `benedict-provider-dispatch'.
 Currently non-streaming; ON-DELTA is unused and ON-COMPLETE takes precedence."
   (let* ((credential (benedict-provider-openrouter--resolve-credential))
          (payload (benedict-provider-openrouter--encode-payload request))
+         (request-id (or (plist-get request :request-id)
+                         (benedict-provider-openrouter--next-request-id)))
          (context (list :request request
                         :payload payload
                         :credential credential
+                        :request-id request-id
                         :on-success on-success
                         :on-error on-error
                         :on-delta on-delta
@@ -97,6 +108,15 @@ Currently non-streaming; ON-DELTA is unused and ON-COMPLETE takes precedence."
   (let* ((token (plist-get (plist-get context :credential) :token))
          (headers (benedict-provider-openrouter--build-headers token))
          (payload (plist-get context :payload)))
+    (benedict-provider-log-debug
+     'openrouter :request
+     :request-id (plist-get context :request-id)
+     :attempt (plist-get context :attempt)
+     :endpoint benedict-provider-openrouter-endpoint
+     :headers (benedict-provider-openrouter--redact-headers headers)
+     :body payload
+     :body-bytes (and payload (string-bytes payload))
+     :credential-source (plist-get (plist-get context :credential) :source))
     (let ((url-request-method "POST")
           (url-request-extra-headers headers)
           (url-request-data payload))
@@ -117,21 +137,55 @@ Currently non-streaming; ON-DELTA is unused and ON-COMPLETE takes precedence."
                                    url-http-response-status
                                  0)))
               (if (re-search-forward "\n\n" nil t)
-                  (let ((body (buffer-substring-no-properties (point) (point-max))))
+                  (let* ((header-end (match-end 0))
+                         (headers (buffer-substring-no-properties (point-min) header-end))
+                         (body (buffer-substring-no-properties header-end (point-max))))
+                    (benedict-provider-openrouter--log-http-response
+                     context http-status headers body)
                     (benedict-provider-openrouter--process-http-response
                      context http-status body))
-                (benedict-provider-openrouter--process-http-response
-                 context http-status "")))))
+                (let ((headers (buffer-substring-no-properties (point-min) (point-max))))
+                  (benedict-provider-openrouter--log-http-response
+                   context http-status headers "")
+                  (benedict-provider-openrouter--process-http-response
+                   context http-status ""))))))
       (when (buffer-live-p buffer)
         (kill-buffer buffer)))))
+
+(defun benedict-provider-openrouter--log-http-response (context status headers body)
+  "Emit a structured log for STATUS/HEADERS/BODY tied to CONTEXT."
+  (benedict-provider-log-debug
+   'openrouter :response
+   :request-id (plist-get context :request-id)
+   :attempt (plist-get context :attempt)
+   :status status
+   :elapsed (float-time (time-subtract (current-time)
+                                       (plist-get context :start-time)))
+   :headers headers
+   :body body
+   :body-bytes (and body (string-bytes body))))
 
 (defun benedict-provider-openrouter--handle-network-error (status context)
   "Handle network STATUS (pre-HTTP) using CONTEXT."
   (let* ((error-data (plist-get status :error))
-         (message (if error-data (format "%s" error-data) "Network error")))
+         (message (if error-data (format "%s" error-data) "Network error"))
+         (request-id (plist-get context :request-id))
+         (attempt (plist-get context :attempt)))
     (if (benedict-provider-openrouter--maybe-retry context nil message)
-        (benedict-provider-openrouter--log
-         "OpenRouter network error (%s). Will retry." message)
+        (benedict-provider-log
+         'openrouter 'warn :network-error
+         :request-id request-id
+         :attempt attempt
+         :message message
+         :error error-data
+         :retry t)
+      (benedict-provider-log
+       'openrouter 'error :network-error
+       :request-id request-id
+       :attempt attempt
+       :message message
+       :error error-data
+       :retry nil)
       (benedict-provider-openrouter--emit-error
        context (list :type 'network :message message :retryable nil)))))
 
@@ -146,41 +200,63 @@ Currently non-streaming; ON-DELTA is unused and ON-COMPLETE takes precedence."
             (benedict-provider-openrouter--handle-api-error context status-code error-block body)
           (benedict-provider-openrouter--handle-success context status-code parsed body)))
     (json-parse-error
-     (if (benedict-provider-openrouter--maybe-retry context status-code "JSON parse error")
-         (benedict-provider-openrouter--log "OpenRouter parse error. Retrying.")
-       (benedict-provider-openrouter--emit-error
-        context (list :type 'decode :status status-code :message "Failed to parse response"
-                      :body body :retryable nil :error err))))))
+     (let ((request-id (plist-get context :request-id)))
+       (if (benedict-provider-openrouter--maybe-retry context status-code "JSON parse error")
+           (benedict-provider-log
+            'openrouter 'warn :decode-error
+            :request-id request-id
+            :status status-code
+            :body body
+            :error err
+            :retry t)
+         (benedict-provider-log
+          'openrouter 'error :decode-error
+          :request-id request-id
+          :status status-code
+          :body body
+          :error err
+          :retry nil)
+         (benedict-provider-openrouter--emit-error
+          context (list :type 'decode :status status-code :message "Failed to parse response"
+                        :body body :retryable nil :error err)))))))
 
 (defun benedict-provider-openrouter--handle-success (context status-code parsed body)
   "Handle PARSED success payload (STATUS-CODE, BODY) using CONTEXT."
   (let* ((choices (or (benedict-provider-openrouter--aget "choices" parsed) '()))
          (first (car choices))
          (message (and first (benedict-provider-openrouter--aget "message" first)))
+         (decoded-message (if message
+                              (benedict-provider-openrouter--decode-message message)
+                            (list :role 'assistant :content "" :raw nil)))
          (usage (benedict-provider-openrouter--aget "usage" parsed))
          (model (or (benedict-provider-openrouter--aget "model" parsed)
-                    benedict-provider-openrouter-default-model)))
-    (if (and message (benedict-provider-openrouter--aget "content" message))
-        (let* ((latency (float-time (time-subtract (current-time)
-                                                   (plist-get context :start-time))))
-               (result (list :message (benedict-provider-openrouter--decode-message message)
-                             :usage usage
-                             :model model
-                             :provider 'openrouter
-                             :status status-code
-                             :latency latency
-                             :raw parsed)))
-          ;; Prefer :on-complete over :on-success for consistency with streaming protocol
-          (if (functionp (plist-get context :on-complete))
-              (funcall (plist-get context :on-complete) result)
-            (when (functionp (plist-get context :on-success))
-              (funcall (plist-get context :on-success) result))))
-      (benedict-provider-openrouter--handle-api-error
-       context status-code
-       (or (benedict-provider-openrouter--aget "error" parsed)
-           (list (cons "message" "OpenRouter response missing assistant message")
-                 (cons "body" body)))
-       body))))
+                    benedict-provider-openrouter-default-model))
+         (latency (float-time (time-subtract (current-time)
+                                             (plist-get context :start-time))))
+         (empty-response (string-empty-p (or (plist-get decoded-message :content) "")))
+         (result (list :message decoded-message
+                       :usage usage
+                       :model model
+                       :provider 'openrouter
+                       :status status-code
+                       :latency latency
+                       :raw parsed
+                       :empty-response empty-response))
+         (log-level (if empty-response 'warn 'info)))
+    (benedict-provider-log
+     'openrouter log-level :completion
+     :request-id (plist-get context :request-id)
+     :attempt (plist-get context :attempt)
+     :status status-code
+     :model model
+     :latency latency
+     :usage usage
+     :empty-response empty-response)
+    ;; Prefer :on-complete over :on-success for consistency with streaming protocol
+    (if (functionp (plist-get context :on-complete))
+        (funcall (plist-get context :on-complete) result)
+      (when (functionp (plist-get context :on-success))
+        (funcall (plist-get context :on-success) result)))))
 
 (defun benedict-provider-openrouter--handle-api-error (context status-code error-block body)
   "Handle API ERROR-BLOCK with STATUS-CODE/BODY."
@@ -188,11 +264,26 @@ Currently non-streaming; ON-DELTA is unused and ON-COMPLETE takes precedence."
                       (format "HTTP %s" status-code)))
          (code (or (benedict-provider-openrouter--aget "code" error-block)
                    status-code))
-         (retryable (benedict-provider-openrouter--retryable-status-p status-code)))
-    (if (and retryable
-             (benedict-provider-openrouter--maybe-retry context status-code message))
-        (benedict-provider-openrouter--log "OpenRouter %s (HTTP %s). Retrying."
-                                           message status-code)
+         (retryable (benedict-provider-openrouter--retryable-status-p status-code))
+         (retry (and retryable
+                     (benedict-provider-openrouter--maybe-retry context status-code message))))
+    (if retry
+        (benedict-provider-log
+         'openrouter 'warn :http-error
+         :request-id (plist-get context :request-id)
+         :attempt (plist-get context :attempt)
+         :status status-code
+         :code code
+         :message message
+         :retry t)
+      (benedict-provider-log
+       'openrouter 'error :http-error
+       :request-id (plist-get context :request-id)
+       :attempt (plist-get context :attempt)
+       :status status-code
+       :code code
+       :message message
+       :retry nil)
       (benedict-provider-openrouter--emit-error
        context (list :type 'http :status status-code :code code :message message
                      :retryable retryable :body body)))))
@@ -207,6 +298,14 @@ Currently non-streaming; ON-DELTA is unused and ON-COMPLETE takes precedence."
              (next (copy-sequence context)))
         (setq next (plist-put next :attempt (1+ attempt)))
         (setq next (plist-put next :start-time (current-time)))
+        (benedict-provider-log-debug
+         'openrouter :retry
+         :request-id (plist-get context :request-id)
+         :current-attempt attempt
+         :next-attempt (plist-get next :attempt)
+         :delay delay
+         :status status
+         :message message)
         (run-at-time delay #'benedict-provider-openrouter--perform-request next)
         t))))
 
@@ -244,6 +343,24 @@ Currently non-streaming; ON-DELTA is unused and ON-COMPLETE takes precedence."
                (not (string-empty-p benedict-provider-openrouter-app-name)))
       (push (cons "X-Title" benedict-provider-openrouter-app-name) headers))
     (nreverse headers)))
+
+(defun benedict-provider-openrouter--redact-secret (value)
+  "Return VALUE masked for logging."
+  (if (and (stringp value) (> (length value) 8))
+      (format "%s…%s" (substring value 0 4) (substring value (- (length value) 2)))
+    "***"))
+
+(defun benedict-provider-openrouter--redact-headers (headers)
+  "Redact sensitive HEADERS for logging."
+  (mapcar
+   (lambda (header)
+     (let* ((name (car header))
+            (value (cdr header))
+            (normalized (downcase (format "%s" name))))
+       (if (member normalized '("authorization" "proxy-authorization"))
+           (cons name (benedict-provider-openrouter--redact-secret value))
+         header)))
+   (copy-sequence headers)))
 
 (defun benedict-provider-openrouter--encode-payload (request)
   "Return JSON payload string for REQUEST."
@@ -357,10 +474,6 @@ Currently non-streaming; ON-DELTA is unused and ON-COMPLETE takes precedence."
   "Extract host from the configured endpoint."
   (let ((url (url-generic-parse-url benedict-provider-openrouter-endpoint)))
     (url-host url)))
-
-(defun benedict-provider-openrouter--log (fmt &rest args)
-  "Helper logging wrapper that respects `message-log-max'."
-  (apply #'message (concat "[Benedict OpenRouter] " fmt) args))
 
 (benedict-provider-register
  (benedict-provider--create

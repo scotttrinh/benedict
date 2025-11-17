@@ -8,6 +8,90 @@
 ;;; Code:
 
 (require 'cl-lib)
+(require 'json)
+
+(defgroup benedict-provider nil
+  "Shared customization for Benedict providers."
+  :group 'benedict
+  :prefix "benedict-provider-")
+
+(defcustom benedict-provider-log-level nil
+  "Minimum severity for provider logs.
+When nil logging is disabled. Set to `debug' to record request/response
+traffic or `trace' for the most verbose output."
+  :type '(choice (const :tag "Off" nil)
+                 (const :tag "Errors" error)
+                 (const :tag "Warnings" warn)
+                 (const :tag "Info" info)
+                 (const :tag "Debug" debug)
+                 (const :tag "Trace" trace))
+  :group 'benedict-provider)
+
+(defconst benedict-provider--log-level-ranks
+  '((error . 4)
+    (warn . 3)
+    (info . 2)
+    (debug . 1)
+    (trace . 0))
+  "Relative severity ordering for provider logs.")
+
+(defun benedict-provider--log-level-rank (level)
+  "Return numeric rank for LEVEL symbol or nil."
+  (alist-get level benedict-provider--log-level-ranks nil nil #'eq))
+
+(defun benedict-provider-log-enabled-p (level)
+  "Return non-nil when LEVEL should be logged under `benedict-provider-log-level'."
+  (let ((threshold (benedict-provider--log-level-rank benedict-provider-log-level))
+        (value (benedict-provider--log-level-rank level)))
+    (and threshold value (>= value threshold))))
+
+(defun benedict-provider--log-key (key)
+  "Normalize KEY into a string for structured logs."
+  (cond
+   ((keywordp key) (substring (symbol-name key) 1))
+   ((symbolp key) (symbol-name key))
+   (t (format "%s" key))))
+
+(defun benedict-provider--log-normalize-plist (plist)
+  "Convert PLIST into an alist with string keys."
+  (let (result)
+    (while plist
+      (let* ((key (pop plist))
+             (value (pop plist)))
+        (push (cons (benedict-provider--log-key key) value) result)))
+    (nreverse result)))
+
+(defun benedict-provider--log-format (payload)
+  "Return PAYLOAD (a plist) encoded for log output."
+  (or (ignore-errors
+        (json-encode (benedict-provider--log-normalize-plist payload)))
+      (with-temp-buffer
+        (let ((print-level nil)
+              (print-length nil))
+          (prin1 payload (current-buffer))
+          (buffer-string)))))
+
+(cl-defun benedict-provider-log (provider level event &rest data)
+  "Emit a structured log for PROVIDER at LEVEL describing EVENT.
+DATA is a plist merged into the log payload."
+  (when (benedict-provider-log-enabled-p level)
+    (let* ((timestamp (format-time-string "%Y-%m-%dT%H:%M:%S.%3NZ" nil t))
+           (payload (append (list :timestamp timestamp
+                                  :provider provider
+                                  :level level
+                                  :event event)
+                            data)))
+      (message "[Benedict provider] %s"
+               (benedict-provider--log-format payload)))))
+
+(cl-defun benedict-provider-log-debug (provider event &rest data)
+  "Convenience wrapper logging EVENT for PROVIDER at debug LEVEL.
+DATA mirrors `benedict-provider-log'."
+  (apply #'benedict-provider-log provider 'debug event data))
+
+(cl-defun benedict-provider-log-trace (provider event &rest data)
+  "Convenience wrapper logging EVENT for PROVIDER at trace LEVEL."
+  (apply #'benedict-provider-log provider 'trace event data))
 
 (cl-defstruct (benedict-provider
                (:constructor benedict-provider--create))
