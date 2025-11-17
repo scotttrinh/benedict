@@ -71,9 +71,11 @@ Set to nil to skip matching on :user."
   '(408 409 425 429 500 502 503 504)
   "HTTP status codes considered retryable for OpenRouter requests.")
 
-(cl-defun benedict-provider-openrouter--send (_provider request &key on-success on-error)
+(cl-defun benedict-provider-openrouter--send
+    (_provider request &key on-success on-error on-delta on-complete)
   "Dispatch REQUEST to OpenRouter.
-ON-SUCCESS and ON-ERROR are callback functions invoked with plists."
+ON-SUCCESS/ON-ERROR/ON-DELTA/ON-COMPLETE mirror `benedict-provider-dispatch'.
+Currently non-streaming; ON-DELTA is unused and ON-COMPLETE takes precedence."
   (let* ((credential (benedict-provider-openrouter--resolve-credential))
          (payload (benedict-provider-openrouter--encode-payload request))
          (context (list :request request
@@ -81,9 +83,12 @@ ON-SUCCESS and ON-ERROR are callback functions invoked with plists."
                         :credential credential
                         :on-success on-success
                         :on-error on-error
+                        :on-delta on-delta
+                        :on-complete on-complete
                         :attempt 1
                         :max-attempts (max 1 (+ 1 (max 0 benedict-provider-openrouter-max-retries)))
-                        :start-time (current-time))))
+                        :start-time (current-time)
+                        :provider 'openrouter)))
     (benedict-provider-openrouter--perform-request context)
     context))
 
@@ -145,7 +150,7 @@ ON-SUCCESS and ON-ERROR are callback functions invoked with plists."
          (benedict-provider-openrouter--log "OpenRouter parse error. Retrying.")
        (benedict-provider-openrouter--emit-error
         context (list :type 'decode :status status-code :message "Failed to parse response"
-                      :body body :retryable nil :error err)))))))
+                      :body body :retryable nil :error err))))))
 
 (defun benedict-provider-openrouter--handle-success (context status-code parsed body)
   "Handle PARSED success payload (STATUS-CODE, BODY) using CONTEXT."
@@ -157,7 +162,7 @@ ON-SUCCESS and ON-ERROR are callback functions invoked with plists."
                     benedict-provider-openrouter-default-model)))
     (if (and message (benedict-provider-openrouter--aget "content" message))
         (let* ((latency (float-time (time-subtract (current-time)
-                                                  (plist-get context :start-time))))
+                                                   (plist-get context :start-time))))
                (result (list :message (benedict-provider-openrouter--decode-message message)
                              :usage usage
                              :model model
@@ -165,8 +170,11 @@ ON-SUCCESS and ON-ERROR are callback functions invoked with plists."
                              :status status-code
                              :latency latency
                              :raw parsed)))
-          (when (functionp (plist-get context :on-success))
-            (funcall (plist-get context :on-success) result)))
+          ;; Prefer :on-complete over :on-success for consistency with streaming protocol
+          (if (functionp (plist-get context :on-complete))
+              (funcall (plist-get context :on-complete) result)
+            (when (functionp (plist-get context :on-success))
+              (funcall (plist-get context :on-success) result))))
       (benedict-provider-openrouter--handle-api-error
        context status-code
        (or (benedict-provider-openrouter--aget "error" parsed)
@@ -249,8 +257,9 @@ ON-SUCCESS and ON-ERROR are callback functions invoked with plists."
     (unless (and (listp messages) messages)
       (error "OpenRouter request requires a non-empty :messages list"))
     (let ((body `(("model" . ,(or (plist-get request :model)
-                                  benedict-provider-openrouter-default-model)))
-                 ("messages" . ,(mapcar #'benedict-provider-openrouter--serialize-message messages)))))
+                                  benedict-provider-openrouter-default-model))
+                  ("messages" . ,(mapcar #'benedict-provider-openrouter--serialize-message
+                                         messages)))))
       (let ((temperature (if (plist-member request :temperature)
                              (plist-get request :temperature)
                            benedict-provider-openrouter-default-temperature)))

@@ -34,15 +34,31 @@ Signals an error when `benedict-provider' is not registered."
       (error "Provider %S is not registered" benedict-provider))
     provider))
 
-(cl-defun benedict-provider-dispatch (request &key on-success on-error)
+(cl-defun benedict-provider-dispatch
+    (request &key on-success on-error on-delta on-complete)
   "Send REQUEST to the active provider.
 REQUEST is provider-specific data (typically a plist).
-Optional ON-SUCCESS and ON-ERROR callbacks are forwarded to the provider."
+Callbacks:
+- ON-SUCCESS: invoked with the final payload (non-streaming or fallback).
+- ON-ERROR: invoked when the provider fails to service the request.
+- ON-DELTA: optional streaming chunk callback (called zero or more times).
+- ON-COMPLETE: optional final callback for streaming providers; when nil the
+  provider should fall back to ON-SUCCESS."
   (let ((provider (benedict-provider-current)))
     (funcall (benedict-provider-send provider)
              provider request
              :on-success on-success
-             :on-error on-error)))
+             :on-error on-error
+             :on-delta on-delta
+             :on-complete on-complete)))
+
+(defun benedict-provider-abort (handle)
+  "Ask the active provider to cancel HANDLE (a provider-specific token)."
+  (when handle
+    (let* ((provider (benedict-provider-current))
+           (cancel-fn (benedict-provider-cancel provider)))
+      (when (functionp cancel-fn)
+        (funcall cancel-fn provider handle)))))
 
 (provide 'benedict-provider)
 ;;; benedict-provider.el ends here

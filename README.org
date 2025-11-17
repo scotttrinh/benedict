@@ -150,6 +150,16 @@ The fake backend:
 
 For ERT/Buttercup, require =benedict-provider-fake=, set =(setq benedict-provider 'fake)=, and use =benedict-provider-fake-enqueue-response= / =...-enqueue-error= or the =...-with-script= macro to control outputs. This ensures chat/provider code paths are covered without relying on real OpenRouter keys.
 
+* Tests
+Benedict uses =package.el= for dev/test dependencies. The test runner installs =ert-async= from MELPA into =.elpa/= inside the repo and executes every =*-test.el= file.
+
+#+begin_src sh
+emacs -Q --batch -l test/run-tests.el
+#+end_src
+
+The first run downloads dependencies from GNU ELPA and MELPA; subsequent runs reuse the cached packages.
+If you prefer Cask-based workflows, the root =Cask= file mirrors the same dependencies, so =cask install= will fetch =ert-async= as well.
+
 ** Debugging in Doom Emacs
 If something fails to load (e.g., unbalanced paren, missing dependency), enable Emacs’ built-in debugger before Doom loads Benedict:
 #+begin_src elisp

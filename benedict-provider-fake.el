@@ -26,6 +26,11 @@
   :type 'number
   :group 'benedict-provider-fake)
 
+(defcustom benedict-provider-fake-streaming-chunk-delay 0.01
+  "Default delay (seconds) between streaming chunks."
+  :type 'number
+  :group 'benedict-provider-fake)
+
 (defvar benedict-provider-fake-script nil
   "Queue of scripted responses for deterministic tests.
 Each entry is a plist describing either a success (:type 'success) or
@@ -111,35 +116,87 @@ SCRIPT entries are consumed FIFO."
         :code (plist-get entry :code)
         :retryable (plist-get entry :retryable)))
 
-(defun benedict-provider-fake--dispatch (request on-success on-error entry start-time delay)
-  "Deliver either success or error for REQUEST using ENTRY.
-ON-SUCCESS/ON-ERROR are callbacks. START-TIME/DELAY track timing."
-  (if (eq (plist-get entry :type) 'error)
-      (when (functionp on-error)
-        (funcall on-error (benedict-provider-fake--error-payload entry)))
-    (when (functionp on-success)
-      (funcall on-success
-               (benedict-provider-fake--success-payload
-                request entry start-time delay)))))
-
-(cl-defun benedict-provider-fake--send (_provider request &key on-success on-error)
+(cl-defun benedict-provider-fake--send (_provider request &key on-success on-error on-delta on-complete)
   "Dispatch REQUEST through the fake provider.
-ON-SUCCESS/ON-ERROR mirror `benedict-provider-dispatch'."
+ON-SUCCESS/ON-ERROR/ON-DELTA/ON-COMPLETE mirror `benedict-provider-dispatch'.
+Returns a handle plist with :request, :entry, :provider, and :timers."
   (let* ((entry (or (benedict-provider-fake--next-script)
                     (list :type 'success)))
          (start-time (current-time))
-         (delay (or (plist-get entry :delay) benedict-provider-fake-latency-seconds)))
-    (run-at-time delay nil #'benedict-provider-fake--dispatch
-                 request on-success on-error entry start-time delay)
-    (list :request request :entry entry)))
+         (delay (or (plist-get entry :delay) benedict-provider-fake-latency-seconds))
+         (chunks (plist-get entry :chunks))
+         (chunk-delay (or (plist-get entry :chunk-delay) benedict-provider-fake-streaming-chunk-delay))
+         (chunk-offset (or (plist-get entry :chunk-offset) 0.0))
+         (timers nil))
+    
+    ;; Helper to schedule callbacks and track timers
+    (cl-labels
+        ((register (secs fn)
+           (let ((timer (run-at-time secs nil fn)))
+             (push timer timers)
+             timer)))
+      
+      ;; Branch on entry type
+      (if (eq (plist-get entry :type) 'error)
+          ;; Error branch
+          (progn
+            (when (functionp on-error)
+              (register delay
+                        (lambda ()
+                          (funcall on-error (benedict-provider-fake--error-payload entry))))))
+        ;; Success branch - MUST wrap in progn too!
+        (progn
+          (let ((last-chunk-time chunk-offset)
+                (chunk-count 0))
+            ;; Schedule chunk emissions if chunks are provided
+            (when chunks
+              (dolist (chunk chunks)
+                (let ((chunk-content chunk)
+                      (chunk-idx chunk-count))
+                  (register last-chunk-time
+                            (lambda ()
+                              (when (functionp on-delta)
+                                (funcall on-delta
+                                         (list :content chunk-content
+                                               :index chunk-idx
+                                               :provider 'fake
+                                               :done nil)))))
+                  (setq last-chunk-time (+ last-chunk-time chunk-delay))
+                  (setq chunk-count (1+ chunk-count)))))
+            
+            ;; Schedule completion callback
+            (let ((completion-delay (if chunks
+                                        (max delay last-chunk-time)
+                                      delay)))
+              (register completion-delay
+                        (lambda ()
+                          (let ((payload (benedict-provider-fake--success-payload
+                                          request entry start-time delay)))
+                            (if (functionp on-complete)
+                                (funcall on-complete payload)
+                              (when (functionp on-success)
+                                (funcall on-success payload)))))))))))
+    
+    ;; Return handle with timers for cancellation
+    (list :request request
+          :entry entry
+          :provider 'fake
+          :timers timers)))
+
+(defun benedict-provider-fake--cancel (_provider handle)
+  "Cancel all pending timers for HANDLE."
+  (let ((timers (plist-get handle :timers)))
+    (dolist (timer timers)
+      (when (timerp timer)
+        (cancel-timer timer)))))
 
 (benedict-provider-register
  (benedict-provider--create
   :id 'fake
   :name "Fake (echo)"
   :send #'benedict-provider-fake--send
-  :capabilities '(:streaming nil :tools nil)
-  :cancel #'ignore))
+  :capabilities '(:streaming t :tools nil)
+  :cancel #'benedict-provider-fake--cancel))
 
 (provide 'benedict-provider-fake)
 ;;; benedict-provider-fake.el ends here
