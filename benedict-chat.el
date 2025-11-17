@@ -10,17 +10,24 @@
 
 (require 'cl-lib)
 (require 'subr-x)
+(require 'button)
 (require 'benedict)
 
 (defvar-local benedict-chat--messages nil
   "List of chat message plists (newest first).
-Each entry includes :role, :content, :time, and optional :metadata.")
+Each entry includes :role, :content, :time, optional :metadata, and UI state.")
 
 (defvar-local benedict-chat--pending-request nil
   "Opaque handle representing an in-flight provider request.")
 
 (defvar-local benedict-chat--last-dispatch nil
   "Plist describing the most recent provider request (for retries).")
+
+(defvar-local benedict-chat--items nil
+  "Ordered list of rendered chat items (oldest first).")
+
+(defvar-local benedict-chat--item-counter 0
+  "Monotonic counter used to generate unique item identifiers.")
 
 (defvar benedict-chat-buffer-name "*Benedict Chat*"
   "Default chat buffer name.")

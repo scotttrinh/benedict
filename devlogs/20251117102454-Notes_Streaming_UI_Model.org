@@ -1,0 +1,178 @@
+#+TITLE: Notes — Streaming UI Model & Rendering
+#+AUTHOR: Benedict maintainers
+#+LANGUAGE: en
+
+* Context
+We’re planning Phase 3 (streaming) and beyond. The original plans talked about “markdown/code rendering” and “streaming flush pipeline” but treated all output as plain message text. This note captures a richer UI model that separates *what* is rendered (messages, thinking, tools, plans) from *how* it is styled (markdown-lite, buttons, overlays).
+
+This is based on a discussion comparing Codex-style UIs (separate “thinking”, “tools”, and “answer” surfaces) with Benedict’s Emacs-first approach.
+
+* Design: Typed Items, Not Just Strings
+** Item Kinds
+Instead of representing the chat buffer as a flat list of strings, we model it as a sequence of typed items. Each item is a plist with at least:
+
+- =:id=           — opaque identifier for the item
+- =:kind=         — one of:
+  - =message=   (user/assistant/system content)
+  - =thinking=  (ephemeral “thoughts” / reasoning)
+  - =tool-call= (tool invocation, arguments, status)
+  - =tool-result= (tool output, logs, summary)
+  - =plan=      (persistent step list, updated in-place)
+  - =status=    (short telemetry lines, e.g., “streaming…”, “retry 1/3”)
+- =:role=         — for message-like things (=user=, =assistant=, =system=) when applicable
+- =:content=      — string text for message/thinking/status/tool output
+- =:metadata=     — plist for provider/model/timing/tool ids/etc.
+- =:start= / =:end= — markers or positions that delimit the item’s region in the buffer
+
+Rendering is centralized in a dispatcher (conceptually):
+
+#+begin_src elisp
+(defun benedict-chat--render-item (item)
+  (pcase (plist-get item :kind)
+    ('message   (benedict-chat--render-message item))
+    ('thinking  (benedict-chat--render-thinking item))
+    ('tool-call (benedict-chat--render-tool-call item))
+    ('tool-result (benedict-chat--render-tool-result item))
+    ('plan      (benedict-chat--render-plan item))
+    ('status    (benedict-chat--render-status item))))
+#+end_src
+
+This keeps the “what” (item kind) separate from the “how” (markup, overlays, buttons) and gives us room to evolve the UI without changing the provider protocol.
+
+** Messages vs. Structured Blocks
+- =:kind 'message= is the canonical chat content (user, assistant, system).
+  - Uses markdown-lite to style headings, lists, inline/fenced code.
+  - Role faces (user/assistant/system) are applied at the line prefix.
+- Other kinds represent structured blocks that are *not* just free-form markdown:
+  - =thinking=: streamed inner monologue, often hidden or collapsible by default.
+  - =tool-call=: arguments, tool id, approval state, maybe a “View logs” button.
+  - =tool-result=: snippets (often code), logs, diff summary, etc.
+  - =plan=: a list of steps with statuses; updated in-place across events.
+  - =status=: short one-line updates, often transient.
+
+These blocks have their own layout and faces. Markdown-lite may still be applied inside their content regions, but they are not *defined* by markdown.
+
+* Rendering & UI Primitives
+** Markdown-Lite Scope
+Markdown-lite is strictly responsible for styling text *inside* items whose =:kind= expects human-readable prose:
+
+- Apply to:
+  - =:kind 'message= content (assistant/user text).
+  - Optionally to tool outputs that are markdown-flavored (e.g., summaries).
+- Implementation sketch:
+  - Given a region (=start=…=end=), run a few regex-based passes to:
+    - Highlight triple-backtick code fences and language tags.
+    - Style inline code, emphasis, headings, bullet lists.
+  - Avoid re-running on the entire buffer; operate on:
+    - The newly appended tail during streaming.
+    - The specific item region when it is created or updated.
+
+Key point: markdown-lite does *not* try to encode UI types (thinking/tool/plan). It is a decoration layer for content-bearing items.
+
+** Overlays, Buttons, and Folding
+We rely on Emacs primitives (overlays, text properties, buttons) to express rich UI:
+
+- *Folding*:
+  - Thinking and tool blocks are foldable via overlays with =invisible= and an invisibility spec keyed to =benedict-chat=.
+  - Inline “[+] / [-]” toggles (buttons) control the overlay’s visibility.
+  - This works in =benedict-chat-mode= (derived from =special-mode=) without switching to =org-mode= as a major mode.
+- *Persistent blocks*:
+  - The plan and certain tool-result items are updated in-place:
+    - We keep markers at =:start= / =:end=.
+    - On update, we delete and reinsert the block body within those markers.
+    - Then we re-apply markdown-lite or custom faces for the updated region.
+  - This supports “live” plans or status panels inside the chat buffer.
+- *Buttons & actions*:
+  - We use =button.el= + text properties to add actions like:
+    - “Apply diff”, “Open file”, “Copy snippet”, “View logs”, “Expand thinking”.
+  - Buttons live inside the block they control, keeping interactions local.
+
+This is enough to build Codex-style “thinking/tool/answer” strips in a single Emacs buffer, while still allowing regular text navigation and yanking.
+
+** Telemetry & Status Lines
+- The modeline or header-line can show streaming state:
+  - Spinner, elapsed time, provider label, token usage (if available).
+- Inside the buffer, =:kind 'status= lines can appear between blocks:
+  - “Streaming from openrouter: gpt-4.1-mini…”
+  - “Tool search_project running…”
+  - Updated or replaced as events arrive.
+
+* Streaming Event Model
+** Provider Events → UI Items
+Provider callbacks give us a logical event stream:
+
+- =:on-delta= — streaming chunks (content, index, done?)
+- =:on-success= / =:on-complete= — final normalized result
+- =:on-error= — error payloads (status, message, retryable)
+
+We map those into item operations:
+
+- Create an initial =:kind 'message= item for the assistant reply when the request is dispatched.
+- For streaming:
+  - Append delta chunks to the message’s =:content= and buffer region.
+  - Optionally, maintain a =:kind 'thinking= item that accumulates “thoughts” separately (if the provider exposes them).
+- For tools:
+  - When tool calls are surfaced, create =:kind 'tool-call= and =:kind 'tool-result= items with their own markers.
+  - Update tool items as tool deltas arrive.
+- For plans:
+  - When the agent emits a plan, create or update a =:kind 'plan= item.
+  - Each update rewrites that block in place.
+
+The chat layer becomes a small state machine that routes events into the right item(s) based on their IDs and kinds.
+
+** Throttling and Partial Re-Rendering
+To keep streaming smooth:
+
+- Maintain a small throttle (e.g., 30–50ms) that batches multiple delta events.
+- For each flush:
+  - Append new text to only the affected item regions.
+  - Run markdown-lite only on the newly appended portion.
+  - Avoid wholesale font-lock or re-rendering of the entire buffer.
+- Cursor stability:
+  - If point is inside the active item, keep it stable relative to text.
+  - If point is elsewhere, avoid recentering or jumping.
+
+This design keeps the streaming path lightweight while still allowing rich block-level UI.
+
+* Org Mode’s Role
+We intentionally *do not* use =org-mode= as the chat buffer’s major mode:
+
+- Pros of this approach:
+  - Full control over rendering and streaming behavior.
+  - No surprise font-lock or indentation behavior from Org in a networked buffer.
+  - Simpler invariants for tests and provider integrations.
+- Org still plays an important role:
+  - Capture/export: commands that send a message, plan, or conversation into an Org file (e.g., via =org-capture= templates).
+  - Long-lived artifacts: decisions, todo lists, and designs live in Org, linked back to chat messages.
+  - Optional rendering: plan blocks can mimic Org headlines (e.g., “* TODO …”) and we can enable =outline-minor-mode= with a tuned =outline-regexp= if we want native Org-like folding behavior.
+
+In other words: Org is the destination and surrounding ecosystem, not the hot rendering path for streaming.
+
+* Roadmap Implications & Testing
+** Roadmap Adjustments (Phase 3+)
+- Phase 3 “Streaming & Rendering” refers to:
+  - Adding a typed item model (=message=/=thinking=/=tool-/=plan=/=status=).
+  - Wiring provider streaming callbacks into incremental item updates.
+  - Implementing markdown-lite as a decoration pass over message/plan text.
+  - Using overlays/buttons for folding and actions on thinking/tool/plan blocks.
+- Later phases that mention “tools” and “approvals” can treat tool-call/tool-result items as first-class UI blocks, not just blobs of text.
+
+** UI Tests with Fake Provider
+We can use =benedict-provider-fake= to drive deterministic UI tests in parallel with provider and transport work:
+
+- Extend or reuse scripted fake responses to emit:
+  - Streaming message chunks (for =:kind 'message=).
+  - Tool events (for =:kind 'tool-call= / =:kind 'tool-result=).
+  - Plan updates.
+- Add ERT tests that:
+  - Create a chat buffer with =benedict-chat-mode=.
+  - Dispatch a request using the fake provider with scripted events.
+  - Assert that:
+    - Items are created with the expected =:kind= and metadata.
+    - Buffer regions for each item contain the expected text.
+    - Markdown-lite decoration is applied in expected regions.
+    - Folding overlays and buttons exist and are togglable.
+    - Updates happen in-place (plan/tool blocks) instead of appending new messages.
+
+This lets us iterate on the UI layer in isolation from real HTTP/streaming backends, and ensures our item model stays testable and stable over time.
+

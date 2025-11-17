@@ -85,6 +85,12 @@ Example: registering a tool (sketch)
  :approval 'auto)
 #+end_src
 
+* Rendering formats (Planned)
+- Chat buffers treat provider responses as markdown-like text: headings, lists, inline code, and fenced code blocks. A lightweight “markdown-lite” layer (regex + text properties) is preferred over full `markdown-mode` so streaming updates stay fast and incremental.
+- Org is the lingua franca for notes and decisions, but not the primary wire format. Providers are expected to emit markdown by default; Org integration happens via capture/export commands (e.g., sending a message or thread into an `org-capture` template) rather than by forcing models to speak Org everywhere.
+- For Org-heavy workflows, profiles/prompts can ask specific conversations to respond in Org, or run an optional markdown→Org conversion step for a small, well-defined subset (headings, lists, code fences). This keeps the core chat/rendering path provider-agnostic while still playing nicely with Org buffers.
+- Streaming reuses the same markdown-lite layer: chunks are appended as plain text, then decorated in-place (code fences detected, faces/buttons added) without re-rendering the whole buffer, keeping cursor movement and redisplay stable.
+
 * Security & Privacy
 - Keys via auth-source or env vars; never written to disk; masked in logs
 - Approval policies: auto (read-only), confirm (writes, network with file content), always (cross-project writes, pushes)

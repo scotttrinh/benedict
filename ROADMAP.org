@@ -58,11 +58,14 @@ Acceptance:
 Tasks:
 - SSE via make-process + curl -N or provider-native streams; chunk parser
 - Incremental rendering with throttling; cursor stability; cancel/timeout
-- Code block rendering; language detection from fences; actions: copy/apply-snippet
+- Introduce typed chat items (message, thinking, tool-call, tool-result, plan, status) with per-item markers and renderers; markdown-lite applies only to message-like content
+- Code block rendering; language detection from fences; actions: copy/apply-snippet; folding overlays and buttons for thinking/tool/plan blocks
 - Modeline status: tokens (if available), duration, provider name
+- UI tests: drive typed item rendering and folding/buttons using the fake provider with scripted streaming events, tool calls, and plan updates; assert buffer layout and text properties in ERT/Buttercup tests
 Acceptance:
 - Streaming feels smooth; cancel works reliably; no UI stutter on large outputs
-- Code fences font-lock; interaction buttons work; copy applies correct region
+- Typed items render as distinct blocks (messages vs thinking vs tools vs plans); folding and buttons work; copy/apply actions operate on the correct regions
+- Code fences font-lock in streaming content; markdown-lite decoration is incremental and does not re-fontify the entire buffer
 
 * Phase 4 — Context & Project Integration
 Tasks:
