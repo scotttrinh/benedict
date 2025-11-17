@@ -899,7 +899,9 @@ When INCLUDE-ERRORS is nil, skip entries flagged with :error metadata."
 (define-derived-mode benedict-chat-mode special-mode "Benedict-Chat"
   "Major mode for Benedict chat buffers backed by network providers."
   (setq-local buffer-read-only nil)
-  (setq-local truncate-lines t)
+  (setq-local truncate-lines nil)
+  (setq-local word-wrap t)
+  (visual-line-mode 1)
   (setq-local benedict-chat--messages nil)
   (setq-local benedict-chat--items nil)
   (setq-local benedict-chat--item-counter 0)
