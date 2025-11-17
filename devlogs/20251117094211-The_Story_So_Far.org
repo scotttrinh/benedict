@@ -1,0 +1,458 @@
+#+TITLE: Benedict Devlog — The Story So Far
+#+AUTHOR: Benedict maintainers
+#+LANGUAGE: en
+#+OPTIONS: toc:2 num:nil ^:{}
+
+* Where This Devlog Fits
+This entry is a snapshot of the Benedict codebase as of mid‑November 2025. The package is still pre‑alpha and design‑driven: we have a usable chat buffer, a pluggable provider abstraction, a fake provider for tests, and a minimal tool registry, but many of the “agents in your editor” ideas are still on the roadmap.
+
+The goal here is twofold:
+- Show how this Emacs package evolved from “I want an AI buddy in Emacs” into a structured, testable, async‑aware codebase.
+- Use that story to teach Emacs Lisp as a production language, with TypeScript/JavaScript as a lingua franca for mental models.
+
+If you are an experienced Emacs user and JavaScript/TypeScript developer, but new to Emacs Lisp, this devlog is for you. The code it references lives in this repo and is meant to be read alongside this document.
+
+Key references:
+- Vision and long‑term architecture: [[file:README.org][README.org]]
+- Roadmap and phased delivery: [[file:ROADMAP.org][ROADMAP.org]]
+- Provider abstraction: [[file:benedict-provider.el][benedict-provider.el]]
+- Chat UI and buffer lifecycle: [[file:benedict-chat.el][benedict-chat.el]]
+- Providers: [[file:benedict-provider-openrouter.el][benedict-provider-openrouter.el]] and [[file:benedict-provider-fake.el][benedict-provider-fake.el]]
+- Tool registry: [[file:benedict-tools.el][benedict-tools.el]]
+- Tests and runner: [[file:test/run-tests.el][test/run-tests.el]] and [[file:test/benedict-provider-fake-test.el][test/benedict-provider-fake-test.el]]
+
+This is a work‑in‑progress snapshot, not a finished product. There is still a lot to do before Benedict is something we’d recommend installing from MELPA and relying on day‑to‑day, but there is already enough here to talk about “real” Emacs Lisp and modern development practices.
+
+* From Idea to “Something You Can M-x”
+The initial idea was simple: *Emacs‑native agents*, not just a CLI wrapper.
+
+Instead of shelling out to a `benedict` binary and gluing it into Emacs, the design goal is:
+- Emacs buffers as the primary UI (chat, diffs, approvals).
+- Emacs data structures as the “tool” surface.
+- Emacs integrations (project.el, Magit, org, etc.) as first‑class building blocks.
+
+That implies a few things that are familiar if you come from the JS world:
+- There should be a clear entry point (like `index.ts`), here [[file:benedict.el][benedict.el]].
+- There should be a module structure instead of a single giant file.
+- There should be an abstraction over remote providers.
+- There should be automated tests, including async tests.
+
+In Emacs terms, getting from idea to “usable” means:
+- Defining a package and feature that can be `require`d and autoloaded.
+- Exposing a minor mode and commands that users can bind.
+- Keeping the UI responsive by making all network I/O asynchronous.
+- Providing a fake provider so tests and offline dev don’t require API keys.
+
+The rest of this devlog walks through those pieces and, along the way, uses them to explain Emacs Lisp in a way that should feel familiar if you’ve written a lot of JavaScript or TypeScript.
+
+* Emacs Lisp as a Production Language (via Benedict)
+Emacs Lisp has a reputation for being quirky, but the constructs we lean on in Benedict will look pretty normal if you’re used to JS:
+- Modules: `require` / `provide` instead of `import` / `export`.
+- Structs and records: `cl-defstruct` instead of TypeScript `interface` or `type`.
+- Dynamic maps: plists and alists instead of plain JS objects.
+- Error types: `define-error` instead of `class MyError extends Error`.
+- Async: callbacks and timers instead of `async`/`await` (though we could macro that later).
+
+We also opt into lexical scoping everywhere (`-*- lexical-binding: t; -*-` at the top of each file), which makes closures and higher‑order functions behave much closer to what you expect in JS.
+
+** Modules and Namespaces
+Take the core entry file [[file:benedict.el][benedict.el]].
+
+At the top you’ll see:
+#+begin_src elisp
+;;; benedict.el --- Emacs-first AI assistant  -*- lexical-binding: t; -*-
+...
+(provide 'benedict)
+#+end_src
+
+The `provide` call defines a *feature* symbol, `benedict`, that other files use via:
+#+begin_src elisp
+(require 'benedict)
+#+end_src
+
+Semantically this is very similar to a Node/TS module:
+- `provide` ≈ “this module exports the feature `benedict`”.
+- `require` ≈ “import the module that provides `benedict`”.
+
+We also follow a consistent naming scheme:
+- Public APIs: `benedict-...`
+- Internal helpers: `benedict--...`
+
+You can read that as roughly analogous to “exported vs internal” in a TS module. Emacs doesn’t enforce visibility; the discipline is social.
+
+** Configuration: `defgroup` and `defcustom`
+In JS we often export a configuration object or accept options in a constructor. In Emacs Lisp, user‑tunable configuration typically lives in *custom variables* that Emacs can show in a UI (`M-x customize-group`).
+
+In [[file:benedict.el::(defgroup%20benedict][benedict.el]]:
+#+begin_src elisp
+(defgroup benedict nil
+  "Emacs-native agents: chat, tools, approvals."
+  :group 'applications
+  :prefix "benedict-")
+
+(defcustom benedict-keymap-prefix (kbd "C-c C-b")
+  "Prefix key for Benedict commands when `benedict-mode' is active."
+  :type 'key-sequence
+  :group 'benedict)
+#+end_src
+
+Conceptually:
+- `defgroup` is like defining a configuration namespace.
+- Each `defcustom` is a field in that namespace, with type info and docs.
+
+If you’re imagining a TypeScript declaration, something like this isn’t far off:
+#+begin_src typescript
+export interface BenedictConfig {
+  keymapPrefix: string;   // "C-c C-b"
+  provider: "openrouter" | "fake";
+}
+#+end_src
+
+The key difference is that Emacs takes care of persistence and UI. Users can set `benedict-keymap-prefix` via `customize` or in their init file, and Benedict reads that value at runtime.
+
+** Errors and Error Hierarchies
+We define a small error hierarchy in [[file:benedict.el::(define-error%20'benedict-error][benedict.el]]:
+#+begin_src elisp
+(define-error 'benedict-error "Benedict error")
+(define-error 'benedict-provider-error "Benedict provider error" 'benedict-error)
+#+end_src
+
+This is similar to:
+#+begin_src typescript
+class BenedictError extends Error {}
+class BenedictProviderError extends BenedictError {}
+#+end_src
+
+In practice this lets us:
+- Throw specific errors for provider issues.
+- Catch and handle them separately from generic failures.
+
+It’s a small example of using Emacs Lisp as a “real” language: we’re not just returning `nil` on error and hoping callers remember to nil‑check. We use structured error types and leverage the condition system.
+
+* Modes, Keymaps, and “Getting Something on a Key”
+One of the most “Emacs‑y” parts of building a package is exposing functionality as a mode with keybindings. Benedict currently has:
+- A minor mode for global keybindings: [[file:benedict.el::(define-minor-mode%20benedict-mode][`benedict-mode`]].
+- A major mode for chat buffers: [[file:benedict-chat.el::(define-derived-mode%20benedict-chat-mode][`benedict-chat-mode`]].
+
+If you’re used to JS, think of:
+- Minor mode = feature flag you can toggle per buffer that installs a keymap.
+- Major mode = primary “language” of the buffer (here, a chat UI).
+
+** Minor Mode: Global Entry Point
+In [[file:benedict.el::(define-minor-mode%20benedict-mode][benedict.el]]:
+#+begin_src elisp
+(defvar benedict-prefix-map
+  (let ((map (make-sparse-keymap)))
+    (define-key map (kbd "c") #'benedict-chat)
+    map)
+  "Prefix map for Benedict commands.")
+
+(defvar benedict-mode-map
+  (let ((m (make-sparse-keymap)))
+    (define-key m benedict-keymap-prefix benedict-prefix-map)
+    m)
+  "Keymap for `benedict-mode'.")
+
+(define-minor-mode benedict-mode
+  "Minor mode providing Benedict commands under `benedict-keymap-prefix'."
+  :lighter " Benedict"
+  :keymap benedict-mode-map)
+#+end_src
+
+Mentally map that to:
+- A `Map<string, function>` of keybindings.
+- A feature that, when enabled, attaches those bindings to the current buffer.
+
+The important thing for a user is: once `benedict-mode` is on, `C-c C-b c` opens the chat buffer.
+
+** Major Mode: The Chat UI
+The chat UI is implemented as a derived mode in [[file:benedict-chat.el::(define-derived-mode%20benedict-chat-mode][benedict-chat-mode]]:
+#+begin_src elisp
+(define-derived-mode benedict-chat-mode special-mode "Benedict-Chat"
+  "Major mode for Benedict chat buffers backed by network providers."
+  (setq-local buffer-read-only nil)
+  (setq-local truncate-lines t)
+  (setq-local benedict-chat--messages nil)
+  (setq-local benedict-chat--pending-request nil)
+  (setq-local benedict-chat--last-dispatch nil)
+  (let ((inhibit-read-only t))
+    (erase-buffer)
+    (insert ... introductory text ...)))
+#+end_src
+
+We also define a mode‑specific keymap:
+#+begin_src elisp
+(defvar benedict-chat-mode-map
+  (let ((m (make-sparse-keymap)))
+    (define-key m (kbd "C-c C-s") #'benedict-chat-send-prompt)
+    (define-key m (kbd "g r") #'benedict-chat-retry-last)
+    (define-key m (kbd "w") #'benedict-chat-copy-last-response)
+    m)
+  "Keymap for `benedict-chat-mode'.")
+#+end_src
+
+So the path from idea to “something you can M-x” looks like:
+1. Define a minor mode with a prefix keymap (`benedict-mode`).
+2. Define a command that opens a buffer and turns on `benedict-chat-mode` ([[file:benedict-chat.el::(defun%20benedict-chat%20()][`benedict-chat`]]).
+3. In that major mode, define buffer‑local state (`benedict-chat--messages`, etc.) and keybindings to drive the UI.
+
+If you come from JS, it might help to think of `benedict-chat-mode` as a React component:
+- `benedict-chat--messages` is the component state (buffer‑local).
+- `benedict-chat-send-prompt` is an event handler.
+- The buffer contents are the rendered DOM; we rewrite it by inserting text with faces.
+
+* The Provider Abstraction: Interfaces in Emacs Lisp
+Talking to remote providers is the heart of an AI assistant. Rather than hard‑coding OpenRouter throughout the codebase, we define a provider abstraction in [[file:benedict-provider.el][benedict-provider.el]].
+
+** A Struct Instead of an Interface
+At the type level, we use `cl-defstruct`:
+#+begin_src elisp
+(cl-defstruct (benedict-provider
+               (:constructor benedict-provider--create))
+  "Structure describing a provider implementation."
+  id name send capabilities cancel)
+#+end_src
+
+In TypeScript, you might write:
+#+begin_src typescript
+interface Provider {
+  id: "openrouter" | "fake";
+  name: string;
+  send(req: Request, callbacks: Callbacks): Handle;
+  capabilities: { streaming: boolean; tools: boolean };
+  cancel?(handle: Handle): void;
+}
+#+end_src
+
+We then keep a registry:
+#+begin_src elisp
+(defvar benedict-provider--registry (make-hash-table :test 'eq))
+
+(defun benedict-provider-register (provider)
+  (puthash (benedict-provider-id provider) provider benedict-provider--registry))
+
+(defun benedict-provider-lookup (id)
+  (gethash id benedict-provider--registry))
+#+end_src
+
+And a convenience function that dispatches through the active provider:
+#+begin_src elisp
+(cl-defun benedict-provider-dispatch
+    (request &key on-success on-error on-delta on-complete)
+  (let ((provider (benedict-provider-current)))
+    (funcall (benedict-provider-send provider)
+             provider request
+             :on-success on-success
+             :on-error on-error
+             :on-delta on-delta
+             :on-complete on-complete)))
+#+end_src
+
+The key point: we treat `send` as a callback‑based async function that knows how to talk to “its” provider, but the rest of the package doesn’t care whether that’s OpenRouter, a local model, or a fake.
+
+** Fake Provider: Async Without the Network
+Before relying on an actual network backend, we implemented a fake provider in [[file:benedict-provider-fake.el][benedict-provider-fake.el]]. It is a good place to see Emacs Lisp async in action.
+
+The core send function is [[file:benedict-provider-fake.el::(cl-defun%20benedict-provider-fake--send][`benedict-provider-fake--send`]]:
+- It receives a `request` plist with `:messages`.
+- It looks at an optional scripted response queue (`benedict-provider-fake-script`).
+- It uses `run-at-time` to schedule callbacks in the future, simulating latency and streaming chunks.
+
+Instead of promises, we pass explicit callbacks:
+- `:on-delta` for streaming chunks.
+- `:on-success` or `:on-error` for completion.
+- We return a handle that contains the timers so we can cancel them later.
+
+In JS terms, this is closer to `setTimeout`‑driven code than to `async`/`await`. You can imagine wrapping this in a `new Promise(...)` if Emacs Lisp had native promises; here we stick to the primitives Emacs gives us.
+
+On top of that we expose helpers like [[file:benedict-provider-fake.el::(defmacro%20benedict-provider-fake-with-script][`benedict-provider-fake-with-script`]] and [[file:benedict-provider-fake.el::(defun%20benedict-provider-fake-enqueue-response][`benedict-provider-fake-enqueue-response`]] for tests to control output deterministically.
+
+** OpenRouter Provider: Real HTTP, Real Errors
+The OpenRouter backend in [[file:benedict-provider-openrouter.el][benedict-provider-openrouter.el]] shows Emacs Lisp doing “grown‑up” HTTP:
+- We build a JSON body using `json-encode` and alists.
+- We use `url-retrieve` to send a POST request asynchronously.
+- We parse the HTTP response and decode JSON in a callback.
+- We classify errors, implement retry with backoff, and normalize the payload into the provider protocol.
+- We resolve credentials from `auth-source` or environment variables, never writing secrets to disk.
+
+For example, the credential resolution path ([[file:benedict-provider-openrouter.el::(defun%20benedict-provider-openrouter--resolve-credential][`benedict-provider-openrouter--resolve-credential`]]) roughly does:
+1. Try `auth-source-search` for an entry matching the endpoint host.
+2. If that fails, check the `OPENROUTER_API_KEY` environment variable (customizable).
+3. If still missing, signal an informative error.
+
+In a TS service you might centralize that logic in a `getApiKey()` utility; here it lives as a pure function and returns a plist with `:token` and `:source` keys.
+
+We also define a constant of retryable HTTP codes, a configurable retry count, and a backoff base. None of this is “toy Elisp”; it’s the same kind of robustness you would build into a production Node.js service.
+
+* Chat Buffers as State Machines
+The chat layer in [[file:benedict-chat.el][benedict-chat.el]] is where the provider abstraction meets user‑visible UI.
+
+** Buffer-Local State
+We use `defvar-local` (via `defvar` + `setq-local`) to attach state to the chat buffer:
+- [[file:benedict-chat.el::(defvar-local%20benedict-chat--messages][`benedict-chat--messages`]]: list of message plists (`:role`, `:content`, `:time`, `:metadata`).
+- [[file:benedict-chat.el::(defvar-local%20benedict-chat--pending-request][`benedict-chat--pending-request`]]: the in‑flight provider handle.
+- [[file:benedict-chat.el::(defvar-local%20benedict-chat--last-dispatch][`benedict-chat--last-dispatch`]]: the last request (for retry).
+
+If you’re mapping this to JS, each buffer is an instance of a component with its own `state` object; Emacs gives us buffer‑local variables instead of class fields.
+
+** Sending a Prompt
+The main entry point is [[file:benedict-chat.el::(defun%20benedict-chat-send-prompt][`benedict-chat-send-prompt`]]:
+1. Prompt the user in the minibuffer for text.
+2. Validate that we are in a chat buffer and that the prompt is non‑empty.
+3. Ensure we’re not already waiting on a provider (`benedict-chat--ensure-not-busy`).
+4. Record a user message into `benedict-chat--messages`.
+5. Build a provider request (`benedict-chat--build-request`).
+6. Dispatch via `benedict-provider-dispatch`, wiring up success and error handlers.
+
+Those handlers, [[file:benedict-chat.el::(defun%20benedict-chat--handle-provider-success][`benedict-chat--handle-provider-success`]] and [[file:benedict-chat.el::(defun%20benedict-chat--handle-provider-error][`benedict-chat--handle-provider-error`]], update the buffer’s state and append rendered lines with appropriate faces.
+
+Under the hood, this is just another async callback chain:
+- The provider calls `on-success` / `on-error`.
+- We hop back into the original buffer (`with-current-buffer`).
+- We update state and re‑render (by inserting lines).
+
+** Metadata and Error Reporting
+We also include metadata on messages, so we can:
+- Show which provider and model produced a response.
+- Display latency and token usage when available.
+- Indicate when a message represents an error, with HTTP status and error codes.
+
+This is all driven via plists; see [[file:benedict-chat.el::(defun%20benedict-chat--format-metadata-line][`benedict-chat--format-metadata-line`]] for how we translate a metadata plist into a human‑readable status line.
+
+If you’re used to JS, think of it as building a small view model object and templating it into a string. Emacs Lisp doesn’t have JSX, but we get pretty far with `format` and `string-join`.
+
+* Tools as First-Class Functions
+While providers and chat are front‑and‑center, the long‑term vision for Benedict relies heavily on *tools*: Emacs functions that the agent can call to operate on buffers, projects, git, etc.
+
+The current registry skeleton in [[file:benedict-tools.el][benedict-tools.el]] is intentionally minimal:
+#+begin_src elisp
+(defvar benedict--tools (make-hash-table :test 'eq)
+  "Registry of tool specs keyed by :id symbol.")
+
+(cl-defun benedict-tools-register (&key id fn schema approval doc)
+  (puthash id (list :id id :fn fn :schema schema :approval approval :doc doc)
+           benedict--tools))
+
+(defun benedict-tool-call (id &rest args)
+  (let* ((spec (gethash id benedict--tools))
+         (fn (plist-get spec :fn)))
+    (unless spec (signal 'benedict-error (list (format "Unknown tool: %S" id))))
+    (apply fn args)))
+#+end_src
+
+In JS terms, this is roughly:
+#+begin_src typescript
+const tools = new Map<string, ToolSpec>();
+
+export function registerTool(spec: ToolSpec) {
+  tools.set(spec.id, spec);
+}
+
+export function callTool(id: string, args: any) {
+  const spec = tools.get(id);
+  if (!spec) throw new BenedictError(`Unknown tool: ${id}`);
+  return spec.fn(args);
+}
+#+end_src
+
+We seed a simple demo tool ([[file:benedict-tools.el::(defun%20benedict--tool-uppercase][`benedict--tool-uppercase`]]) that uppercases a string. The interesting work—approval flows, schemas, security gates—comes in later phases, but the basic shape already shows how Emacs Lisp lets us treat functions as first‑class values in registries and maps.
+
+* Testing: ERT and Async Tests
+Modern development practices are not optional just because we’re writing Emacs Lisp. Benedict leans on:
+- A local test runner that installs dev dependencies into a project‑local directory.
+- Asynchronous tests to exercise the provider abstraction.
+
+** Test Runner
+The batch runner [[file:test/run-tests.el][test/run-tests.el]]:
+- Bootstraps `package.el` into a `.elpa/` directory under the repo.
+- Adds GNU ELPA and MELPA, installs `ert-async` if needed.
+- Adds the repo root to `load-path`.
+- Loads every `*-test.el` file from `test/`.
+- Runs the ERT suite in batch mode.
+
+This is the Emacs Lisp equivalent of an `npm test` script that:
+- Installs dev dependencies into `node_modules/`.
+- Loads test files from a `test/` directory.
+- Exits non‑zero on failure.
+
+Because dependencies are project‑local, contributors don’t have to pollute their global Emacs package directory just to run the tests.
+
+** Async Tests with `ert-async`
+The fake provider tests in [[file:test/benedict-provider-fake-test.el][test/benedict-provider-fake-test.el]] show how to test asynchronous code:
+#+begin_src elisp
+(ert-deftest-async benedict-provider-fake-default-echo (done)
+  (let ((benedict-provider 'fake))
+    (let ((benedict-provider-fake-script
+           (list (list :type 'success :delay 0.01))))
+      (benedict-provider-dispatch
+       (list :messages (list (list :role 'user :content "hello fake")))
+       :on-success (lambda (payload)
+                     (should ...)
+                     (funcall done))))))
+#+end_src
+
+The pattern is:
+- Use `ert-deftest-async` to declare an async test; ERT passes a `done` continuation.
+- Call `benedict-provider-dispatch` with callbacks that eventually call `done`.
+- Let `run-at-time` timers drive the fake provider.
+
+We also test:
+- Scripted errors (`benedict-provider-fake-script` entries of type `error`).
+- Streaming chunks via `:on-delta`.
+- Cancellation semantics via `benedict-provider-abort`.
+
+The takeaway: you can build and test real async behavior in Emacs Lisp. It’s not as ergonomic as `async`/`await`, but it’s perfectly capable of supporting production‑grade async workflows when paired with good abstractions and tests.
+
+* Async in Emacs Lisp: A JS Mental Model
+If you’re a JS dev, here’s a rough mapping for how Benedict currently does async:
+- Emacs is single‑threaded; think “Node.js event loop”, not “web workers”.
+- `url-retrieve` is like `fetch` with a callback, not a promise.
+- `run-at-time` is like `setTimeout`; timers are Emacs objects you can cancel.
+- Provider `send` functions are callback‑driven, similar to:
+  #+begin_src typescript
+  function send(req, { onDelta, onSuccess, onError }) { ... }
+  #+end_src
+
+The chat layer (`benedict-chat.el`) treats providers as black boxes that respect that contract. Today:
+- The fake provider fakes latency with timers.
+- The OpenRouter provider uses HTTP callbacks.
+
+Future phases will add streaming over processes (e.g., `curl -N` via `make-process`), which will look closer to Node streams. The provider abstraction lets us evolve the underlying async implementation without rewriting `benedict-chat`.
+
+* How to Read This Codebase as a JS Developer
+If you’re new to Emacs Lisp, here are a few patterns to recognize as you read the code:
+
+- *Plists vs objects*: Anywhere you see `:keyword` keys and `plist-get`, imagine a JS object with string keys and `obj.key`. It’s dynamic and easy to extend.
+- *Alists vs objects*: `(("foo" . 1) ("bar" . 2))` is like `{ foo: 1, bar: 2 }`, but implemented as a list of pairs.
+- *Structs*: `cl-defstruct` is closer to a small record type; accessors like `benedict-provider-id` are generated for you.
+- *Buffer‑local variables*: When you see `defvar-local` / `setq-local`, think of instance fields on a class or React component state, scoped per buffer.
+- *Modules*: Look for `(provide 'feature)` at the end and `(require 'feature)` at the top of dependents.
+- *Callbacks everywhere*: Any `:on-success` / `:on-error` keys are just functions being passed around; treat them like JS callback arguments.
+
+If you get stuck, `M-x describe-function` and `M-x describe-variable` are your friends. You can also visit the definitions directly in this repo; the links in this devlog are all relative and should work from within Emacs.
+
+* What’s Next: From Snapshot to Daily Driver
+As of this devlog, Benedict is a promising skeleton:
+- You can open a chat buffer and talk to a provider.
+- There is a provider abstraction with a real HTTP backend and a fake one.
+- There is a small tool registry.
+- There are automated tests for the fake provider and a test runner.
+
+But there is still a long road from here to a daily‑driver Emacs agent:
+- Streaming chat UX and partial rendering in the chat buffer.
+- Richer tools that interact with buffers, projects, git, and org documents.
+- Approval flows and safety rails around destructive operations.
+- More comprehensive tests, including chat‑layer tests and integration tests.
+- Packaging, MELPA distribution, and upgrade paths.
+
+The roadmap for those features lives in [[file:ROADMAP.org][ROADMAP.org]] and the various plan/notes devlogs under [[file:devlogs][devlogs/]].
+
+If you’re a JS/TS developer who wants to contribute:
+- Start by skimming the provider abstraction and the fake provider.
+- Run the tests via `emacs -Q --batch -l test/run-tests.el`.
+- Try wiring a new provider or extending the tool registry.
+
+You don’t need to be an Emacs Lisp wizard to help; the patterns we’re using—modules, records, callbacks, tests—are the same ones you already know, just expressed in a different language and runtime.
+
+This devlog is just the story so far; future entries will go deeper into streaming, tools, and security once those pieces land. For now, the most valuable contributions are feedback on the abstractions and small, focused PRs that keep the codebase production‑grade as it grows.
+
