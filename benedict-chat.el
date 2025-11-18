@@ -218,8 +218,12 @@ This does not affect provider message history."
           (save-excursion
             (goto-char start)
             (delete-region start end)
-            (insert (propertize header 'face face))
-            (set-marker header-end (point))))))))
+            (let ((new-start (point)))
+              (insert (propertize header 'face face) "\n")
+              (set-marker header-start new-start)
+              (set-marker-insertion-type header-start t)
+              (set-marker header-end (point))
+              (set-marker-insertion-type header-end nil))))))))
 
 (defun benedict-chat--write-message-item-content (item text)
   "Replace ITEM's content block with TEXT."
@@ -647,8 +651,10 @@ When REPLACE is non-nil, replace the entire block contents."
          (provider (or (plist-get payload :provider)
                        (plist-get current :provider)))
          (model (or (plist-get payload :model)
-                    (plist-get current :model))))
-    (benedict-chat--metadata :provider provider :model model)))
+                    (plist-get current :model)))
+         (usage (or (plist-get payload :usage)
+                    (plist-get current :usage))))
+    (benedict-chat--metadata :provider provider :model model :usage usage)))
 
 (defun benedict-chat--streaming-apply-metadata (payload)
   "Update streaming metadata and header for PAYLOAD."
@@ -753,12 +759,18 @@ Returns non-nil when an active streaming entry handled the error."
       (when-let ((latency (plist-get metadata :latency)))
         (push (format "%.2fs" latency) parts))
       (when-let ((usage (plist-get metadata :usage)))
-        (let ((prompt (benedict-chat--usage-value usage "prompt_tokens"))
-              (completion (benedict-chat--usage-value usage "completion_tokens")))
-          (when (or prompt completion)
-            (push (format "tokens p:%s / c:%s"
+        (let* ((prompt (benedict-chat--usage-value usage "prompt_tokens"))
+               (completion (benedict-chat--usage-value usage "completion_tokens"))
+               (total (or (benedict-chat--usage-value usage "total_tokens")
+                          (and prompt completion (+ prompt completion))))
+               (cost (or (benedict-chat--usage-value usage "cost")
+                         (benedict-chat--usage-value usage "total_cost"))))
+          (when (or prompt completion total cost)
+            (push (format "tokens p:%s / c:%s%s%s"
                           (or prompt "?")
-                          (or completion "?"))
+                          (or completion "?")
+                          (if total (format " / t:%s" total) "")
+                          (if cost (format " / cost:%s" cost) ""))
                   parts))))
       (when (plist-get metadata :empty-response)
         (push "empty response" parts))

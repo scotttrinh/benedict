@@ -182,6 +182,33 @@
                (should assistant)
                (should (string= (plist-get assistant :content) ""))))
          (when (buffer-live-p buffer)
+         (kill-buffer buffer)))
+      (funcall done)))))
+
+(ert-deftest-async benedict-chat-renders-usage-in-header (done)
+  "Usage metadata appears in the assistant header line."
+  (let ((benedict-provider 'fake)
+        (benedict-provider-fake-latency-seconds 0.01)
+        (benedict-provider-fake-script
+         (list (list :type 'success
+                     :content "With usage metadata."
+                     :usage '((prompt_tokens . 10)
+                              (completion_tokens . 5)
+                              (total_tokens . 15)
+                              (cost . 0.12))
+                     :delay 0.01)))
+        (buffer (generate-new-buffer " *Benedict Chat Usage*")))
+    (with-current-buffer buffer
+      (benedict-chat-mode)
+      (benedict-chat--send-text "Show usage header."))
+    (run-at-time
+     0.2 nil
+     (lambda ()
+       (unwind-protect
+           (with-current-buffer buffer
+             (should (string-match-p "tokens p:10 / c:5 / t:15 / cost:0.12"
+                                     (buffer-string))))
+         (when (buffer-live-p buffer)
            (kill-buffer buffer)))
        (funcall done)))))
 

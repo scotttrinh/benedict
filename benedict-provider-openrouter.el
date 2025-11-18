@@ -36,6 +36,23 @@
   :type '(choice (const :tag "Provider default" nil) number)
   :group 'benedict-provider-openrouter)
 
+(defcustom benedict-provider-openrouter-default-reasoning
+  '((effort . "medium") (enabled . t))
+  "Default reasoning options sent with every request when non-nil.
+Set to nil to keep provider defaults. This alist/plist accepts keys
+EFFORT (string), MAX_TOKENS (number), EXCLUDE (boolean), and ENABLED
+(boolean)."
+  :type '(choice (const :tag "Provider default" nil)
+                 (plist :tag "Custom reasoning plist"))
+  :group 'benedict-provider-openrouter)
+
+(defcustom benedict-provider-openrouter-default-usage '((include . t))
+  "Default usage options sent with every request when non-nil.
+Set to nil to keep provider defaults. Keys include INCLUDE (boolean)."
+  :type '(choice (const :tag "Provider default" nil)
+                 (plist :tag "Custom usage plist"))
+  :group 'benedict-provider-openrouter)
+
 (defcustom benedict-provider-openrouter-max-retries 2
   "Number of retry attempts after the first try for transient failures."
   :type 'integer
@@ -95,6 +112,10 @@ Must support --no-buffer/--fail-with-body (curl 7.60+)."
 
 (defvar benedict-provider-openrouter--request-counter 0
   "Internal counter to correlate OpenRouter log events.")
+
+(defvar benedict-provider-openrouter--usage-table
+  (make-hash-table :test 'equal)
+  "Internal map from request identifiers to last seen usage payloads.")
 
 (defun benedict-provider-openrouter--next-request-id ()
   "Return a unique request identifier for OpenRouter logs."
@@ -271,6 +292,13 @@ When streaming is enabled, callbacks receive incremental deltas via curl."
   (let ((context (process-get process 'benedict-provider-openrouter-context)))
     (when context
       (benedict-provider-openrouter--append-stream-log context chunk)
+      (benedict-provider-log-trace
+       'openrouter :stream-chunk
+       :request-id (plist-get context :request-id)
+       :bytes (length chunk)
+       :chunk (if (> (length chunk) 512)
+                  (concat (substring chunk 0 512) "…")
+                chunk))
       (benedict-provider-openrouter--stream-handle-data
        context (string-replace "\r" "" chunk)))))
 
@@ -281,7 +309,8 @@ When streaming is enabled, callbacks receive incremental deltas via curl."
       (benedict-provider-openrouter--stream-handle-sentinel context event))))
 
 (defun benedict-provider-openrouter--append-stream-log (context chunk)
-  "Append CHUNK to CONTEXT stdout log capped at `benedict-provider-openrouter--stream-log-limit'."
+  "Append CHUNK to CONTEXT stdout log capped at
+`benedict-provider-openrouter--stream-log-limit'."
   (let* ((log (or (plist-get context :stdout-log) ""))
          (combined (concat log chunk))
          (limit benedict-provider-openrouter--stream-log-limit))
@@ -324,6 +353,14 @@ When streaming is enabled, callbacks receive incremental deltas via curl."
         (push (string-trim line) data-lines))))
     (let ((payload (string-join (nreverse (delq nil data-lines)) "\n")))
       (when (> (length payload) 0)
+        (benedict-provider-log-trace
+         'openrouter :stream-sse-block
+         :request-id (plist-get context :request-id)
+         :event event-type
+         :bytes (length payload)
+         :payload (if (> (length payload) 512)
+                      (concat (substring payload 0 512) "…")
+                    payload))
         (benedict-provider-openrouter--handle-sse-payload context payload event-type)))))
 
 (defun benedict-provider-openrouter--handle-sse-payload (context payload _event)
@@ -351,16 +388,50 @@ When streaming is enabled, callbacks receive incremental deltas via curl."
         (when-let ((model (plist-get event :model)))
           (setf (plist-get context :model) model))
         (when-let ((usage (plist-get event :usage)))
-          (setf (plist-get context :usage) usage))
+          (setf (plist-get context :usage) usage)
+          (puthash (plist-get context :request-id)
+                   usage
+                   benedict-provider-openrouter--usage-table))
         (let ((choices (benedict-provider-openrouter--normalize-seq
                         (plist-get event :choices))))
-          (when choices
+          (cond
+           (choices
             (let ((normalized (benedict-provider-openrouter--normalize-delta-choices
                                context choices)))
+              (benedict-provider-log-trace
+               'openrouter :stream-delta
+               :request-id (plist-get context :request-id)
+               :choices (length normalized)
+               :reasoning (apply #'+ (mapcar
+                                      (lambda (choice)
+                                        (length (benedict-provider-openrouter--normalize-seq
+                                                 (plist-get (plist-get choice :delta) :reasoning_details))))
+                                      normalized)))
               (when (functionp (plist-get context :on-delta))
                 (let ((payload (benedict-provider-openrouter--stream-build-delta-payload
                                 context event normalized)))
-                  (funcall (plist-get context :on-delta) payload))))))))))
+                  (funcall (plist-get context :on-delta) payload)))))
+           ((benedict-provider-openrouter--stream-handle-reasoning-event
+             context event)
+            nil)))))))
+
+(defun benedict-provider-openrouter--stream-handle-reasoning-event (context event)
+  "Handle reasoning-only EVENT by emitting a synthetic delta.
+Returns non-nil when a delta was dispatched."
+  (let ((details (benedict-provider-openrouter--normalize-reasoning-delta
+                  context event)))
+    (when details
+      (let* ((delta (list :reasoning_details (apply #'vector details)))
+             (choice (list :index 0 :delta delta))
+             (payload (benedict-provider-openrouter--stream-build-delta-payload
+                       context event (list choice))))
+        (benedict-provider-log-trace
+         'openrouter :stream-reasoning-event
+         :request-id (plist-get context :request-id)
+         :details (length details))
+        (when (functionp (plist-get context :on-delta))
+          (funcall (plist-get context :on-delta) payload))
+        t))))
 
 (defun benedict-provider-openrouter--normalize-delta-choices (context choices)
   "Return normalized CHOICES for CONTEXT."
@@ -557,6 +628,9 @@ When streaming is enabled, callbacks receive incremental deltas via curl."
     (plist-put payload :model (or (plist-get payload :model)
                                   (plist-get context :model)
                                   benedict-provider-openrouter-default-model))
+    (when-let ((usage (or (plist-get event :usage)
+                          (plist-get context :usage))))
+      (plist-put payload :usage usage))
     (plist-put payload :choices (apply #'vector choices))
     payload))
 
@@ -611,27 +685,33 @@ ERROR-BLOCK is the parsed JSON block when available.  MESSAGE is a fallback stri
 
 (defun benedict-provider-openrouter--finalize-stream (context)
   "Finalize streaming CONTEXT and deliver completion callback."
-  (let* ((chunks (plist-get context :message-chunks))
+  (let* ((request-id (plist-get context :request-id))
+         (chunks (plist-get context :message-chunks))
          (content (or (plist-get context :final-message-text)
                       (mapconcat #'identity (nreverse chunks) "")))
          (role (or (plist-get context :role) 'assistant))
          (message (or (plist-get context :final-message)
                       (list :role role :content content)))
          (thinking (benedict-provider-openrouter--finalize-reasoning context))
+         (usage (or (plist-get context :usage)
+                    (and request-id
+                         (gethash request-id benedict-provider-openrouter--usage-table))))
          (latency (float-time (time-subtract (current-time)
                                              (plist-get context :start-time))))
          (result (list :message message
                        :model (or (plist-get context :model)
                                   benedict-provider-openrouter-default-model)
                        :provider 'openrouter
-                       :usage (plist-get context :usage)
+                       :usage usage
                        :thinking thinking
                        :latency latency
                        :raw (plist-get context :raw-last)
                        :empty-response (string-empty-p (or content "")))))
+    (when request-id
+      (remhash request-id benedict-provider-openrouter--usage-table))
     (benedict-provider-log
      'openrouter 'info :stream-complete
-     :request-id (plist-get context :request-id)
+     :request-id request-id
      :latency latency
      :model (plist-get result :model)
      :content-bytes (length (or content "")))
@@ -901,6 +981,16 @@ When STREAM is non-nil, include the \"stream\": true flag in the payload."
                            benedict-provider-openrouter-default-temperature)))
         (when temperature
           (push (cons "temperature" temperature) body)))
+      (let ((reasoning (or (plist-get request :reasoning)
+                           benedict-provider-openrouter-default-reasoning)))
+        (when reasoning
+          (when-let ((normalized (benedict-provider-openrouter--normalize-reasoning reasoning)))
+            (push (cons "reasoning" normalized) body))))
+      (let ((usage (or (plist-get request :usage-options)
+                       benedict-provider-openrouter-default-usage)))
+        (when usage
+          (when-let ((normalized (benedict-provider-openrouter--normalize-usage usage)))
+            (push (cons "usage" normalized) body))))
       (dolist (pair '((:max-tokens . "max_tokens")
                       (:top-p . "top_p")
                       (:presence-penalty . "presence_penalty")
@@ -936,6 +1026,71 @@ When STREAM is non-nil, include the \"stream\": true flag in the payload."
 
 (defun benedict-provider-openrouter--option-key (key)
   "Normalize option KEY (keyword/symbol/string) into JSON field."
+  (cond
+   ((keywordp key) (substring (symbol-name key) 1))
+   ((symbolp key) (symbol-name key))
+   ((stringp key) key)
+   (t (format "%s" key))))
+
+(defun benedict-provider-openrouter--normalize-usage (value)
+  "Normalize VALUE into an alist suitable for the \"usage\" field."
+  (let* ((alist (cond
+                 ((null value) nil)
+                 ((and (listp value)
+                       (keywordp (car value)))
+                  (let (result)
+                    (while value
+                      (let ((k (pop value))
+                            (v (pop value)))
+                        (push (cons (benedict-provider-openrouter--usage-key k) v) result)))
+                    (nreverse result)))
+                 ((listp value) value)
+                 (t nil))))
+    (when alist
+      (let (result)
+        (dolist (entry alist (nreverse result))
+          (let ((key (car entry))
+                (val (cdr entry)))
+            (pcase key
+              ("include" (push (cons "include" val) result))
+              (_ nil))))))))
+
+(defun benedict-provider-openrouter--usage-key (key)
+  "Normalize usage KEY into a string identifier."
+  (cond
+   ((keywordp key) (substring (symbol-name key) 1))
+   ((symbolp key) (symbol-name key))
+   ((stringp key) key)
+   (t (format "%s" key))))
+
+(defun benedict-provider-openrouter--normalize-reasoning (value)
+  "Normalize VALUE into an alist suitable for the \"reasoning\" field."
+  (let* ((alist (cond
+                 ((null value) nil)
+                 ((and (listp value)
+                       (keywordp (car value)))
+                  (let (result)
+                    (while value
+                      (let ((k (pop value))
+                            (v (pop value)))
+                        (push (cons (benedict-provider-openrouter--reasoning-key k) v) result)))
+                    (nreverse result)))
+                 ((listp value) value)
+                 (t nil))))
+    (when alist
+      (let (result)
+        (dolist (entry alist (nreverse result))
+          (let ((key (car entry))
+                (val (cdr entry)))
+            (pcase key
+              ("effort" (push (cons "effort" val) result))
+              ("max_tokens" (push (cons "max_tokens" val) result))
+              ("exclude" (push (cons "exclude" val) result))
+              ("enabled" (push (cons "enabled" val) result))
+              (_ nil))))))))
+
+(defun benedict-provider-openrouter--reasoning-key (key)
+  "Normalize reasoning KEY into a string identifier."
   (cond
    ((keywordp key) (substring (symbol-name key) 1))
    ((symbolp key) (symbol-name key))

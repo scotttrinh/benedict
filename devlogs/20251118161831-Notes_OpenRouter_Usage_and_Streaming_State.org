@@ -1,0 +1,73 @@
+#+TITLE: Notes — OpenRouter Usage & Streaming State
+#+DATE: 2025-11-18
+
+* Summary
+- Symptom: OpenRouter streaming replies showed correct usage in the raw SSE payload (per provider logs), but the Benedict chat header only displayed latency — no token or cost info — and the final assistant message metadata had ~:usage nil~.
+- Root cause: the OpenRouter streaming provider was not reliably preserving ~:usage~ in its per-request context up to ~benedict-provider-openrouter--finalize-stream~. Usage appeared in intermediate SSE events, but the context seen at finalize-time had ~:usage nil~ and ~:raw-last nil~.
+- Fix: introduce explicit, stateful tracking of usage per request (keyed by ~:request-id~) in the provider, and read that state when finalizing streaming responses instead of scraping logs.
+
+* Observations
+- OpenRouter SSE payloads for thinking models (e.g., ~openrouter/sherlock-think-alpha~) included a ~"usage"~ object in a final chunk with empty ~content~, matching the documented structure:
+  - ~prompt_tokens~, ~completion_tokens~, ~total_tokens~.
+  - Nested details such as ~completion_tokens_details.reasoning_tokens~.
+- Trace-level provider logs (via ~benedict-provider-log-level = 'trace~) clearly showed the ~usage~ object inside the JSON:
+  - Example: ~"usage\":{\"prompt_tokens\":239,\"completion_tokens\":2433,...}~.
+- Despite that, inspecting the final assistant message in the chat buffer yielded:
+  - ~(:usage nil)~ when probing ~benedict-chat--messages~ metadata.
+  - ~benedict-chat--debug-last-result~ (captured just before ~benedict-chat--handle-provider-success~) also had ~:usage nil~ and ~:raw nil~.
+- Adding debug advice around ~benedict-provider-openrouter--stream-handle-json~ and ~benedict-provider-openrouter--finalize-stream~ showed:
+  - ~stream-handle-json~ *did* see ~:usage~ on at least one SSE event.
+  - By the time ~finalize-stream~ ran, both ~(plist-get context :usage)~ and ~(plist-get context :raw-last)~ were ~nil~.
+
+* Root Cause
+- The streaming code path for OpenRouter used a mutable ~context~ plist to accumulate:
+  - Text chunks (~:message-chunks~).
+  - Reasoning data (~:reasoning-entries~, ~:reasoning-order~).
+  - Model and timing (~:model~, ~:start-time~).
+- ~benedict-provider-openrouter--stream-handle-json~ updated ~context :usage~ when an event contained ~:usage~, but nothing guaranteed that:
+  - This field survived through any later mutations in the streaming pipeline, and
+  - ~:raw-last~ retained a payload containing ~:usage~ by the time ~finalize-stream~ ran.
+- Result: the final ~result~ plist produced by ~benedict-provider-openrouter--finalize-stream~ often had ~:usage nil~, even though usage was present in intermediate events.
+- The chat UI header renderer (~benedict-chat--format-metadata-line~) only displays token/cost info when metadata has a non-nil ~:usage~, so the header remained “clean” (provider/model/latency only).
+
+* Fix
+- Added an explicit per-request usage table in ~benedict-provider-openrouter~:
+  - ~benedict-provider-openrouter--usage-table~ is a hash table keyed by ~request-id~.
+  - Every time ~benedict-provider-openrouter--stream-handle-json~ sees an event with ~:usage~, it:
+    - Stores it in ~(plist-put context :usage usage)~.
+    - Writes it to ~benedict-provider-openrouter--usage-table~ under that request id.
+- Updated ~benedict-provider-openrouter--finalize-stream~ to:
+  - Compute ~usage~ as:
+    - ~(plist-get context :usage)~, or
+    - the last entry in ~benedict-provider-openrouter--usage-table~ for this ~request-id~.
+  - Embed this ~usage~ into the final result plist under ~:usage~.
+  - Clear the entry from ~benedict-provider-openrouter--usage-table~ once the request is finalized, to avoid leaks across requests.
+- Removed earlier attempts to recover usage by scraping ~:stdout-log~ (log parsing is now unnecessary and brittle).
+
+* Verification
+- Emacs batch compile:
+  - ~emacs -Q --batch -L . -f batch-byte-compile benedict-provider-openrouter.el~.
+  - Only pre-existing warnings remain (docstring width, unused lexical arg).
+- ERT tests (including the header usage test) pass:
+  - ~emacs -Q --batch -L . -l test/run-tests.el~.
+  - ~benedict-chat-renders-usage-in-header~ confirms that when the provider result carries ~:usage~, the assistant header includes ~tokens p:... / c:... / t:... / cost:...~.
+- Manual check in a Benedict chat buffer after a streaming OpenRouter response:
+  - Evaluating:
+    #+begin_src emacs-lisp
+    (let* ((assistant (car benedict-chat--messages))
+           (meta      (plist-get assistant :metadata)))
+      (plist-get meta :usage))
+    #+end_src
+    now returns a non-nil plist/alist with ~prompt_tokens~, ~completion_tokens~, ~total_tokens~, etc.
+  - The header line includes both usage and latency, e.g.:
+    #+begin_example
+    Assistant · tokens p:239 / c:2433 / t:2672 / cost:? ·
+    provider openrouter · openrouter/sherlock-think-alpha · 33.33s
+    #+end_example
+
+* Follow-Ups / Refactoring Ideas
+- Consider consolidating all per-request streaming state (text, reasoning, usage) into a dedicated struct or defclass rather than a loosely-typed plist (~context~), to make lifetime and mutation safer.
+- Add an ERT test that exercises the OpenRouter provider’s streaming path end-to-end (possibly using a fixture payload) to prevent regressions where ~:usage~ is present in SSE data but missing in the final result.
+- Revisit ~:raw-last~ semantics: either guarantee it always holds the last SSE JSON object, or explicitly document that callers should not rely on it for fields like ~usage~.
+- Evaluate whether other metadata (e.g., model aliases, pricing hints) should also be tracked via stable per-request tables instead of assuming context mutation is always reliable.
+
