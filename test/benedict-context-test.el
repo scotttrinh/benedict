@@ -29,5 +29,16 @@
     (should (string-match-p "hello" text))
     (should (string-match-p "buf" text))))
 
+(ert-deftest benedict-context-format-includes-handle ()
+  "Context formatting includes anchors when :handle is present."
+  (let* ((slice (benedict-context-make-slice :kind 'region
+                                             :label "region"
+                                             :origin "test"
+                                             :content "hi"
+                                             :handle "foo"))
+         (text (benedict-context-format-for-send (list slice))))
+    (should (string-match-p "<<foo>>" text))
+    (should (string-match-p "\\[REGION\\]" text))))
+
 (provide 'benedict-context-test)
 ;;; benedict-context-test.el ends here

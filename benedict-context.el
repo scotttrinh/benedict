@@ -40,19 +40,20 @@ The return value is a plist (:content :truncated-p :size-bytes)."
              (annotated (concat cut "\n… [truncated]")))
         (list :content annotated :truncated-p t :size-bytes size)))))
 
-(cl-defun benedict-context-make-slice (&key kind label origin content id max-bytes)
+(cl-defun benedict-context-make-slice (&key kind label origin content id max-bytes handle)
   "Construct a context slice plist.
 KIND is a symbol such as 'buffer, 'region, or 'git-diff.
 LABEL is a human-readable description. ORIGIN notes where the slice came from.
 CONTENT holds the text that will be sent. ID may be provided, otherwise a new
-identifier is allocated. MAX-BYTES overrides
-`benedict-context-max-bytes-per-slice'."
+identifier is allocated. HANDLE is an optional user-visible identifier used
+for prompt references. MAX-BYTES overrides `benedict-context-max-bytes-per-slice'."
   (let* ((limit (or max-bytes benedict-context-max-bytes-per-slice))
          (result (benedict-context--truncate-content content limit)))
     (list :id (or id (benedict-context--next-id))
           :kind kind
           :label (or label (format "%s" kind))
           :origin origin
+          :handle handle
           :content (plist-get result :content)
           :size-bytes (plist-get result :size-bytes)
           :truncated-p (plist-get result :truncated-p))))
@@ -72,6 +73,7 @@ identifier is allocated. MAX-BYTES overrides
 (defun benedict-context--format-one (slice)
   "Render SLICE as a labeled string for compose buffers."
   (let* ((kind (upcase (format "%s" (plist-get slice :kind))))
+         (handle (plist-get slice :handle))
          (label (or (plist-get slice :label) "Context"))
          (origin (plist-get slice :origin))
          (truncated (plist-get slice :truncated-p))
@@ -79,7 +81,8 @@ identifier is allocated. MAX-BYTES overrides
          (content (or (plist-get slice :content) "")))
     (string-join
      (delq nil
-           (list (format "[%s] %s (%s%s)%s"
+           (list (format "%s[%s] %s (%s%s)%s"
+                         (if handle (format "<<%s>> " handle) "")
                          kind
                          label
                          size

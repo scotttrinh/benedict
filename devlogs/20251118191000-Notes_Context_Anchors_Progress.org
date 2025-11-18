@@ -1,0 +1,12 @@
+#+TITLE: Notes — Context Anchors Progress
+#+LANGUAGE: en
+#+OPTIONS: toc:nil num:nil ^:{}
+
+* Summary
+- Added context handles/anchors and prompt link insertion flow per plan.
+- Updated compose-send to warn on unknown [[handle]] tokens and inject system guidance for anchor resolution.
+- Extended context formatting to show <<handle>> in preview/send output.
+- Added tests for anchor formatting and compose flow link insertion; attempting to run via =emacs -Q --batch -l test/run-tests.el= currently fails because =benedict-chat.el= still reports EOF during =require=.
+
+* Current issue
+- Parentheses were previously unbalanced in =benedict-chat.el= around the markdown-lite link decoration helper. The block around lines ~1223–1237~ (=benedict-chat--markdown-lite--apply-links=) was rewritten to rebalance parens. =check-parens= now reports balanced structure, but =require 'benedict-chat= still throws =End of file during parsing= during batch load; further investigation needed.

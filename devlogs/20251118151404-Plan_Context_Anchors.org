@@ -1,0 +1,87 @@
+#+TITLE: Plan — Context Anchors and Prompt References
+#+AUTHOR: Benedict maintainers
+#+LANGUAGE: en
+#+OPTIONS: toc:nil num:nil ^:{}
+
+* Goal
+Introduce an Emacs-friendly way to refer to individual context slices from within the compose/prompt body, so users can say things like "Make this function [[foo]] take the same arguments as [[bar]]" and have [[foo]]/[[bar]] map back to specific slices captured via =benedict-chat-ask-*= commands.
+
+* UX Overview
+- When the user adds a slice via an =ask= command (region/defun/buffer/etc.), Benedict should:
+  - Attach the slice to the chat's pending context, and
+  - Insert a link token at point in the compose body, and
+  - Insert a corresponding anchor/label for that slice into the context preview/section.
+- Emacs-ish syntax inspired by Org:
+  - Context anchor/target: =<<foo>>= (associated with a slice).
+  - Prompt/body link: =[[foo]]= (used inline in the user's instructions).
+- Generic flow:
+  - User types: "Make this function |" (point at the bar).
+  - User calls =benedict-chat-ask-defun=.
+  - Benedict creates a slice for the defun, assigns/asks for a handle (e.g. =foo=), then:
+    - Inserts =[[foo]]= at point in the compose buffer body.
+    - Shows/updates a context section in the header containing =<<foo>>= and a human-readable label for the slice.
+
+* Handles and Naming
+- Each slice gets a stable =handle= in addition to its existing metadata (kind/label/origin/content).
+- Handle semantics:
+  - Visible to the user via =[[handle]]= and =<<handle>>=.
+  - Unique per chat buffer; reusing an existing handle should either be prevented or explicitly overwrite/retarget.
+  - Restricted syntax: simple identifier (e.g. =[A-Za-z0-9_-]+=) to avoid parsing headaches.
+- Assignment strategy:
+  - On slice creation, prompt the user in the minibuffer for a handle, with a pre-populated default.
+  - Defaults should be reasonably stable and descriptive:
+    - Regions: =<filename>:<start-line>-<end-line>=, e.g. =foo.el:10-24=.
+    - Defuns: =<symbol-or-filename>:<line>=, e.g. =my-func:42= or =foo.el:defun-42= when we can't easily get the symbol.
+    - Buffers: =<buffer-or-file-name>=, e.g. =foo.el-buffer=.
+    - Project / Git context: coarse handles like =project=, =git-status=, =git-diff=.
+  - The user can accept the default quickly or tweak it for semantic names like =foo=, =bar=.
+
+* Context Formatting and Anchors
+- Extend slice formatting for compose/send to surface anchors:
+  - Compose/preview view (header): show a short, readable mapping from handle → slice.
+    - e.g. =<<foo>> [REGION] foo.el: lines 10–24 (123B+) — origin=.
+  - Outgoing "Context:" section in the actual message text sent to the provider should:
+    - Include the same anchor-like marker so the model sees the mapping.
+    - Keep the existing structure (kind, label, size, origin, content) but prepend the handle.
+- This keeps the context section self-describing for the model: each block clearly associates =<<handle>>= with its content.
+
+* Prompt Body Links and Resolution
+- Body syntax:
+  - =[[foo]]= is treated purely as a link/reference token inside the user instructions.
+  - We do not expand =[[foo]]= into the full slice content in the prompt body; the content already appears under "Context:".
+- On send (compose → chat):
+  - Scan the body text for =[[handle]]= tokens.
+  - Collect the set of referenced handles and compare against the handles for currently attached slices.
+  - UX options (first version):
+    - If unknown handles are found (e.g. =[[baz]]= with no corresponding slice), log/warn in the minibuffer but still send.
+    - Optionally consider adding a customizable variable later to enforce stricter behavior (prompt the user to confirm send).
+  - We do *not* mutate =[[foo]]= tokens before sending; they remain as-is in the text, relying on the explicit mapping in the context section.
+
+* System Prompt Guidance
+- Extend the profile/system preamble to briefly explain anchors/links to the model, for example:
+  - "The user may refer to context slices using Org-style notation. Each context block is labeled with an anchor like <<foo>>. Inside the user's instructions, [[foo]] refers to that same context slice. When reasoning about their request, resolve [[foo]] to the corresponding <<foo>> block in the Context section above."
+- This guidance should:
+  - Be short and stable across profiles.
+  - Emphasize that the mapping =[[handle]] → <<handle>>= is the only indirection; slice contents live solely in the context section.
+
+* Emacs Commands and Flow (First Pass)
+- =benedict-chat-ask-*= commands:
+  - After computing a slice, before attaching it:
+    - Propose a default handle (based on kind/label/origin) and prompt the user once.
+    - Attach the slice with its handle to the pending context for the chat.
+    - Switch to / ensure the compose buffer, and:
+      - Insert =[[handle]]= at point in the body (or at end of body if composing from scratch).
+      - Refresh the header/context preview to show the new =<<handle>>= mapping.
+- No dedicated completion UI in v1:
+  - We are *not* adding a separate "insert reference" command yet.
+  - By always inserting the link at slice creation time, the common "make this [[foo]] like [[bar]]" flow stays smooth without extra commands.
+
+* Open Questions / Follow-ups
+- Should we later add:
+  - A =benedict-chat-insert-context-reference= command with completion over handles?
+  - A handle rename command that updates both the slice metadata and existing =[[...]]= occurrences in the compose body?
+- How strict should we be about unknown handles at send time?
+  - First version: warn only.
+  - Future option: customizable enforcement.
+- Do we want to support multiple references to the same handle in one prompt (likely yes, no extra work needed), and how do we present that in logs/telemetry?
+

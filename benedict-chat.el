@@ -141,6 +141,13 @@ The chat buffer name is substituted into the single %s placeholder."
 (defconst benedict-chat--compose-separator "----\n"
   "Separator line between compose header and body.")
 
+(defconst benedict-chat--handle-regexp "^[A-Za-z0-9._:-]+$"
+  "Valid pattern for context handles referenced via [[handle]].")
+
+(defconst benedict-chat--anchor-guidance
+  "The user may refer to context slices using Org-style notation. Each context block is labeled with an anchor like <<foo>>. Inside the user's instructions, [[foo]] refers to that same context slice. When reasoning about their request, resolve [[foo]] to the corresponding <<foo>> block in the Context section above."
+  "System guidance explaining how to resolve [[handle]] links to context anchors.")
+
 (defun benedict-chat--empty-response-text (thinking)
   "Return placeholder text for empty responses.
 THINKING is non-nil when reasoning blocks accompanied the response."
@@ -1669,11 +1676,104 @@ LANGUAGE is the identifier included in the fence (may be nil)."
       (format "Profile: %s    Project: %s    Context: %s\n"
               profile-label project summary))))
 
+(defun benedict-chat--sanitize-handle (handle)
+  "Return HANDLE trimmed and with unsafe characters replaced."
+  (let* ((trimmed (string-trim (or handle "")))
+         (spaced (replace-regexp-in-string "[[:space:]]+" "-" trimmed))
+         (clean (replace-regexp-in-string "[^A-Za-z0-9._:-]" "-" spaced)))
+    (replace-regexp-in-string "-+" "-" clean)))
+
+(defun benedict-chat--valid-handle-p (handle)
+  "Return non-nil when HANDLE matches `benedict-chat--handle-regexp'."
+  (and (stringp handle)
+       (string-match-p benedict-chat--handle-regexp handle)))
+
+(defun benedict-chat--preferred-handle (candidate)
+  "Return a sanitized HANDLE string derived from CANDIDATE or fallback."
+  (let* ((sanitized (benedict-chat--sanitize-handle candidate))
+         (fallback (benedict-chat--sanitize-handle "context")))
+    (or (and (benedict-chat--valid-handle-p sanitized) sanitized)
+        fallback)))
+
+(defun benedict-chat--context-handles (slices)
+  "Return a list of handles present in SLICES."
+  (delq nil (mapcar (lambda (slice) (plist-get slice :handle)) slices)))
+
+(defun benedict-chat--prepare-context-slice (slice existing-handles)
+  "Prompt for a handle for SLICE, respecting EXISTING-HANDLES.
+Returns a plist (:slice :replacing) where :slice carries the final handle."
+  (let* ((default (or (plist-get slice :handle-default)
+                      (plist-get slice :handle)
+                      (plist-get slice :label)
+                      "context"))
+         (proposal (benedict-chat--preferred-handle default))
+         (handles (cl-remove-if-not #'identity existing-handles))
+         (final-handle nil))
+    (if noninteractive
+        (setq final-handle proposal)
+      (while (not final-handle)
+        (let* ((input (string-trim (read-string
+                                    (format "Context handle (default %s): " proposal)
+                                    nil nil proposal)))
+               (candidate (if (string-empty-p input) proposal input))
+               (sanitized (benedict-chat--sanitize-handle candidate)))
+          (cond
+           ((not (benedict-chat--valid-handle-p sanitized))
+            (message "Handle must match %s" benedict-chat--handle-regexp))
+           ((and (member sanitized handles)
+                 (not (yes-or-no-p (format "Handle %s already in use. Replace it? "
+                                           sanitized))))
+            (setq proposal sanitized))
+           (t (setq final-handle sanitized))))))
+    (let* ((handle final-handle)
+           (replacing (member handle handles))
+           (final-slice (plist-put (copy-sequence slice) :handle handle)))
+      (list :slice final-slice :replacing replacing))))
+
+(defun benedict-chat--upsert-context-slice (slices slice)
+  "Insert or replace SLICE in SLICES keyed by :handle."
+  (let* ((handle (plist-get slice :handle))
+         (updated nil)
+         (result (mapcar (lambda (existing)
+                           (if (and handle
+                                    (string= handle (plist-get existing :handle)))
+                               (progn
+                                 (setq updated t)
+                                 slice)
+                             existing))
+                         slices)))
+    (if updated
+        result
+      (append result (list slice)))))
+
+(defun benedict-chat--insert-handle-link (handle)
+  "Insert [[HANDLE]] at point inside the compose body."
+  (insert (format "[[%s]]" handle)))
+
+(defun benedict-chat--extract-handle-links (text)
+  "Return a list of handle names referenced as [[handle]] in TEXT."
+  (let (result (start 0))
+    (while (string-match "\\[\\[\\([A-Za-z0-9._:-]+\\)\\]\\]" text start)
+      (push (match-string 1 text) result)
+      (setq start (match-end 0)))
+    (nreverse (cl-delete-duplicates result :test #'string=))))
+
+(defun benedict-chat--warn-unknown-handles (body-handles slices)
+  "Warn when BODY-HANDLES are not present in SLICES."
+  (let* ((known (benedict-chat--context-handles slices))
+         (unknown (cl-set-difference body-handles known :test #'string=)))
+    (when unknown
+      (message "Benedict: unknown context handles: %s" (string-join unknown ", ")))
+    unknown))
+
 (defun benedict-chat-compose--render-header ()
   "Render or refresh the compose header for the current buffer."
   (let* ((body-start (or (and benedict-chat-compose--body-start
                               (marker-position benedict-chat-compose--body-start))
                          (point-min)))
+         (body-point (let ((pos (point)))
+                       (when (>= pos body-start)
+                         (- pos body-start))))
          (body (buffer-substring-no-properties body-start (point-max)))
          (chat benedict-chat-compose--chat-buffer)
          (header (if (buffer-live-p chat)
@@ -1696,7 +1796,9 @@ LANGUAGE is the identifier included in the fence (may be nil)."
     (add-text-properties (point-min) benedict-chat-compose--body-start
                          '(read-only t front-sticky t rear-nonsticky t))
     (insert body)
-    (goto-char (point-max))))
+    (goto-char (min (point-max)
+                    (+ (marker-position benedict-chat-compose--body-start)
+                       (or body-point (length body)))))))
 
 (defun benedict-chat--refresh-compose-header ()
   "Refresh compose buffer header for the current chat."
@@ -1738,10 +1840,12 @@ LANGUAGE is the identifier included in the fence (may be nil)."
 
 (defun benedict-chat--assemble-message-text (prompt slices profile)
   "Return final message text combining PROMPT, SLICES, and PROFILE preamble."
-  (let ((preamble (benedict-chat--profile-preamble profile))
-        (context (benedict-context-format-for-send slices))
-        (body (string-trim prompt)))
-    (string-join (delq nil (list preamble context body)) "\n\n")))
+  (let* ((preamble (benedict-chat--profile-preamble profile))
+         (system (string-join (delq nil (list preamble benedict-chat--anchor-guidance))
+                              "\n\n"))
+         (context (benedict-context-format-for-send slices))
+         (body (string-trim prompt)))
+    (string-join (delq nil (list system context body)) "\n\n")))
 
 (defun benedict-chat--clear-compose-state ()
   "Clear compose buffer reference for the current chat."
@@ -1763,9 +1867,11 @@ LANGUAGE is the identifier included in the fence (may be nil)."
       (user-error "Prompt is empty"))
     (let* ((chat benedict-chat-compose--chat-buffer)
            (slices (with-current-buffer chat benedict-chat--context-slices))
+           (body-handles (benedict-chat--extract-handle-links prompt))
            (profile (with-current-buffer chat
                       (or benedict-chat-profile (benedict-chat--default-profile))))
            (text (benedict-chat--assemble-message-text prompt slices profile)))
+      (benedict-chat--warn-unknown-handles body-handles slices)
       (with-current-buffer chat
         (benedict-chat--send-text text)
         (unless benedict-chat-context-retain-after-send
@@ -1797,18 +1903,36 @@ LANGUAGE is the identifier included in the fence (may be nil)."
   "Attach SLICES to the compose buffer for the current chat."
   (let* ((chat (benedict-chat--ensure-chat-buffer))
          (compose (with-current-buffer chat
-                    (benedict-chat--ensure-compose-buffer))))
+                    (benedict-chat--ensure-compose-buffer)))
+         (prepared nil))
     (with-current-buffer chat
-      (setq benedict-chat--context-slices
-            (append benedict-chat--context-slices slices)))
-    (when (buffer-live-p compose)
-      (with-current-buffer compose
-        (benedict-chat-compose--render-header)
-        (goto-char (point-max))))
-    (pop-to-buffer compose)))
+      (let ((existing (benedict-chat--context-handles benedict-chat--context-slices)))
+        (dolist (slice slices)
+          (let* ((entry (benedict-chat--prepare-context-slice slice existing))
+                 (final (plist-get entry :slice)))
+            (push entry prepared)
+            (setq benedict-chat--context-slices
+                  (benedict-chat--upsert-context-slice benedict-chat--context-slices final))
+            (setq existing (benedict-chat--context-handles benedict-chat--context-slices)))))
+       (setq prepared (nreverse prepared)))
+     (when (buffer-live-p compose)
+       (with-current-buffer compose
+         (benedict-chat-compose--render-header)
+         (when (and benedict-chat-compose--body-start
+                    (< (point) (marker-position benedict-chat-compose--body-start)))
+           (goto-char (marker-position benedict-chat-compose--body-start)))
+         (dolist (entry prepared)
+           (let ((handle (plist-get (plist-get entry :slice) :handle)))
+             (when (and handle (not (plist-get entry :replacing)))
+               (benedict-chat--insert-handle-link handle))))))
+     (pop-to-buffer compose)))
 
 ;; -------------------------------------------------------------------
 ;; Context capture commands
+
+(defun benedict-chat--slice-with-handle-default (slice handle)
+  "Return SLICE tagged with a default HANDLE suggestion."
+  (plist-put slice :handle-default (benedict-chat--preferred-handle handle)))
 
 (defun benedict-chat--buffer-label (&optional buffer)
   "Return a short label for BUFFER (defaults to current buffer)."
@@ -1823,9 +1947,25 @@ LANGUAGE is the identifier included in the fence (may be nil)."
                         (benedict-chat--buffer-label)
                         (line-number-at-pos start)
                         (line-number-at-pos end)))
-         (origin (or buffer-file-name (buffer-name))))
-    (benedict-context-make-slice
-     :kind 'region :label label :origin origin :content text)))
+         (origin (or buffer-file-name (buffer-name)))
+         (default-handle (format "%s:%d-%d"
+                                 (benedict-chat--buffer-label)
+                                 (line-number-at-pos start)
+                                 (line-number-at-pos end)))
+         (slice (benedict-context-make-slice
+                 :kind 'region :label label :origin origin :content text)))
+    (benedict-chat--slice-with-handle-default slice default-handle)))
+
+(defun benedict-chat--current-defun-name ()
+  "Return a best-effort defun name at point, or nil."
+  (or (when (fboundp 'add-log-current-defun)
+        (ignore-errors (add-log-current-defun)))
+      (when (fboundp 'which-function)
+        (ignore-errors
+          (let ((value (which-function)))
+            (cond
+             ((stringp value) value)
+             ((and (listp value) (stringp (car value))) (car value))))))))
 
 (defun benedict-chat--slice-from-defun ()
   "Return a context slice for the current defun."
@@ -1838,25 +1978,34 @@ LANGUAGE is the identifier included in the fence (may be nil)."
            (label (format "%s: defun at line %d"
                           (benedict-chat--buffer-label)
                           (line-number-at-pos start)))
-           (origin (or buffer-file-name (buffer-name))))
-      (benedict-context-make-slice
-       :kind 'defun :label label :origin origin :content text))))
+           (origin (or buffer-file-name (buffer-name)))
+           (line (line-number-at-pos start))
+           (base (or (benedict-chat--current-defun-name)
+                     (benedict-chat--buffer-label)))
+           (default-handle (format "%s:%d" base line))
+           (slice (benedict-context-make-slice
+                   :kind 'defun :label label :origin origin :content text)))
+      (benedict-chat--slice-with-handle-default
+       slice default-handle))))
 
 (defun benedict-chat--slice-from-buffer ()
   "Return a context slice for the entire current buffer."
   (let* ((text (buffer-substring-no-properties (point-min) (point-max)))
          (label (format "%s buffer" (benedict-chat--buffer-label)))
-         (origin (or buffer-file-name (buffer-name))))
-    (benedict-context-make-slice
-     :kind 'buffer :label label :origin origin :content text)))
+         (origin (or buffer-file-name (buffer-name)))
+         (default-handle (format "%s-buffer" (benedict-chat--buffer-label)))
+         (slice (benedict-context-make-slice
+                 :kind 'buffer :label label :origin origin :content text)))
+    (benedict-chat--slice-with-handle-default slice default-handle)))
 
 (defun benedict-chat--slice-from-project ()
   "Return a context slice describing the current project."
   (let* ((root (or (benedict-chat--project-root) default-directory))
          (label "Project overview")
-         (content (format "Project root: %s" root)))
-    (benedict-context-make-slice
-     :kind 'project :label label :origin root :content content)))
+         (content (format "Project root: %s" root))
+         (slice (benedict-context-make-slice
+                 :kind 'project :label label :origin root :content content)))
+    (benedict-chat--slice-with-handle-default slice "project")))
 
 (defun benedict-chat--git-run (root &rest args)
   "Run git ARGS inside ROOT directory and return trimmed string or nil."
@@ -1892,12 +2041,13 @@ LANGUAGE is the identifier included in the fence (may be nil)."
                                 (when (and (string-empty-p (or status ""))
                                            (string-empty-p (or diff "")))
                                   "Working tree clean."))))
-             (content (string-join parts "\n\n")))
-        (benedict-context-make-slice
-         :kind 'git-diff
-         :label "Git status/diff"
-         :origin root
-         :content (or content "Git context unavailable"))))))
+             (content (string-join parts "\n\n"))
+             (slice (benedict-context-make-slice
+                     :kind 'git-diff
+                     :label "Git status/diff"
+                     :origin root
+                     :content (or content "Git context unavailable"))))
+        (benedict-chat--slice-with-handle-default slice "git-status")))))
 
 ;;;###autoload
 (defun benedict-chat-ask-region (start end)
