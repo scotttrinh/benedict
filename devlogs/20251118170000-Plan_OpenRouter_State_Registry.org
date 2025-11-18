@@ -1,0 +1,50 @@
+#+title: Plan – OpenRouter Streaming State Registry
+#+date: 2025-11-18
+
+* Context
+- We fixed usage headers by caching usage in a request-id keyed table, but state is now split between transient ~context~ plists and ad hoc tables.
+- Latency, model, reasoning, chunks, and raw JSON are still tracked piecemeal; cleanup relies on “best effort”.
+- We want a single, explicit per-request state registry with predictable lifecycle and cleanup.
+
+* Goals
+- Centralize all streaming state (usage, reasoning, chunks, latency, model/provider, raw) under one request record.
+- Use a stable internal request ID for state lookup; capture remote OpenRouter id as metadata (not as the key).
+- Ensure cleanup on success/error/cancel so GC can reclaim state.
+- Keep existing provider/chat interfaces stable (context carries at least the request-id).
+
+* Proposed Request State Shape
+- Identity/timing: ~:id~, ~:remote-id~, ~:provider~, ~:model~, ~:start-time~, ~:end-time~, ~:latency~, ~:status~, ~:error~.
+- Content: ~:role~, ~:message-chunks~, ~:final-message-text~, ~:final-message~.
+- Reasoning: ~:reasoning-chunks~, ~:thinking~.
+- Usage/raw: ~:usage~, ~:raw-last~.
+
+* Registry & API
+- Hash table ~benedict-provider-openrouter--state-table~ keyed by internal request id.
+- Helpers:
+  - ~--state-create~ (&rest init) → id (inserts record).
+  - ~--state-get~, ~--state-update~ (&rest kvs), specialized setters (~--state-add-chunk~, ~--state-set-usage~, etc.).
+  - ~--state-finalize~ → result plist for ~benedict-chat~ (computes latency, assembles content/thinking/usage/raw, marks completion, removes entry).
+  - ~--state-clear~ for error/cancel.
+
+* Keying Strategy
+- Internal ID: log-friendly unique string (timestamp + random suffix); used as the sole hash key.
+- Remote ID: captured from SSE payload when present; used for logging/metadata only.
+- Logs should print both internal and remote ids once known.
+
+* Migration Steps
+1) Introduce registry + minimal plumbing (create/update/get) and start attaching the internal id to ~context~.
+2) Migrate usage handling to registry setters/getters; finalize reads usage from state, not context.
+3) Migrate content/reasoning/chunks to the registry helpers.
+4) Migrate timing/model/provider into registry; compute latency from start/end.
+5) Centralize finalize: ~benedict-provider-openrouter--finalize-stream~ becomes a thin wrapper around ~--state-finalize~.
+6) Cleanup paths ensure state removal on success/error/cancel; trim ~context~ to transport-only fields.
+
+* Tests to Add/Adjust
+- Unit tests for state lifecycle (create → update → finalize/clear).
+- Streaming integration test with mock SSE (content + reasoning + final usage-only chunk) asserting final result includes usage/thinking/latency and registry empties afterward.
+- Header rendering test to ensure usage still surfaces (existing test should pass).
+
+* Notes / Risks
+- Keep the public surface stable (chat expects certain result keys).
+- Avoid re-keying with remote ids; just stash them.
+- Watch for concurrent streams; registry must be thread-safe in Emacs terms (non-blocking hash table use).

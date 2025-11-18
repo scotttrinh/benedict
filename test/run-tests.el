@@ -20,6 +20,7 @@
                          ("melpa" . "https://melpa.org/packages/"))
       package-archive-priorities '(("melpa" . 5)
                                    ("gnu"   . 3)))
+(setq load-prefer-newer t)
 
 (package-initialize)
 

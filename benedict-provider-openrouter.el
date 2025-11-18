@@ -110,17 +110,75 @@ Must support --no-buffer/--fail-with-body (curl 7.60+)."
   '(408 409 425 429 500 502 503 504)
   "HTTP status codes considered retryable for OpenRouter requests.")
 
-(defvar benedict-provider-openrouter--request-counter 0
-  "Internal counter to correlate OpenRouter log events.")
-
-(defvar benedict-provider-openrouter--usage-table
+(defvar benedict-provider-openrouter--state-table
   (make-hash-table :test 'equal)
-  "Internal map from request identifiers to last seen usage payloads.")
+  "In-memory registry of per-request state keyed by request id.")
 
-(defun benedict-provider-openrouter--next-request-id ()
-  "Return a unique request identifier for OpenRouter logs."
-  (format "openrouter-%06d"
-          (cl-incf benedict-provider-openrouter--request-counter)))
+(defun benedict-provider-openrouter--make-request-id ()
+  "Return a log-friendly unique request identifier for OpenRouter."
+  (format "openrouter-%s-%06x"
+          (format-time-string "%Y%m%dT%H%M%SZ" (current-time) t)
+          (random #x1000000)))
+
+(defun benedict-provider-openrouter--state-create (&rest kvs)
+  "Create and store a new state entry seeded with KVS, returning its id."
+  (let* ((id (or (plist-get kvs :id)
+                 (benedict-provider-openrouter--make-request-id)))
+         (state (list :id id)))
+    (while kvs
+      (let ((k (pop kvs))
+            (v (pop kvs)))
+        (setq state (plist-put state k v))))
+    (puthash id state benedict-provider-openrouter--state-table)
+    id))
+
+(defun benedict-provider-openrouter--state-get (id)
+  "Return state for request ID, or nil when absent."
+  (and id (gethash id benedict-provider-openrouter--state-table)))
+
+(defun benedict-provider-openrouter--state-update (id &rest kvs)
+  "Update state for ID with KVS and return the updated state."
+  (when id
+    (let ((state (or (benedict-provider-openrouter--state-get id)
+                     (list :id id))))
+      (while kvs
+        (let ((k (pop kvs))
+              (v (pop kvs)))
+          (setq state (plist-put state k v))))
+      (puthash id state benedict-provider-openrouter--state-table)
+      state)))
+
+(defun benedict-provider-openrouter--state-push (id key value)
+  "Push VALUE onto plist KEY for state ID (as a stack)."
+  (when id
+    (let* ((state (or (benedict-provider-openrouter--state-get id)
+                      (list :id id)))
+           (current (plist-get state key)))
+      (setq state (plist-put state key (cons value current)))
+      (puthash id state benedict-provider-openrouter--state-table)
+      state)))
+
+(defun benedict-provider-openrouter--state-clear (id)
+  "Remove request state bound to ID."
+  (when id
+    (remhash id benedict-provider-openrouter--state-table)))
+
+(defun benedict-provider-openrouter--state-get* (context key)
+  "Helper: fetch KEY from state associated with CONTEXT."
+  (plist-get (benedict-provider-openrouter--state-get
+              (plist-get context :request-id))
+             key))
+
+(defun benedict-provider-openrouter--state-update* (context &rest kvs)
+  "Helper: update state associated with CONTEXT using KVS."
+  (apply #'benedict-provider-openrouter--state-update
+         (plist-get context :request-id)
+         kvs))
+
+(defun benedict-provider-openrouter--state-push* (context key value)
+  "Helper: push VALUE onto KEY in state associated with CONTEXT."
+  (benedict-provider-openrouter--state-push
+   (plist-get context :request-id) key value))
 
 (cl-defun benedict-provider-openrouter--send
     (_provider request &key on-success on-error on-delta on-complete)
@@ -131,25 +189,33 @@ When streaming is enabled, callbacks receive incremental deltas via curl."
          (streaming (benedict-provider-openrouter--streaming-request-p request on-delta))
          (payload (benedict-provider-openrouter--encode-payload request streaming))
          (request-id (or (plist-get request :request-id)
-                         (benedict-provider-openrouter--next-request-id)))
-         (context (list :request request
-                        :payload payload
-                        :credential credential
-                        :request-id request-id
-                        :on-success on-success
-                        :on-error on-error
-                        :on-delta on-delta
-                        :on-complete on-complete
-                        :streaming streaming
-                        :mode (if streaming 'stream 'http)
-                        :attempt 1
-                        :max-attempts (max 1 (+ 1 (max 0 benedict-provider-openrouter-max-retries)))
-                        :start-time (current-time)
-                        :provider 'openrouter)))
+                         (benedict-provider-openrouter--make-request-id)))
+         (start-time (current-time)))
+    (benedict-provider-openrouter--state-create
+     :id request-id
+     :provider 'openrouter
+     :model (or (plist-get request :model)
+                benedict-provider-openrouter-default-model)
+     :start-time start-time
+     :status (if streaming :streaming :http))
+    (let ((context (list :request request
+                         :payload payload
+                         :credential credential
+                         :request-id request-id
+                         :on-success on-success
+                         :on-error on-error
+                         :on-delta on-delta
+                         :on-complete on-complete
+                         :streaming streaming
+                         :mode (if streaming 'stream 'http)
+                         :attempt 1
+                         :max-attempts (max 1 (+ 1 (max 0 benedict-provider-openrouter-max-retries)))
+                         :start-time start-time
+                         :provider 'openrouter)))
     (if streaming
         (benedict-provider-openrouter--start-stream context)
       (benedict-provider-openrouter--perform-request context))
-    context))
+    context)))
 
 (defun benedict-provider-openrouter--perform-request (context)
   "Execute the HTTP request described by CONTEXT."
@@ -226,12 +292,21 @@ When streaming is enabled, callbacks receive incremental deltas via curl."
         context)
     (let ((token (plist-get (plist-get context :credential) :token))
           (payload (plist-get context :payload)))
+      (benedict-provider-openrouter--state-update
+       (plist-get context :request-id)
+       :status :streaming
+       :message-chunks nil
+       :reasoning-counter 0
+       :reasoning-entries nil
+       :reasoning-order nil
+       :role 'assistant
+       :final-message nil
+       :final-message-text nil
+       :usage nil
+       :raw-last nil
+       :remote-id nil)
       (setf (plist-get context :partial) ""
             (plist-get context :stdout-log) ""
-            (plist-get context :message-chunks) nil
-            (plist-get context :reasoning-counter) 0
-            (plist-get context :reasoning-entries) nil
-            (plist-get context :reasoning-order) nil
             (plist-get context :stream-complete) nil
             (plist-get context :mode) 'stream)
       (let* ((command (benedict-provider-openrouter--make-curl-command
@@ -381,39 +456,44 @@ When streaming is enabled, callbacks receive incremental deltas via curl."
 (defun benedict-provider-openrouter--stream-handle-json (context event)
   "Handle parsed streaming EVENT for CONTEXT."
   (unless (plist-get context :stream-complete)
-    (setf (plist-get context :raw-last) event)
-    (if-let ((error-block (plist-get event :error)))
-        (benedict-provider-openrouter--stream-handle-error context error-block nil)
-      (progn
-        (when-let ((model (plist-get event :model)))
-          (setf (plist-get context :model) model))
-        (when-let ((usage (plist-get event :usage)))
-          (setf (plist-get context :usage) usage)
-          (puthash (plist-get context :request-id)
-                   usage
-                   benedict-provider-openrouter--usage-table))
-        (let ((choices (benedict-provider-openrouter--normalize-seq
-                        (plist-get event :choices))))
-          (cond
-           (choices
-            (let ((normalized (benedict-provider-openrouter--normalize-delta-choices
-                               context choices)))
-              (benedict-provider-log-trace
-               'openrouter :stream-delta
-               :request-id (plist-get context :request-id)
-               :choices (length normalized)
-               :reasoning (apply #'+ (mapcar
-                                      (lambda (choice)
-                                        (length (benedict-provider-openrouter--normalize-seq
-                                                 (plist-get (plist-get choice :delta) :reasoning_details))))
-                                      normalized)))
-              (when (functionp (plist-get context :on-delta))
-                (let ((payload (benedict-provider-openrouter--stream-build-delta-payload
-                                context event normalized)))
-                  (funcall (plist-get context :on-delta) payload)))))
-           ((benedict-provider-openrouter--stream-handle-reasoning-event
-             context event)
-            nil)))))))
+    (let* ((request-id (plist-get context :request-id))
+           (remote-id (plist-get event :id)))
+      (benedict-provider-openrouter--state-update
+       request-id :raw-last event)
+      (if-let ((error-block (plist-get event :error)))
+          (benedict-provider-openrouter--stream-handle-error context error-block nil)
+        (progn
+          (when-let ((model (plist-get event :model)))
+            (benedict-provider-openrouter--state-update request-id :model model))
+          (when remote-id
+            (benedict-provider-openrouter--state-update request-id :remote-id remote-id))
+          (when-let ((usage (plist-get event :usage)))
+            (benedict-provider-openrouter--state-update request-id :usage usage))
+          (let ((choices (benedict-provider-openrouter--normalize-seq
+                          (plist-get event :choices))))
+            (cond
+             (choices
+              (let* ((normalized (benedict-provider-openrouter--normalize-delta-choices
+                                  context choices))
+                     (reasoning-count (apply #'+ (mapcar
+                                                  (lambda (choice)
+                                                    (length (benedict-provider-openrouter--normalize-seq
+                                                             (plist-get (plist-get choice :delta)
+                                                                        :reasoning_details))))
+                                                  normalized))))
+                (benedict-provider-log-trace
+                 'openrouter :stream-delta
+                 :request-id request-id
+                 :remote-id remote-id
+                 :choices (length normalized)
+                 :reasoning reasoning-count)
+                (when (functionp (plist-get context :on-delta))
+                  (let ((payload (benedict-provider-openrouter--stream-build-delta-payload
+                                  context event normalized)))
+                    (funcall (plist-get context :on-delta) payload)))))
+             ((benedict-provider-openrouter--stream-handle-reasoning-event
+               context event)
+              nil))))))))
 
 (defun benedict-provider-openrouter--stream-handle-reasoning-event (context event)
   "Handle reasoning-only EVENT by emitting a synthetic delta.
@@ -543,27 +623,36 @@ Returns non-nil when a delta was dispatched."
 
 (defun benedict-provider-openrouter--register-reasoning-id (context id)
   "Register reasoning ID for CONTEXT and return its index."
-  (let ((order (plist-get context :reasoning-order)))
+  (let* ((state (benedict-provider-openrouter--state-get
+                 (plist-get context :request-id)))
+         (order (plist-get state :reasoning-order)))
     (unless (cl-member id order :test #'equal)
       (setq order (append order (list id)))
-      (setf (plist-get context :reasoning-order) order))
+      (benedict-provider-openrouter--state-update
+       (plist-get context :request-id) :reasoning-order order))
     (cl-position id order :test #'equal)))
 
 (defun benedict-provider-openrouter--next-reasoning-id (context)
   "Return a new reasoning identifier for CONTEXT."
-  (let ((counter (or (plist-get context :reasoning-counter) 0)))
-    (setf (plist-get context :reasoning-counter) (1+ counter))
+  (let* ((state (benedict-provider-openrouter--state-get
+                 (plist-get context :request-id)))
+         (counter (or (plist-get state :reasoning-counter) 0)))
+    (benedict-provider-openrouter--state-update
+     (plist-get context :request-id) :reasoning-counter (1+ counter))
     (format "%s-thinking-%d" (plist-get context :request-id) counter)))
 
 (defun benedict-provider-openrouter--accumulate-reasoning-entry (context detail)
   "Accumulate DETAIL chunks into CONTEXT final reasoning state."
-  (let* ((entries (plist-get context :reasoning-entries))
+  (let* ((state (benedict-provider-openrouter--state-get
+                 (plist-get context :request-id)))
+         (entries (plist-get state :reasoning-entries))
          (id (plist-get detail :id))
          (existing (cl-assoc id entries :test #'equal)))
     (unless existing
       (setq existing (cons id (copy-tree detail t)))
       (push existing entries)
-      (setf (plist-get context :reasoning-entries) entries))
+      (benedict-provider-openrouter--state-update
+       (plist-get context :request-id) :reasoning-entries entries))
     (dolist (key '(:text :summary :data))
       (when-let ((chunk (plist-get detail key)))
         (let ((current (plist-get (cdr existing) key)))
@@ -574,12 +663,12 @@ Returns non-nil when a delta was dispatched."
 (defun benedict-provider-openrouter--accumulate-message-from-delta (context delta)
   "Append assistant message text from DELTA for CONTEXT."
   (when-let ((role (plist-get delta :role)))
-    (setf (plist-get context :role)
-          (intern (downcase (format "%s" role)))))
+    (benedict-provider-openrouter--state-update
+     (plist-get context :request-id)
+     :role (intern (downcase (format "%s" role)))))
   (let ((text (benedict-provider-openrouter--delta-text delta)))
     (when (and text (not (string-empty-p text)))
-      (setf (plist-get context :message-chunks)
-            (cons text (plist-get context :message-chunks)))
+      (benedict-provider-openrouter--state-push* context :message-chunks text)
       text)))
 
 (defun benedict-provider-openrouter--delta-text (delta)
@@ -606,11 +695,13 @@ Returns non-nil when a delta was dispatched."
 
 (defun benedict-provider-openrouter--store-final-message (context message)
   "Remember final MESSAGE for CONTEXT if present."
-  (setf (plist-get context :final-message) message)
+  (benedict-provider-openrouter--state-update
+   (plist-get context :request-id) :final-message message)
   (when-let ((content (plist-get message :content)))
     (cond
      ((stringp content)
-      (setf (plist-get context :final-message-text) content))
+      (benedict-provider-openrouter--state-update
+       (plist-get context :request-id) :final-message-text content))
      (content
       (let ((text (mapconcat
                    (lambda (entry)
@@ -619,17 +710,20 @@ Returns non-nil when a delta was dispatched."
                       ((listp entry) (or (plist-get entry :text) ""))
                       (t "")))
                    (benedict-provider-openrouter--normalize-seq content) "")))
-        (setf (plist-get context :final-message-text) text))))))
+        (benedict-provider-openrouter--state-update
+         (plist-get context :request-id) :final-message-text text))))))
 
 (defun benedict-provider-openrouter--stream-build-delta-payload (context event choices)
   "Build delta payload for CONTEXT using EVENT and normalized CHOICES."
   (let ((payload (copy-tree event t)))
     (plist-put payload :provider 'openrouter)
     (plist-put payload :model (or (plist-get payload :model)
-                                  (plist-get context :model)
+                                  (benedict-provider-openrouter--state-get*
+                                   context :model)
                                   benedict-provider-openrouter-default-model))
     (when-let ((usage (or (plist-get event :usage)
-                          (plist-get context :usage))))
+                          (benedict-provider-openrouter--state-get*
+                           context :usage))))
       (plist-put payload :usage usage))
     (plist-put payload :choices (apply #'vector choices))
     payload))
@@ -665,7 +759,14 @@ Returns non-nil when a delta was dispatched."
   "Emit an error for CONTEXT.
 ERROR-BLOCK is the parsed JSON block when available.  MESSAGE is a fallback string."
   (setf (plist-get context :stream-complete) t)
-  (let* ((payload (list :type 'stream
+  (let* ((request-id (plist-get context :request-id))
+         (state (benedict-provider-openrouter--state-get request-id))
+         (end-time (current-time))
+         (start-time (or (plist-get state :start-time)
+                         (plist-get context :start-time)))
+         (latency (and start-time
+                       (float-time (time-subtract end-time start-time))))
+         (payload (list :type 'stream
                         :provider 'openrouter
                         :message (or message
                                      (plist-get error-block :message)
@@ -674,48 +775,62 @@ ERROR-BLOCK is the parsed JSON block when available.  MESSAGE is a fallback stri
                         :status (plist-get error-block :status)
                         :retryable nil
                         :body (plist-get context :stdout-log))))
+    (benedict-provider-openrouter--state-update
+     request-id
+     :status :error
+     :error payload
+     :end-time end-time
+     :latency latency)
     (benedict-provider-log
      'openrouter 'error :stream-error
-     :request-id (plist-get context :request-id)
+     :request-id request-id
+     :remote-id (plist-get state :remote-id)
      :message (plist-get payload :message)
      :code (plist-get payload :code))
     (benedict-provider-openrouter--stream-cleanup context)
+    (benedict-provider-openrouter--state-clear request-id)
     (when (functionp (plist-get context :on-error))
       (funcall (plist-get context :on-error) payload))))
 
 (defun benedict-provider-openrouter--finalize-stream (context)
   "Finalize streaming CONTEXT and deliver completion callback."
   (let* ((request-id (plist-get context :request-id))
-         (chunks (plist-get context :message-chunks))
-         (content (or (plist-get context :final-message-text)
+         (state (benedict-provider-openrouter--state-get request-id))
+         (chunks (plist-get state :message-chunks))
+         (content (or (plist-get state :final-message-text)
                       (mapconcat #'identity (nreverse chunks) "")))
-         (role (or (plist-get context :role) 'assistant))
-         (message (or (plist-get context :final-message)
+         (role (or (plist-get state :role) 'assistant))
+         (message (or (plist-get state :final-message)
                       (list :role role :content content)))
          (thinking (benedict-provider-openrouter--finalize-reasoning context))
-         (usage (or (plist-get context :usage)
-                    (and request-id
-                         (gethash request-id benedict-provider-openrouter--usage-table))))
-         (latency (float-time (time-subtract (current-time)
-                                             (plist-get context :start-time))))
+         (end-time (current-time))
+         (start-time (or (plist-get state :start-time)
+                         (plist-get context :start-time)))
+         (latency (if start-time
+                      (float-time (time-subtract end-time start-time))
+                    0.0))
          (result (list :message message
-                       :model (or (plist-get context :model)
+                       :model (or (plist-get state :model)
                                   benedict-provider-openrouter-default-model)
                        :provider 'openrouter
-                       :usage usage
+                       :usage (plist-get state :usage)
                        :thinking thinking
                        :latency latency
-                       :raw (plist-get context :raw-last)
+                       :raw (plist-get state :raw-last)
                        :empty-response (string-empty-p (or content "")))))
-    (when request-id
-      (remhash request-id benedict-provider-openrouter--usage-table))
+    (benedict-provider-openrouter--state-update request-id
+                                                :status :completed
+                                                :end-time end-time
+                                                :latency latency)
     (benedict-provider-log
      'openrouter 'info :stream-complete
      :request-id request-id
+     :remote-id (plist-get state :remote-id)
      :latency latency
      :model (plist-get result :model)
      :content-bytes (length (or content "")))
     (benedict-provider-openrouter--stream-cleanup context)
+    (benedict-provider-openrouter--state-clear request-id)
     (let ((on-complete (plist-get context :on-complete))
           (on-success (plist-get context :on-success)))
       (cond
@@ -724,8 +839,10 @@ ERROR-BLOCK is the parsed JSON block when available.  MESSAGE is a fallback stri
 
 (defun benedict-provider-openrouter--finalize-reasoning (context)
   "Return accumulated reasoning payload for CONTEXT."
-  (let ((order (plist-get context :reasoning-order))
-        (entries (plist-get context :reasoning-entries)))
+  (let* ((state (benedict-provider-openrouter--state-get
+                 (plist-get context :request-id)))
+         (order (plist-get state :reasoning-order))
+         (entries (plist-get state :reasoning-entries)))
     (when (and order entries)
       (let (result)
         (dolist (id order (nreverse result))
@@ -818,7 +935,9 @@ ERROR-BLOCK is the parsed JSON block when available.  MESSAGE is a fallback stri
 
 (defun benedict-provider-openrouter--handle-success (context status-code parsed body)
   "Handle PARSED success payload (STATUS-CODE, BODY) using CONTEXT."
-  (let* ((choices (or (benedict-provider-openrouter--aget "choices" parsed) '()))
+  (let* ((request-id (plist-get context :request-id))
+         (state (benedict-provider-openrouter--state-get request-id))
+         (choices (or (benedict-provider-openrouter--aget "choices" parsed) '()))
          (first (car choices))
          (message (and first (benedict-provider-openrouter--aget "message" first)))
          (decoded-message (if message
@@ -827,8 +946,12 @@ ERROR-BLOCK is the parsed JSON block when available.  MESSAGE is a fallback stri
          (usage (benedict-provider-openrouter--aget "usage" parsed))
          (model (or (benedict-provider-openrouter--aget "model" parsed)
                     benedict-provider-openrouter-default-model))
-         (latency (float-time (time-subtract (current-time)
-                                             (plist-get context :start-time))))
+         (end-time (current-time))
+         (start-time (or (plist-get state :start-time)
+                         (plist-get context :start-time)))
+         (latency (if start-time
+                      (float-time (time-subtract end-time start-time))
+                    0.0))
          (empty-response (string-empty-p (or (plist-get decoded-message :content) "")))
          (result (list :message decoded-message
                        :usage usage
@@ -839,9 +962,12 @@ ERROR-BLOCK is the parsed JSON block when available.  MESSAGE is a fallback stri
                        :raw parsed
                        :empty-response empty-response))
          (log-level (if empty-response 'warn 'info)))
+    (benedict-provider-openrouter--state-update
+     request-id :usage usage :model model :latency latency
+     :status :completed :end-time end-time)
     (benedict-provider-log
      'openrouter log-level :completion
-     :request-id (plist-get context :request-id)
+     :request-id request-id
      :attempt (plist-get context :attempt)
      :status status-code
      :model model
@@ -852,7 +978,8 @@ ERROR-BLOCK is the parsed JSON block when available.  MESSAGE is a fallback stri
     (if (functionp (plist-get context :on-complete))
         (funcall (plist-get context :on-complete) result)
       (when (functionp (plist-get context :on-success))
-        (funcall (plist-get context :on-success) result)))))
+        (funcall (plist-get context :on-success) result)))
+    (benedict-provider-openrouter--state-clear request-id)))
 
 (defun benedict-provider-openrouter--handle-api-error (context status-code error-block body)
   "Handle API ERROR-BLOCK with STATUS-CODE/BODY."
@@ -894,6 +1021,10 @@ ERROR-BLOCK is the parsed JSON block when available.  MESSAGE is a fallback stri
              (next (copy-sequence context)))
         (setq next (plist-put next :attempt (1+ attempt)))
         (setq next (plist-put next :start-time (current-time)))
+        (benedict-provider-openrouter--state-update
+         (plist-get context :request-id)
+         :status :retrying
+         :start-time (plist-get next :start-time))
         (benedict-provider-log-debug
          'openrouter :retry
          :request-id (plist-get context :request-id)
@@ -924,7 +1055,18 @@ ERROR-BLOCK is the parsed JSON block when available.  MESSAGE is a fallback stri
 
 (defun benedict-provider-openrouter--emit-error (context payload)
   "Invoke the CONTEXT on-error handler with PAYLOAD."
-  (let ((handler (plist-get context :on-error)))
+  (let* ((handler (plist-get context :on-error))
+         (request-id (plist-get context :request-id))
+         (state (benedict-provider-openrouter--state-get request-id))
+         (end-time (current-time))
+         (start-time (or (plist-get state :start-time)
+                         (plist-get context :start-time)))
+         (latency (and start-time
+                       (float-time (time-subtract end-time start-time)))))
+    (when request-id
+      (benedict-provider-openrouter--state-update
+       request-id :status :error :error payload :end-time end-time :latency latency)
+      (benedict-provider-openrouter--state-clear request-id))
     (when (functionp handler)
       (funcall handler payload))))
 

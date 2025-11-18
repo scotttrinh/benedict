@@ -1,0 +1,23 @@
+#+title: Notes – OpenRouter State Registry Refactor
+#+date: 2025-11-18
+
+* What changed
+- Introduced a single in-memory registry (~benedict-provider-openrouter--state-table~) keyed by a log-friendly request id (timestamp + random suffix).
+- All streaming state now lives in the registry: model/provider, start/end times, latency, message chunks, reasoning entries, usage, raw last payload, remote-id, status/error.
+- Streaming handlers update state via helpers (~--state-update/~--state-push~); finalize/error/HTTP paths read from state, compute latency, and clear the entry for GC.
+- Registry handles both streaming and non-streaming paths; retries reset the start-time and mark ~:status :retrying~.
+- Added tests for stateful streaming finalization and request-id shape; test runner now uses ~load-prefer-newer t~ to avoid stale .elc.
+
+* Why
+- Usage/latency/remote-id were getting lost between SSE deltas and finalization because state was split between ad hoc plists and a usage-only map.
+- Needed consistent cleanup to avoid leaks and ensure headers show usage/latency reliably.
+
+* Takeaways
+- Keep per-request state in one place; avoid mixing context plist + side maps.
+- Prefer internal IDs for hash keys, stash remote IDs as metadata (no re-keying needed).
+- Stale byte-compiled files can shadow new defs; set ~load-prefer-newer~ in test runner and consider clearing .elc for local runs.
+- Push helper (~--state-push*~) is necessary for list fields; forgetting it silently drops streamed chunks.
+
+* Verification
+- ~emacs -Q --batch -L . -l test/run-tests.el~ (passes all tests).
+- Manual: removing stale ~.elc~ eliminated “void variable state-table” error; streaming now shows usage in headers. 
