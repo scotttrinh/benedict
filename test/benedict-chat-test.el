@@ -317,5 +317,53 @@
       (when (buffer-live-p buffer)
         (kill-buffer buffer)))))
 
+(ert-deftest-async benedict-chat-compose-sends-context (done)
+  "Compose buffers include context slices in outgoing messages."
+  (let ((benedict-provider 'fake)
+        (benedict-provider-fake-latency-seconds 0.01)
+        (benedict-provider-fake-script (list (list :type 'success :delay 0.01)))
+        (benedict-chat-buffer-name " *Benedict Compose Flow*"))
+    (let ((source (generate-new-buffer " *Benedict Compose Source*")))
+      (with-current-buffer source
+        (insert "Compose region text.")
+        (push-mark (point-min) nil t)
+        (goto-char (point-max)))
+      (with-current-buffer source
+        (let ((mark-active t)
+              (transient-mark-mode t))
+          (benedict-chat-ask-region (point-min) (point-max))))
+      (let* ((chat (get-buffer benedict-chat-buffer-name))
+             (compose (and chat (with-current-buffer chat benedict-chat--compose-buffer))))
+        (should (buffer-live-p compose))
+        (with-current-buffer compose
+          (goto-char (point-max))
+          (unless (bolp) (insert "\n"))
+          (insert "What do you see?"))
+        (with-current-buffer compose
+          (benedict-chat-compose-send))
+        (let ((deadline (+ (float-time) 2.0)))
+          (while (and (buffer-live-p chat)
+                      (with-current-buffer chat benedict-chat--pending-request)
+                      (< (float-time) deadline))
+            (sleep-for 0.05)
+            (accept-process-output nil 0.05))
+          (unwind-protect
+              (when (buffer-live-p chat)
+                (with-current-buffer chat
+                  (let* ((user (cl-find-if (lambda (msg)
+                                             (eq (plist-get msg :role) 'user))
+                                           benedict-chat--messages))
+                         (assistant (benedict-chat--find-last-assistant t)))
+                    (should user)
+                    (should (string-match-p "Context:" (plist-get user :content)))
+                    (should (string-match-p "Compose region text" (plist-get user :content)))
+                    (should (string-match-p "What do you see" (plist-get user :content)))
+                    (should assistant)
+                    (should (string-match-p "Context:" (plist-get assistant :content))))))
+            (when (buffer-live-p chat)
+              (kill-buffer chat))
+            (when (buffer-live-p source)
+              (kill-buffer source))))
+        (funcall done)))))
 (provide 'benedict-chat-test)
 ;;; benedict-chat-test.el ends here

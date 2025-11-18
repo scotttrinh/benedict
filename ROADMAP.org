@@ -29,7 +29,7 @@ Deliverables:
 Acceptance:
 - README.org and this ROADMAP.org merged; example snippets compile in isolation
 
-* Phase 1 — Package Skeleton & Echo Provider
+* Phase 1 — Package Skeleton & Echo Provider [DONE]
 Tasks:
 - Create benedict.el with autoloads, defgroup, faces, keymaps, error types
 - benedict-chat-mode: buffer creation, message rendering (simple), send command
@@ -41,7 +41,7 @@ Acceptance:
 - benedict-ask-region sends region and shows response; no network required
 - Tools can be listed and invoked; approval UI shows a placeholder dialog
 
-* Phase 2 — First Real Provider (non-streaming)
+* Phase 2 — First Real Provider (non-streaming) [DONE]
 Tasks:
 - OpenRouter backend using url-retrieve; error handling; retries with backoff
 - Auth integration: auth-source search; env var fallback; redact in messages
@@ -54,7 +54,7 @@ Acceptance:
 - Per-project settings respected; context preview before send togglable
 - Errors are surfaced inline with actionable messages
 
-* Phase 3 — Streaming & Rendering
+* Phase 3 — Streaming & Rendering [DONE]
 Tasks:
 - SSE via make-process + curl -N or provider-native streams; chunk parser
 - Incremental rendering with throttling; cursor stability; cancel/timeout
@@ -68,7 +68,7 @@ Acceptance:
 - Typed items render as distinct blocks (messages vs thinking vs tools vs plans); folding and buttons work; copy/apply actions operate on the correct regions
 - Code fences font-lock in streaming content; markdown-lite decoration is incremental and does not re-fontify the entire buffer
 
-* Phase 4 — Context & Project Integration
+* Phase 4 — Context & Project Integration [IN PROGRESS]
 Tasks:
 - Commands: ask region/defun/buffer/project; keymap prefix (default C-c b)
 - xref/imenu/treesit context providers; configurable slice sizes; elide large files

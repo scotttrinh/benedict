@@ -1,0 +1,155 @@
+#+TITLE: Plan — Phase 4 (Context & Project Integration)
+#+AUTHOR: Benedict maintainers
+#+LANGUAGE: en
+#+OPTIONS: toc:2 num:t ^:{}
+
+* Objective
+Allow users to add Emacs context (buffers, regions, defs, and basic Git/project info) into Benedict chat conversations in a controlled way, using a capture-style compose buffer with full editing capabilities, and ensure that this context is included in the next user message sent to the provider without changing provider APIs.
+
+* Scope (per ROADMAP Phase 4, minimally scoped)
+- Ask-style commands that can add the current region/defun/buffer/project to the “next message” context of a chat thread, separate from commands that open chat buffers.
+- Context representation as “slices” (e.g., buffer regions, files, diffs) that are inserted into a per-message compose buffer as structured, editable text (rather than rendered only via overlays in the chat buffer).
+- A simple compose flow similar to Org-capture:
+  - A dedicated compose buffer per “next message” with a small header section (profile, project, context summary) and an editable body.
+  - Commands to send (=C-c C-c=) or cancel (=C-c C-k=) the composed message back to the chat thread.
+- Simple Git context using Magit where available (current branch, basic staged/unstaged diffs), exposed as slices and inserted into the compose buffer.
+- Minimal profile support (planning/coding/writing/review) that influences system prompt or user message preamble, with per-project sensible defaults.
+- Tests using the fake provider to assert that context slices are included in outgoing user messages, plus unit tests for key context helpers.
+
+Out of scope for this phase:
+- Deep language-aware context (full xref/imenu/treesit graph traversal); we only need a minimal mechanism that can be extended later.
+- Advanced project-wide search tooling or heavy profile UX; these can build on the context model in later phases.
+
+* Success Criteria
+- Users can call “ask region/defun/buffer/project” style commands that:
+  - Either open (or reuse) a Benedict chat buffer and
+  - Ensure a compose buffer exists for the thread and insert selected Emacs context slices into its body as editable text.
+- The compose buffer:
+  - Shows a short header (profile, project, total context size) above the editable body.
+  - Contains labeled, truncated snippets of each context slice (file/buffer/defun, Git diff, etc.) with approximate byte sizes.
+  - Allows users to freely edit or delete context text before sending.
+- When the user sends the next prompt from the compose buffer, the provider receives a user message whose text clearly includes the selected context (e.g., a “Context:” section with the concatenated slices) along with the user’s natural-language prompt.
+- Profiles can be selected for a chat/thread and change the system/preamble text in a visible way; per-project defaults are honored.
+- ERT/Buttercup tests using the fake provider verify:
+  - Context slices are correctly constructed and stored.
+  - The final user message payload contains content from the selected slices.
+  - The compose flow creates/sends messages cleanly without breaking chat buffer interactions.
+
+* Architecture & Interfaces
+** Context Model
+- Introduce a generic “context slice” representation (likely a plist) with fields such as:
+  - =:id= (identifier for toggling/removal within the UI)
+  - =:kind= (one of =buffer=, =region=, =defun=, =file=, =git-diff=, etc.)
+  - =:label= (human-readable label for preview, e.g., “foo.el: lines 10–60”)
+  - =:origin= (buffer/file name, project root, git ref)
+  - =:content= (string for sending; may already be truncated)
+  - =:size-bytes= (approximate byte size of =:content= before truncation)
+  - =:truncated-p= (non-nil if content was cut for size limits)
+- Store a list of slices in chat-thread-local or compose-buffer-local state, so multiple “add context” commands accumulate into a single pending context pack for the next message.
+- Provide helper functions:
+  - =benedict-context-make-slice= (constructor from buffer/region/file/diff).
+  - =benedict-context-total-size= (sum of slice sizes).
+  - =benedict-context-format-for-compose= and =benedict-context-format-for-send= (produce strings for insertion into the compose buffer and for inclusion in the user message).
+
+** Compose Buffer Flow
+- Introduce a dedicated compose buffer per chat thread/message, e.g., =*Benedict Compose: <thread-name>=, with a simple major mode (e.g., =benedict-chat-compose-mode=) derived from =text-mode=.
+- Layout:
+  - A small, mostly-read-only header section showing the active profile, project root, and a summary of the current context (number of slices and approximate total size).
+  - A separator line (e.g., =----=).
+  - A writable body section where context slices are inserted and where the user types the prompt.
+- Key commands:
+  - =C-c C-c= to send the composed message to the chat thread (creating a user message and then killing or reusing the compose buffer).
+  - =C-c C-k= to cancel composition without sending.
+- The compose buffer becomes the central place where context is previewed and edited; the main chat buffer remains focused on rendered conversation history and streaming.
+
+** Context Collection Commands
+- New interactive commands (names tentative, refined when coded):
+  - =benedict-chat-add-region-context=: add the active region (or signal if none).
+  - =benedict-chat-add-defun-context=: add the defun at point (based on major mode helpers or a simple =beginning-of-defun/end-of-defun= fallback).
+  - =benedict-chat-add-buffer-context=: add the visible portion or entire buffer as a slice (with truncation).
+  - =benedict-chat-add-project-context=: add a coarse project slice (e.g., a short project summary plus a list of key files, or a placeholder to be expanded in later phases).
+  - =benedict-chat-add-git-context=: collect Git context via Magit for the current project (current branch name and a short staged/unstaged diff string; keep it small).
+- Each command:
+  - Resolves or creates the target Benedict chat buffer (reusing an existing thread when appropriate).
+  - Ensures a compose buffer is available for that thread (creating or focusing it).
+  - Computes one or more slices based on the current Emacs context.
+  - Appends those slices to the pending context list and inserts their formatted text into the compose buffer body at a sensible location.
+- Keyboard bindings will follow project conventions (prefix under =benedict-mode=), but for this phase the exact key sequences are lower priority than the functionality and can be iterated later.
+
+** Context Preview UI (via Compose Buffer)
+- Rather than a complex overlay-based preview inside the main chat buffer, the compose buffer itself serves as the preview and staging area:
+  - Context slices are inserted as labeled, human-readable blocks in the body.
+  - Large slices are truncated according to configurable limits, with explicit “truncated” markers and byte-size metadata.
+  - Users can freely edit or delete these blocks before sending; no special toggles are required.
+- We may still add lightweight summary lines or markers in the chat buffer in later phases, but for Phase 4 the primary UX is compose-centric.
+
+** Message Assembly (Sending)
+- When a user sends a prompt from the compose buffer:
+  - Read the current list of context slices from the compose/thread state.
+  - Format them into a “Context:” section string via =benedict-context-format-for-send=.
+  - Combine the context string and the user’s prompt text (already present in the compose buffer body) into a single user message body; for example:
+    - Optional profile/system preamble.
+    - “Context:” block with labeled slices.
+    - “User prompt:” text as written by the user.
+- Provider APIs remain unchanged:
+  - We still send a user role message with a single =:content= string that now embeds the context.
+  - Providers are unaware of the context model and simply see more text.
+- After sending:
+  - Optionally keep slices attached to the thread (so follow-up prompts see the same context) or clear them after a successful send; default behavior to be simple and configurable later.
+  - Kill or reset the compose buffer according to the chosen UX (start simple: kill on send, recreate on next compose).
+
+** Profiles & Per-Project Defaults (Minimal)
+- Introduce a simple profiles data structure (alist or plist) mapping profile IDs (e.g., =planning=, =coding=, =writing=, =review=) to:
+  - A short name/label.
+  - A system/preamble string to prepend to chat messages.
+- Implement:
+  - A buffer-local =benedict-chat-profile= or similar variable.
+  - A simple interactive command to choose/switch profile for the current chat.
+- Per-project defaults:
+  - Use project-local variables (e.g., via =project.el= and/or =.dir-locals.el=) to set the default profile for a given project.
+  - Keep configuration surface minimal (one or two defcustoms for mapping project roots or major modes to default profiles).
+
+* Testing Strategy
+- Fake provider integration tests:
+  - Extend or add tests so that when a context slice is attached and a prompt is sent, the fake provider sees a user message whose text contains expected markers/labels from the context.
+  - Verify that truncation rules are respected in what is sent (e.g., very long buffers produce truncated context text).
+  - Assert that the context preview block appears in the chat buffer and updates when slices are added/removed (using buffer text + text properties where practical).
+- Unit tests:
+  - =benedict-context-make-slice= correctly builds slice plists for buffers/regions with accurate size accounting and truncation.
+  - Formatting helpers produce predictable preview/send strings (whitespace and labels stable).
+  - Profile selection applies expected preambles to outgoing messages.
+- Manual smoke tests (documented later in Notes_Phase_4):
+  - Add region/buffer from a small file, send prompt, and visually inspect the outgoing message and provider response.
+  - Add a very large buffer/file and confirm preview truncation and byte-size reporting.
+  - Add Git context on a repo with staged/unstaged changes and confirm that branch name and short diffs appear in both preview and sent text.
+
+* Workstreams & Tasks
+1. Context slice model
+   - Define slice structure and helper functions for construction, aggregation, and formatting.
+   - Integrate thread- or compose-local storage of slice lists into chat/compose state.
+2. Compose buffer flow
+   - Implement the compose buffer major mode, header/body layout, and send/cancel commands.
+   - Wire it up so chats can open or reuse a compose buffer for the next message.
+3. Ask/context commands
+   - Implement region/defun/buffer/project/Git context commands that create slices and insert them into the compose buffer.
+   - Ensure they can create/reuse both the chat buffer and the compose buffer cleanly.
+4. Message assembly
+   - Wire pre-send hook/path that folds slices and profiles into outgoing user message text without touching provider APIs.
+   - Decide and implement default behavior for clearing or retaining slices after send.
+5. Profiles (minimal)
+   - Define profile data structure and defaults (planning/coding/writing/review).
+   - Implement profile selection and per-project defaults via project-local configuration.
+6. Testing
+   - Add/extend fake provider tests for context inclusion.
+   - Add unit tests for slice construction/formatting and profile application.
+7. Docs & devlogs
+   - Update ROADMAP/README to mention context capabilities at a high level (status already marked as in-progress).
+   - Add Notes_Phase_4 devlogs as implementation lands, describing decisions and follow-ups.
+
+* Exit Checklist
+- [ ] Context slice model exists with helpers to construct/format slices and compute sizes.
+- [ ] Compose buffer flow exists and can send/cancel messages for a chat thread.
+- [ ] Ask/context commands can add region/defun/buffer/project/Git slices into the compose buffer for the current chat thread.
+- [ ] Outgoing user messages include a clearly labeled context section with the selected slices, verified via fake provider tests.
+- [ ] Profiles are available and can be set per chat, influencing the message preamble; per-project defaults work for at least one project configuration path.
+- [ ] Tests pass and basic manual workflows (add region/buffer/git context + send) behave as expected.
