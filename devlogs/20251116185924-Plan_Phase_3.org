@@ -53,6 +53,7 @@ Deliver a streaming-first chat experience: OpenRouter responses should arrive in
 5. Modeline status + telemetry: spinner, elapsed time, usage/tokens, provider label; ensure updates triggered during events.
 6. Fake provider + tests: scripted streaming responses, cancellation harness, ERT coverage for chunk assembly and code-block actions.
 7. Documentation/devlog updates: README streaming instructions, devlog notes for major milestones, and sanity-check instructions for cancel/copy/apply.
+8. Follow-up (Phase 6): wire the clickable provider/model segment into the provider registry/model picker once multi-provider support exists.
 
 * Exit Checklist
 - [ ] Provider dispatch supports :on-delta/:on-complete, and both providers upgraded plus documented.

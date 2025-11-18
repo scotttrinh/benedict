@@ -60,7 +60,8 @@ Tasks:
 - Incremental rendering with throttling; cursor stability; cancel/timeout
 - Introduce typed chat items (message, thinking, tool-call, tool-result, plan, status) with per-item markers and renderers; markdown-lite applies only to message-like content
 - Code block rendering; language detection from fences; actions: copy/apply-snippet; folding overlays and buttons for thinking/tool/plan blocks
-- Modeline status: tokens (if available), duration, provider name
+- TODO: Fenced code blocks reuse per-language prog-mode font-lock (indirect/narrowed buffer) and copy faces back into chat buffers
+- Modeline status: tokens (if available), duration, provider name; provider/model segment is clickable and will open a model picker menu (stub in Phase 3, wired up when provider registry/multi-model support lands)
 - UI tests: drive typed item rendering and folding/buttons using the fake provider with scripted streaming events, tool calls, and plan updates; assert buffer layout and text properties in ERT/Buttercup tests
 Acceptance:
 - Streaming feels smooth; cancel works reliably; no UI stutter on large outputs
@@ -72,7 +73,7 @@ Tasks:
 - Commands: ask region/defun/buffer/project; keymap prefix (default C-c b)
 - xref/imenu/treesit context providers; configurable slice sizes; elide large files
 - Git context: current branch, staged/unstaged diffs; preview what will be sent
-- Profiles: coding/writing/review; system prompts; per-project defaults
+- Profiles: planning/coding/writing/review; system prompts; per-project defaults
 Acceptance:
 - Context_pack preview shows what will be sent; toggles apply; provider receives slices
 - Ask commands aware of region/defun; responses differ by profile
@@ -89,9 +90,10 @@ Acceptance:
 
 * Phase 6 — Multi‑Provider & Local Models
 Tasks:
-- Provider registry, selection, feature flags (tools, images, long contexts)
+- Provider and model registry, selection, feature flags (tools, images, long contexts)
 - Anthropic/OpenRouter; local OpenAI‑compatible (vLLM, llama.cpp server)
 - Capability discovery; graceful degradation if a feature is unavailable
+- Can assign certain provider/model to certain profiles by default.
 Acceptance:
 - Switching providers is one command/customize; features adapt without errors
 

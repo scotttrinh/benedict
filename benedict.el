@@ -53,6 +53,42 @@
   '((t :inherit shadow))
   "Face for divider lines separating chat blocks.")
 
+(defface benedict-chat-body
+  '((t :inherit variable-pitch))
+  "Face for prose content in chat messages.")
+
+(defface benedict-chat-heading-1
+  '((t :inherit (org-level-1 variable-pitch) :weight bold))
+  "Face for top-level markdown headings in chat messages.")
+
+(defface benedict-chat-heading-2
+  '((t :inherit (org-level-2 variable-pitch) :weight bold))
+  "Face for second-level markdown headings in chat messages.")
+
+(defface benedict-chat-heading-3
+  '((t :inherit (org-level-3 variable-pitch) :weight bold))
+  "Face for third-level markdown headings in chat messages.")
+
+(defface benedict-chat-list-bullet
+  '((t :inherit (org-list-dt variable-pitch)))
+  "Face for list bullets and markers in chat messages.")
+
+(defface benedict-chat-inline-code
+  '((t :inherit (fixed-pitch org-code)))
+  "Face for inline code spans in chat messages.")
+
+(defface benedict-chat-strong
+  '((t :inherit (org-bold bold)))
+  "Face for bold emphasis in chat messages.")
+
+(defface benedict-chat-emphasis
+  '((t :inherit (org-italic italic)))
+  "Face for italic emphasis in chat messages.")
+
+(defface benedict-chat-link
+  '((t :inherit (org-link link) :weight semibold))
+  "Face for links in chat messages.")
+
 (defface benedict-chat-code-block
   '((t :inherit (fixed-pitch font-lock-string-face)))
   "Face for content inside fenced code blocks.")

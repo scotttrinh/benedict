@@ -1,0 +1,14 @@
+#+TITLE: Notes — Markdown-Lite styling and headers
+#+AUTHOR: Benedict maintainers
+#+LANGUAGE: en
+
+* Task
+Outline and implement richer markdown-lite styling for chat messages (variable-pitch prose, inline/heading/list/link emphasis) while keeping fenced code simple for now.
+
+* Plan
+1. Add Benedict-specific faces inheriting from Org (headings 1–3, body variable-pitch, inline code, emphasis/strong, link).
+2. Implement a markdown-lite decorator that applies a body face then decorates headings, lists, inline code, emphasis/strong, and links; keep fenced-code handling as-is (Copy/Apply buttons, fixed-pitch face).
+3. Wire decoration into message rendering/streaming: clear props → body face → fenced code → inline markdown passes; rerun on each flush for now.
+4. Add tests that assert markdown-lite faces on message content (headings, lists, inline code/emphasis/link) using fake provider or direct rendering.
+5. Add a ROADMAP TODO to revisit fenced code with per-language prog-mode font-lock in a later phase.
+6. Iterate on header aesthetics later (powerline-ish segments); current pass just prepares structure and faces.

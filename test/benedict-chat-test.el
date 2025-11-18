@@ -3,6 +3,7 @@
 (require 'ert)
 (require 'ert-async)
 (require 'cl-lib)
+(require 'subr-x)
 
 (let* ((root (file-name-directory (or load-file-name buffer-file-name)))
        (repo (expand-file-name ".." root)))
@@ -113,10 +114,78 @@
                    (should (equal (buffer-string) "(message \"hi\")\n"))))))
          (when (buffer-live-p buffer)
            (kill-buffer buffer))
-         (let ((apply-buffer (get-buffer benedict-chat-apply-buffer-name)))
+       (let ((apply-buffer (get-buffer benedict-chat-apply-buffer-name)))
            (when (buffer-live-p apply-buffer)
              (kill-buffer apply-buffer))))
        (funcall done)))))
+
+(ert-deftest benedict-chat-markdown-lite-decorates-messages ()
+  "Markdown-lite applies faces for headings, lists, inline code, emphasis, and links."
+  (let ((buffer (generate-new-buffer " *Benedict Chat Markdown*")))
+    (unwind-protect
+        (with-current-buffer buffer
+          (benedict-chat-mode)
+          (let* ((assistant (benedict-chat--record-message
+                             (list :role 'assistant
+                                   :content
+                                   (string-join
+                                    '("# Heading One"
+                                      "## Heading Two"
+                                      "- bullet item with [link](https://example.com)"
+                                      "Inline `code` with _italic_ and **strong** accents."
+                                      "```elisp"
+                                      "(message \"hi\")"
+                                      "```")
+                                    "\n")
+                                   :metadata nil)))
+                 (item (plist-get assistant :item))
+                 (content-start (and item (marker-position (plist-get item :content-start))))
+                 (content-end (and item (marker-position (plist-get item :content-end)))))
+            (should content-start)
+            (should content-end)
+            (goto-char content-start)
+            (search-forward "Heading One" content-end)
+            (let ((heading-pos (- (point) (length "Heading One"))))
+              (should (eq (get-text-property heading-pos 'face)
+                          'benedict-chat-heading-1)))
+            (goto-char content-start)
+            (search-forward "Heading Two" content-end)
+            (let ((heading-pos (- (point) (length "Heading Two"))))
+              (should (eq (get-text-property heading-pos 'face)
+                          'benedict-chat-heading-2)))
+            (goto-char content-start)
+            (search-forward "- bullet" content-end)
+            (let ((bullet-pos (- (point) (length "- bullet"))))
+              (should (eq (get-text-property bullet-pos 'face)
+                          'benedict-chat-list-bullet)))
+            (goto-char content-start)
+            (search-forward "code" content-end)
+            (let ((code-pos (- (point) (length "code"))))
+              (should (eq (get-text-property code-pos 'face)
+                          'benedict-chat-inline-code)))
+            (goto-char content-start)
+            (search-forward "strong" content-end)
+            (let ((strong-pos (- (point) (length "strong"))))
+              (should (eq (get-text-property strong-pos 'face)
+                          'benedict-chat-strong)))
+            (goto-char content-start)
+            (search-forward "italic" content-end)
+            (let ((italic-pos (- (point) (length "italic"))))
+              (should (eq (get-text-property italic-pos 'face)
+                          'benedict-chat-emphasis)))
+            (goto-char content-start)
+            (search-forward "[link]" content-end)
+            (let* ((link-pos (- (point) (length "link]")))
+                   (help (get-text-property link-pos 'help-echo)))
+              (should (eq (get-text-property link-pos 'face)
+                          'benedict-chat-link))
+              (should (string= help "https://example.com")))
+            (goto-char content-start)
+            (search-forward "(message \"hi\")" content-end)
+            (let ((code-pos (- (point) (length "(message \"hi\")"))))
+              (should (get-text-property code-pos 'benedict-chat-code-block)))))
+      (when (buffer-live-p buffer)
+        (kill-buffer buffer)))))
 
 (ert-deftest-async benedict-chat-thinking-blocks (done)
   "Scripted thinking entries render before the assistant response."

@@ -52,6 +52,17 @@ Each entry includes :role, :content, :time, optional :metadata, and UI state.")
   :type 'string
   :group 'benedict)
 
+(defcustom benedict-chat-token-display 'prompt+completion
+  "Control how token usage appears in chat status lines.
+Values:
+- prompt+completion: show prompt and completion counts (e.g., \"186p+126c\").
+- total: show a single total token count (e.g., \"312 tok\").
+- none: hide token usage entirely."
+  :type '(choice (const :tag "Prompt + completion" prompt+completion)
+                 (const :tag "Total tokens only" total)
+                 (const :tag "Hide token usage" none))
+  :group 'benedict)
+
 (defconst benedict-chat--block-divider-line
   (concat (make-string 60 ?-) "\n")
   "Divider line inserted before and after block sections.")
@@ -63,6 +74,24 @@ Each entry includes :role, :content, :time, optional :metadata, and UI state.")
 (defconst benedict-chat--empty-response-thinking-placeholder
   "Response finished with reasoning only; no assistant message."
   "Displayed when providers stream thinking without a final reply.")
+
+(defconst benedict-chat--spinner-frames ["◐" "◓" "◑" "◒"]
+  "Spinner frames used while a provider request is active.")
+
+(defvar benedict-chat--model-button-map
+  (let ((map (make-sparse-keymap)))
+    (define-key map [mode-line mouse-1] #'benedict-chat-choose-model)
+    (define-key map [header-line mouse-1] #'benedict-chat-choose-model)
+    (define-key map [down-mouse-1] #'benedict-chat-choose-model)
+    (define-key map (kbd "RET") #'benedict-chat-choose-model)
+    map)
+  "Keymap for clicking the provider/model display in status lines.")
+
+(defvar-local benedict-chat--telemetry nil
+  "Buffer-local telemetry for modeline/header-line status.")
+
+(defvar-local benedict-chat--status-timer nil
+  "Timer driving spinner/elapsed updates for the status line.")
 
 (defun benedict-chat--empty-response-text (thinking)
   "Return placeholder text for empty responses.
@@ -100,6 +129,262 @@ THINKING is non-nil when reasoning blocks accompanied the response."
         (or (benedict-provider-name provider)
             (symbol-name (benedict-provider-id provider))))
     (error "unknown provider")))
+
+(defun benedict-chat--telemetry-reset ()
+  "Initialize telemetry for the current chat buffer."
+  (setq benedict-chat--telemetry
+        (list :phase 'idle
+              :provider (benedict-chat--provider-label)
+              :model nil
+              :started-at nil
+              :last-phase nil
+              :last-usage nil
+              :last-elapsed nil
+              :session-usage nil
+              :spinner-index 0)))
+
+(defun benedict-chat--telemetry-update (&rest pairs)
+  "Merge PAIRS into the buffer-local telemetry plist."
+  (while pairs
+    (let ((key (pop pairs))
+          (value (pop pairs)))
+      (setq benedict-chat--telemetry
+            (plist-put benedict-chat--telemetry key value)))))
+
+(defun benedict-chat--telemetry-apply-metadata (metadata)
+  "Update telemetry with METADATA such as provider/model/usage."
+  (let ((provider (plist-get metadata :provider))
+        (model (plist-get metadata :model))
+        (usage (plist-get metadata :usage)))
+    (benedict-chat--telemetry-update
+     :provider (or provider (plist-get benedict-chat--telemetry :provider))
+     :model (or model (plist-get benedict-chat--telemetry :model))
+     :usage (or usage (plist-get benedict-chat--telemetry :usage)))))
+
+(defun benedict-chat--usage-number (usage key)
+  "Return numeric value for KEY (string or symbol) in USAGE."
+  (when-let ((val (benedict-chat--usage-value usage key)))
+    (if (stringp val) (string-to-number val) val)))
+
+(defun benedict-chat--usage-cost-number (usage)
+  "Return numeric cost from USAGE if present."
+  (or (benedict-chat--usage-number usage "cost")
+      (benedict-chat--usage-number usage "total_cost")))
+
+(defun benedict-chat--usage-accumulate (session usage)
+  "Return SESSION usage totals merged with USAGE numbers."
+  (let* ((prompt-old (or (plist-get session :prompt) 0))
+         (completion-old (or (plist-get session :completion) 0))
+         (total-old (or (plist-get session :total) 0))
+         (cost-old (or (plist-get session :cost) 0))
+         (prompt (or (benedict-chat--usage-number usage "prompt_tokens")
+                     (benedict-chat--usage-number usage "prompt")
+                     0))
+         (completion (or (benedict-chat--usage-number usage "completion_tokens")
+                         (benedict-chat--usage-number usage "completion")
+                         0))
+         (total (or (benedict-chat--usage-number usage "total_tokens")
+                    (benedict-chat--usage-number usage "tokens")
+                    (+ prompt completion)))
+         (cost (or (benedict-chat--usage-cost-number usage) 0)))
+    (list :prompt (+ prompt-old prompt)
+          :completion (+ completion-old completion)
+          :total (+ total-old total)
+          :cost (+ cost-old cost))))
+
+(defun benedict-chat--telemetry-accumulate-session (usage)
+  "Merge USAGE into session totals."
+  (when usage
+    (let ((session (plist-get benedict-chat--telemetry :session-usage)))
+      (benedict-chat--telemetry-update
+       :session-usage (benedict-chat--usage-accumulate session usage)))))
+
+(defun benedict-chat--telemetry-begin (request)
+  "Mark telemetry as sending REQUEST."
+  (benedict-chat--telemetry-update
+   :phase 'sending
+   :started-at (float-time)
+   :spinner-index 0
+   :usage nil)
+  (when-let ((model (plist-get request :model)))
+    (benedict-chat--telemetry-update :model model))
+  (benedict-chat--status-start-timer)
+  (benedict-chat--status-refresh))
+
+(defun benedict-chat--telemetry-streaming (payload)
+  "Mark telemetry as streaming using PAYLOAD metadata."
+  (benedict-chat--telemetry-apply-metadata payload)
+  (benedict-chat--telemetry-update :phase 'streaming)
+  (benedict-chat--status-start-timer)
+  (benedict-chat--status-refresh))
+
+(defun benedict-chat--telemetry-finish (kind metadata)
+  "Mark telemetry as idle after KIND with METADATA.
+KIND is one of 'complete, 'error, or 'canceled."
+  (benedict-chat--telemetry-apply-metadata metadata)
+  (let* ((elapsed (or (benedict-chat--status-elapsed)
+                      (plist-get benedict-chat--telemetry :last-elapsed)))
+         (usage (or (plist-get metadata :usage)
+                    (plist-get benedict-chat--telemetry :usage))))
+    (benedict-chat--telemetry-accumulate-session usage)
+    (benedict-chat--telemetry-update
+     :phase 'idle
+     :started-at nil
+     :usage nil
+     :spinner-index 0
+     :last-phase kind
+     :last-elapsed elapsed
+     :last-usage usage))
+  (benedict-chat--status-stop-timer)
+  (benedict-chat--status-refresh))
+
+(defun benedict-chat--status-active-p ()
+  "Return non-nil when telemetry indicates an active provider call."
+  (memq (plist-get benedict-chat--telemetry :phase) '(sending streaming)))
+
+(defun benedict-chat--status-stop-timer ()
+  "Cancel the status timer if present."
+  (when (timerp benedict-chat--status-timer)
+    (cancel-timer benedict-chat--status-timer))
+  (setq benedict-chat--status-timer nil))
+
+(defun benedict-chat--status-refresh ()
+  "Force status lines to update."
+  (force-mode-line-update t))
+
+(defun benedict-chat--status-tick (buffer)
+  "Advance spinner/elapsed for BUFFER and refresh status."
+  (when (buffer-live-p buffer)
+    (with-current-buffer buffer
+      (if (benedict-chat--status-active-p)
+          (progn
+            (let* ((index (or (plist-get benedict-chat--telemetry :spinner-index) 0))
+                   (next (1+ index)))
+              (benedict-chat--telemetry-update :spinner-index next))
+            (benedict-chat--status-refresh))
+        (benedict-chat--status-stop-timer)))))
+
+(defun benedict-chat--status-start-timer ()
+  "Ensure the spinner/elapsed timer is running for the current buffer."
+  (unless (timerp benedict-chat--status-timer)
+    (setq benedict-chat--status-timer
+          (run-with-timer 0.2 0.2 #'benedict-chat--status-tick (current-buffer)))))
+
+(defun benedict-chat--status-elapsed ()
+  "Return elapsed seconds for the current telemetry."
+  (let ((started (plist-get benedict-chat--telemetry :started-at)))
+    (when started
+      (- (float-time) started))))
+
+(defun benedict-chat--status-usage-string (usage)
+  "Format USAGE according to `benedict-chat-token-display', including cost."
+  (let (parts)
+    (pcase benedict-chat-token-display
+      ('none nil)
+      ('total
+       (let ((total (or (plist-get usage :total)
+                        (benedict-chat--usage-value usage "total_tokens")
+                        (benedict-chat--usage-value usage "tokens"))))
+         (when total
+           (push (format "%s tok" total) parts))))
+      ('prompt+completion
+       (let ((prompt (or (plist-get usage :prompt)
+                         (benedict-chat--usage-value usage "prompt_tokens")
+                         (benedict-chat--usage-value usage "prompt"))))
+         (let ((completion (or (plist-get usage :completion)
+                               (benedict-chat--usage-value usage "completion_tokens")
+                               (benedict-chat--usage-value usage "completion"))))
+           (cond
+            ((and prompt completion)
+             (push (format "%sp+%sc tok" prompt completion) parts))
+            (prompt (push (format "%sp tok" prompt) parts))
+            (completion (push (format "%sc tok" completion) parts)))))))
+    (when-let ((cost (or (plist-get usage :cost)
+                         (benedict-chat--usage-cost-number usage))))
+      (push (format "cost:$%.4f" cost) parts))
+    (when parts
+      (string-join (nreverse parts) " / "))))
+
+(defun benedict-chat--status-indicator (phase last-phase)
+  "Return the indicator glyph for PHASE using LAST-PHASE as a hint."
+  (pcase phase
+    ((or 'sending 'streaming)
+     (let* ((frames benedict-chat--spinner-frames)
+            (len (length frames))
+            (index (mod (or (plist-get benedict-chat--telemetry :spinner-index) 0) len)))
+       (aref frames index)))
+    ('complete "✔")
+    ('error "✖")
+    ('canceled "⨯")
+    (_ (pcase last-phase
+         ('complete "✔")
+         ('error "✖")
+         ('canceled "⨯")
+         (_ "·")))))
+
+(defun benedict-chat--status-phase-label (phase)
+  "Return a human-readable label for PHASE."
+  (pcase phase
+    ('sending "contacting")
+    ('streaming "streaming")
+    ('complete "completed")
+    ('error "error")
+    ('canceled "canceled")
+    (_ "idle")))
+
+(defun benedict-chat--status-provider-label (&optional clickable)
+  "Return provider/model label for the status line.
+When CLICKABLE is non-nil, attach button properties that run
+`benedict-chat-choose-model'."
+  (let* ((provider (or (plist-get benedict-chat--telemetry :provider)
+                       (benedict-chat--provider-label)))
+         (model (plist-get benedict-chat--telemetry :model))
+         (label (if model
+                    (format "%s:%s" provider model)
+                  (format "%s" provider))))
+    (if clickable
+        (propertize label
+                    'mouse-face 'mode-line-highlight
+                    'help-echo "Choose provider/model (stub; wired up in later phase)"
+                    'local-map benedict-chat--model-button-map)
+      label)))
+
+(defun benedict-chat--status-string (&optional rich)
+  "Return the formatted status string for the current buffer.
+When RICH is non-nil, include header-friendly hints."
+  (let* ((phase (or (plist-get benedict-chat--telemetry :phase) 'idle))
+         (last-phase (plist-get benedict-chat--telemetry :last-phase))
+         (active (memq phase '(sending streaming)))
+         (elapsed (or (and active (benedict-chat--status-elapsed))
+                      (plist-get benedict-chat--telemetry :last-elapsed)))
+         (usage (plist-get benedict-chat--telemetry :session-usage))
+         (indicator (benedict-chat--status-indicator phase last-phase))
+         (label (benedict-chat--status-phase-label phase))
+         (provider (benedict-chat--status-provider-label rich))
+         (usage-str (benedict-chat--status-usage-string usage))
+         (elapsed-str (when elapsed (format "%.0fs" elapsed)))
+         (hint (and rich active "ESC to cancel")))
+    (string-join
+     (delq nil
+           (list (format "%s %s" indicator label)
+                 provider
+                 elapsed-str
+                 usage-str
+                 hint))
+     " · ")))
+
+(defun benedict-chat--mode-line-status ()
+  "Compact status string for the mode line."
+  (benedict-chat--status-string nil))
+
+(defun benedict-chat--header-line-status ()
+  "Richer status string for the header line."
+  (benedict-chat--status-string t))
+
+(defun benedict-chat-choose-model ()
+  "Placeholder model picker; will be wired to a real menu in later phases."
+  (interactive)
+  (message "Model selection UI is not available yet."))
 
 (defun benedict-chat--normalize-role (role)
   "Normalize ROLE into a symbol."
@@ -736,6 +1021,119 @@ Returns non-nil when an active streaming entry handled the error."
     (benedict-chat--streaming-reset)
     handled))
 
+(defun benedict-chat--markdown-lite--in-code-block-p (pos)
+  "Return non-nil when POS is inside a fenced code block."
+  (get-text-property pos 'benedict-chat-code-block))
+
+(defun benedict-chat--markdown-lite--apply-headings (start end)
+  "Apply heading faces between START and END."
+  (save-excursion
+    (goto-char start)
+    (let ((case-fold-search nil))
+      (while (re-search-forward "^\\(###\\|##\\|#\\)[ \t]+\\(.+\\)$" end t)
+        (let* ((match-start (match-beginning 0))
+               (match-end (match-end 0)))
+          (unless (benedict-chat--markdown-lite--in-code-block-p match-start)
+            (let* ((marker (match-string 1))
+                   (face (pcase (length marker)
+                           (1 'benedict-chat-heading-1)
+                           (2 'benedict-chat-heading-2)
+                           (_ 'benedict-chat-heading-3))))
+              (add-text-properties match-start match-end
+                                   (list 'face face
+                                         'font-lock-face face)))))))))
+
+(defun benedict-chat--markdown-lite--apply-lists (start end)
+  "Apply list marker faces between START and END."
+  (save-excursion
+    (goto-char start)
+    (while (re-search-forward "^[ \t]*\\([-*+]\\|[0-9]+\\.\\)[ \t]+.+$" end t)
+      (let ((bullet-start (match-beginning 1))
+            (bullet-end (match-end 1)))
+        (unless (benedict-chat--markdown-lite--in-code-block-p bullet-start)
+          (add-text-properties bullet-start bullet-end
+                               (list 'face 'benedict-chat-list-bullet
+                                     'font-lock-face 'benedict-chat-list-bullet)))))))
+
+(defun benedict-chat--markdown-lite--apply-inline-code (start end)
+  "Apply inline code faces between START and END."
+  (save-excursion
+    (goto-char start)
+    (while (re-search-forward "\\(`\\)\\([^`\n]+\\)\\(`\\)" end t)
+      (let ((match-start (match-beginning 0))
+            (match-end (match-end 0)))
+        (unless (or (benedict-chat--markdown-lite--in-code-block-p match-start)
+                    (get-text-property match-start 'benedict-chat-inline-code))
+          (add-text-properties match-start match-end
+                               (list 'face 'benedict-chat-inline-code
+                                     'font-lock-face 'benedict-chat-inline-code
+                                     'benedict-chat-inline-code t)))))))
+
+(defun benedict-chat--markdown-lite--apply-strong (start end)
+  "Apply strong emphasis between START and END."
+  (save-excursion
+    (goto-char start)
+    (while (re-search-forward "\\*\\*\\([^*\n]+?\\)\\*\\*" end t)
+      (let ((match-start (match-beginning 0))
+            (match-end (match-end 0)))
+        (unless (or (benedict-chat--markdown-lite--in-code-block-p match-start)
+                    (get-text-property match-start 'benedict-chat-inline-code))
+          (add-text-properties match-start match-end
+                               (list 'face 'benedict-chat-strong
+                                     'font-lock-face 'benedict-chat-strong
+                                     'benedict-chat-strong t)))))))
+
+(defun benedict-chat--markdown-lite--apply-emphasis (start end)
+  "Apply italic emphasis between START and END."
+  (save-excursion
+    (goto-char start)
+    (while (re-search-forward "\\(?:\\s-\\|^\\)\\([*_/]\\)\\([^ \n][^\\1\n]*?[^ \n]\\)\\1" end t)
+      (let* ((match-start (match-beginning 1))
+             (match-end (match-end 0))
+             (delimiter (char-after match-start))
+             (existing (get-text-property match-start 'face)))
+        (unless (or (benedict-chat--markdown-lite--in-code-block-p match-start)
+                    (get-text-property match-start 'benedict-chat-inline-code)
+                    (and (eq delimiter ?*)
+                         (eq (char-after (1+ match-start)) ?*))
+                    (get-text-property match-start 'benedict-chat-strong)
+                    (eq existing 'benedict-chat-strong)
+                    (and (listp existing)
+                         (memq 'benedict-chat-strong existing)))
+          (add-text-properties match-start match-end
+                               (list 'face 'benedict-chat-emphasis
+                                     'font-lock-face 'benedict-chat-emphasis)))))))
+
+(defun benedict-chat--markdown-lite--apply-links (start end)
+  "Apply link faces between START and END."
+  (save-excursion
+    (goto-char start)
+    (while (re-search-forward "\\(\\[\\([^]\n]+\\)\\](\\([^)\n]+\\))\\)" end t)
+          (let ((match-start (match-beginning 1))
+                (match-end (match-end 1))
+                (url (match-string 3)))
+        (unless (or (benedict-chat--markdown-lite--in-code-block-p match-start)
+                    (get-text-property match-start 'benedict-chat-inline-code))
+          (add-text-properties match-start match-end
+                                  (list 'face 'benedict-chat-link
+                                        'font-lock-face 'benedict-chat-link
+                                        'benedict-chat-link-url url
+                                        'help-echo url)))))))
+
+(defun benedict-chat--markdown-lite-decorate-region (start end)
+  "Apply markdown-lite decorations between START and END."
+  (when (< start end)
+    (let ((inhibit-read-only t))
+      (add-text-properties start end
+                           '(face benedict-chat-body
+                                  font-lock-face benedict-chat-body))
+      (benedict-chat--markdown-lite--apply-headings start end)
+      (benedict-chat--markdown-lite--apply-lists start end)
+      (benedict-chat--markdown-lite--apply-inline-code start end)
+      (benedict-chat--markdown-lite--apply-strong start end)
+      (benedict-chat--markdown-lite--apply-emphasis start end)
+      (benedict-chat--markdown-lite--apply-links start end))))
+
 (defun benedict-chat--decorate-message (item)
   "Apply markdown-lite decorations for ITEM."
   (let* ((start-marker (plist-get item :content-start))
@@ -745,8 +1143,16 @@ Returns non-nil when an active streaming entry handled the error."
     (when (and start end (> end start))
       (benedict-chat--clear-block-buttons start-marker end-marker)
       (remove-text-properties start end
-                              '(face nil font-lock-face nil benedict-chat-code-language nil))
-      (benedict-chat--apply-code-fences start end))))
+                              '(face nil
+                                     font-lock-face nil
+                                     benedict-chat-code-language nil
+                                     benedict-chat-code-block nil
+                                     benedict-chat-inline-code nil
+                                     benedict-chat-strong nil
+                                     benedict-chat-link-url nil
+                                     help-echo nil))
+      (benedict-chat--apply-code-fences start end)
+      (benedict-chat--markdown-lite-decorate-region start end))))
 
 (defun benedict-chat--format-metadata-line (metadata &optional prefix)
   "Return a user-facing line for METADATA plist with optional PREFIX."
@@ -832,10 +1238,11 @@ LANGUAGE is the identifier included in the fence (may be nil)."
     (let* ((lang (and language (string-trim language)))
            (target (list :start (copy-marker body-start t)
                          :end (copy-marker body-end nil)
-                         :language lang)))
+                     :language lang)))
       (add-text-properties body-start body-end
                            (list 'face 'benedict-chat-code-block
                                  'font-lock-face 'benedict-chat-code-block
+                                 'benedict-chat-code-block t
                                  'benedict-chat-code-language lang))
       (when insertion-point
         (benedict-chat--insert-code-block-buttons insertion-point target))
@@ -948,6 +1355,7 @@ LANGUAGE is the identifier included in the fence (may be nil)."
 
 (defun benedict-chat--handle-provider-delta (payload)
   "Handle streaming PAYLOAD updates from the provider."
+  (benedict-chat--telemetry-streaming payload)
   (let ((details (benedict-chat--collect-delta-reasoning-details payload)))
     (when details
       (let ((metadata (benedict-chat--metadata
@@ -985,6 +1393,7 @@ LANGUAGE is the identifier included in the fence (may be nil)."
                     :latency latency
                     :usage usage
                     :empty-response empty-response)))
+    (benedict-chat--telemetry-finish 'complete metadata)
     (when (and stream-text
                (not (string-empty-p stream-text))
                (string-blank-p (or (plist-get message :content) "")))
@@ -1040,6 +1449,7 @@ LANGUAGE is the identifier included in the fence (may be nil)."
                    :status (plist-get payload :status)
                    :code (plist-get payload :code)
                    :retryable (plist-get payload :retryable))))
+    (benedict-chat--telemetry-finish 'error metadata)
     (unless (benedict-chat--fail-streaming-message content metadata)
       (benedict-chat--record-message
        (list :role 'assistant :content content :time (current-time) :metadata metadata)))
@@ -1053,6 +1463,7 @@ LANGUAGE is the identifier included in the fence (may be nil)."
     (setq benedict-chat--active-request-id benedict-chat--request-seq)
     (setq benedict-chat--thinking-temp-counter 0)
     (benedict-chat--streaming-reset)
+    (benedict-chat--telemetry-begin request)
     (setq benedict-chat--last-dispatch
           (list :request request :timestamp (current-time) :retry retry))
     (message "Benedict: contacting %s%s..."
@@ -1144,6 +1555,8 @@ When INCLUDE-ERRORS is nil, skip entries flagged with :error metadata."
   (setq-local buffer-read-only nil)
   (setq-local truncate-lines nil)
   (setq-local word-wrap t)
+  (setq-local mode-line-process nil)
+  (setq-local header-line-format '(:eval (benedict-chat--header-line-status)))
   (visual-line-mode 1)
   (setq-local benedict-chat--messages nil)
   (setq-local benedict-chat--items nil)
@@ -1154,15 +1567,17 @@ When INCLUDE-ERRORS is nil, skip entries flagged with :error metadata."
   (setq-local benedict-chat--thinking-temp-counter 0)
   (setq-local benedict-chat--pending-request nil)
   (setq-local benedict-chat--last-dispatch nil)
+  (benedict-chat--telemetry-reset)
+  (add-hook 'kill-buffer-hook #'benedict-chat--status-stop-timer nil t)
   (benedict-chat--ensure-thinking-invisibility)
   (let ((inhibit-read-only t))
     (erase-buffer)
     (insert (propertize
-             (format "Benedict Chat — provider: %s (non-streaming)\n"
+             (format "Benedict Chat — provider: %s\n"
                      (benedict-chat--provider-label))
              'face 'benedict-chat-system))
     (insert (propertize
-             "Commands: C-c C-s send · g r retry-last · w copy-last · code blocks expose Copy/Apply buttons\n"
+             "Commands: C-c C-s send · g r retry-last · w copy-last · code blocks expose Copy/Apply buttons · status in header line\n"
              'face 'benedict-chat-system))
     (insert "\n")))
 
