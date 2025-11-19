@@ -83,6 +83,77 @@
            (kill-buffer buffer)))
        (funcall done)))))
 
+(ert-deftest-async benedict-chat-tool-call-flow (done)
+  "Tool calls trigger approval, execution, and tool-result rendering."
+  (let* ((benedict-provider 'fake)
+         (benedict-provider-fake-latency-seconds 0.01)
+         (benedict-provider-fake-script
+          (list (list :type 'success
+                      :content ""
+                      :tool-calls (list (list :id "call-123"
+                                              :name 'project-search
+                                              :arguments '(:query "needle"))))))
+         (buffer (generate-new-buffer " *Benedict Chat Tool*"))
+         (original-approval (symbol-function 'benedict--prompt-for-approval))
+         (original-search (symbol-function 'benedict-search-project-sync))
+         (fake-result '(:query "needle"
+                         :root "/tmp/project"
+                         :limit 5
+                         :matches ((:file "README.org"
+                                       :absolute "/tmp/project/README.org"
+                                       :line 12
+                                       :column 5
+                                       :match "needle"
+                                       :preview "needle appears here.")))))
+    (fset 'benedict--prompt-for-approval (lambda (&rest _args) t))
+    (fset 'benedict-search-project-sync (lambda (&rest _args) fake-result))
+    (condition-case err
+        (with-current-buffer buffer
+          (benedict-chat-mode)
+          (benedict-chat--send-text "Please run project search."))
+      (error
+       (fset 'benedict--prompt-for-approval original-approval)
+       (fset 'benedict-search-project-sync original-search)
+       (when (buffer-live-p buffer)
+         (kill-buffer buffer))
+       (signal (car err) (cdr err))))
+    (run-at-time
+     0.4 nil
+     (lambda ()
+       (unwind-protect
+           (with-current-buffer buffer
+             (let* ((tool-items
+                     (cl-remove-if-not (lambda (item)
+                                         (eq (plist-get item :kind) 'tool))
+                                       benedict-chat--items))
+                    (tool-item (car tool-items))
+                    (tool-message
+                     (cl-find-if (lambda (message)
+                                   (eq (plist-get message :role) 'tool))
+                                 benedict-chat--messages))
+                    (expected (prin1-to-string fake-result)))
+               (should (= (length tool-items) 1))
+               (should tool-item)
+               (should (eq (plist-get (plist-get tool-item :tool-call) :name)
+                           'project-search))
+               (let ((ui (plist-get tool-item :ui)))
+                 (should ui)
+                 (should (eq (plist-get ui :state) 'success))
+                 (should (string-match-p "Project search"
+                                         (plist-get ui :header)))
+                 (should (string-match-p "README.org"
+                                         (plist-get tool-item :content)))
+                 (should (string-match-p "\\[\\[needle\\]\\]"
+                                         (plist-get tool-item :content))))
+               (should tool-message)
+               (should (equal (plist-get tool-message :tool-call-id) "call-123"))
+               (should (string= (plist-get tool-message :content) expected))))
+         (fset 'benedict--prompt-for-approval original-approval)
+         (fset 'benedict-search-project-sync original-search)
+         (when (buffer-live-p buffer)
+           (kill-buffer buffer)))
+       (funcall done)))))
+
 (ert-deftest-async benedict-chat-code-block-buttons (done)
   "Copy/Apply buttons appear under fenced blocks and operate on the right text."
   (let ((benedict-provider 'fake)
@@ -463,5 +534,21 @@
             (kill-buffer chat)))
   (funcall done)))
 ))
+
+(ert-deftest benedict-search-project-sync-finds-matches ()
+  "Ripgrep-backed project search returns structured matches."
+  (skip-unless (executable-find benedict-search-project-executable))
+  (let* ((query "Benedict maintainers")
+         (result (benedict-search-project-sync query))
+         (matches (plist-get result :matches)))
+    (should (plist-get result :root))
+    (should (plist-get result :match-count))
+    (should (listp matches))
+    (should (> (length matches) 0))
+    (let ((entry (car matches)))
+      (should (plist-get entry :file))
+      (should (plist-get entry :line))
+      (should (plist-get entry :preview)))))
+
 (provide 'benedict-chat-test)
 ;;; benedict-chat-test.el ends here

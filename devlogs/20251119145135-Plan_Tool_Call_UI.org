@@ -1,0 +1,54 @@
+#+TITLE: Plan — Tool call UI structure
+#+AUTHOR: Benedict maintainers
+#+LANGUAGE: en
+#+OPTIONS: toc:nil num:nil ^:{}
+
+* Goal
+Define how tool calls should deliver structured UI data and describe the
+changes needed in =benedict-chat= so tool progress/result rendering flows through
+a single generic block.
+
+* Plan
+1. Review the existing tool flooring
+   - Read =benedict-chat--render-tool-call= / =benedict-chat--render-tool-result=, how
+     items are constructed, and note what metadata is available from
+     =benedict-chat--record-tool-call= / result plumbing.
+   - Capture constraints on when items are created & updated so the new unified
+     block can keep markers fresh while states change (in-progress → success /
+     failure).
+
+2. Lock down the tool UI data schema
+   - Propose a =:ui= plist contract that tools can populate (e.g. =:header=,
+     =:state=, =:body=/:sections=, optional detail fields) while still returning
+     their plain-text =:content= (or equivalent) so the assistant response history
+     remains meaningful even without UI hints.
+   - Document allowed states (initially in-progress/success/failure) plus how we
+     pass through arbitrary keywords for future extensibility.
+   - Decide where this schema is validated (probably helper in
+     =benedict-chat.el=) and how we fall back when a tool omits =:ui=.
+
+3. Collapse the renderer into a single tool block
+   - Update the chat history plumbing so tool call + result writes/updates one
+     item, refreshing header/status text as state shifts.
+   - Teach =benedict-chat--render-tool-block= (new helper) how to display the
+     generic UI structure and ensure old metadata (provider name, duration) is
+     still surfaced.
+   - Remove the legacy call/result renderers and adjust any code that referenced
+     them.
+
+4. Update the project-search tool to emit UI data
+   - Have =benedict--tool-project-search= format its structured matches into the
+     agreed data schema (e.g. header string, summary text, match list body).
+   - Ensure other tools either keep working (by backfilling default UI) or add a
+     TODO noting they still emit raw text.
+
+5. Tests / verification
+   - Extend or add chat tests to cover the new UI flow (state transitions,
+     project-search formatting) using the existing ERT suite.
+   - Manually sanity-check in the chat buffer if possible once code lands.
+
+* Open questions / risks
+- How do we want to render multi-line bodies (bullets, tables) within the chat
+  block? (Lean toward simple text for the first pass.)
+- Make sure state transitions don’t clobber user scroll positions—need to test
+  that marker updates behave.

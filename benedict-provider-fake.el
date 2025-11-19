@@ -202,7 +202,10 @@ SCRIPT entries are consumed FIFO."
          (usage (or (plist-get entry :usage)
                     (benedict-provider-fake--build-usage messages content)))
          (final-thinking (or thinking (plist-get entry :thinking)))
+         (tool-calls (plist-get entry :tool-calls))
          (message (list :role role :content content)))
+    (when tool-calls
+      (setq message (plist-put message :tool-calls tool-calls)))
     (list :message message
           :model model
           :provider 'fake
@@ -356,7 +359,7 @@ Returns a handle plist with :request, :entry, :provider, and :timers."
   :id 'fake
   :name "Fake (echo)"
   :send #'benedict-provider-fake--send
-  :capabilities '(:streaming t :tools nil)
+  :capabilities '(:streaming t :tools t)
   :cancel #'benedict-provider-fake--cancel))
 
 (provide 'benedict-provider-fake)

@@ -14,6 +14,7 @@ Working notes for future agents contributing to Benedict. This doc explains our 
   - Create the file however you like (Org capture, `touch`, Emacs, etc.), then rename it based on the filesystem creation time so the prefix is always correct.
   - Command: `ts=$(stat -f '%SB' -t '%Y%m%d%H%M%S' devlogs/tmp.org) && mv devlogs/tmp.org "devlogs/${ts}-Plan_Phase_2.org"`.
   - This uses macOS `stat` to read the real creation time (`%SB`) and ensures distinct prefixes even when multiple files are created the same minute.
+- If you find yourself stuck with syntax issues, primarily issues with balancing parentheses, please summarize what you're trying to do, stop the agentic loop, and ask for help from the user.
 
 ## Local Dev Environment (Doom Emacs)
 
@@ -122,7 +123,7 @@ Tips
 - Tool demo (eval):
   ```elisp
   (require 'benedict-tools)
-  (benedict-tool-call 'uppercase :text "foo")  ;; => "FOO"
+  (benedict-tool-invoke 'uppercase '(:text "foo"))  ;; => "FOO"
   ```
 
 ## Devlogs: When To Write Notes

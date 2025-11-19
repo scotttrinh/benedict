@@ -952,7 +952,8 @@ ERROR-BLOCK is the parsed JSON block when available.  MESSAGE is a fallback stri
          (latency (if start-time
                       (float-time (time-subtract end-time start-time))
                     0.0))
-         (empty-response (string-empty-p (or (plist-get decoded-message :content) "")))
+         (empty-response (and (string-empty-p (or (plist-get decoded-message :content) ""))
+                              (not (plist-get decoded-message :tool-calls))))
          (result (list :message decoded-message
                        :usage usage
                        :model model
@@ -1118,6 +1119,9 @@ When STREAM is non-nil, include the \"stream\": true flag in the payload."
                                          messages)))))
       (when stream
         (push '("stream" . t) body))
+      (when-let ((tools (plist-get request :tools)))
+        (when-let ((serialized (benedict-provider-openrouter--serialize-tools tools)))
+          (push (cons "tools" serialized) body)))
       (let ((temperature (if (plist-member request :temperature)
                              (plist-get request :temperature)
                            benedict-provider-openrouter-default-temperature)))
@@ -1149,15 +1153,136 @@ When STREAM is non-nil, include the \"stream\": true flag in the payload."
 (defun benedict-provider-openrouter--serialize-message (message)
   "Serialize MESSAGE plist to an alist for JSON encoding."
   (let* ((role (or (plist-get message :role) (plist-get message :type)))
-         (content (or (plist-get message :content) (plist-get message :text)))
-         (name (plist-get message :name)))
-    (unless (and role (stringp content))
-      (error "Message requires :role and string :content"))
-    (let ((payload `(("role" . ,(benedict-provider-openrouter--role-string role))
-                     ("content" . ,content))))
+         (content (plist-get message :content))
+         (name (plist-get message :name))
+         (tool-calls (plist-get message :tool-calls))
+         (tool-call-id (plist-get message :tool-call-id)))
+    (unless role
+      (error "Message requires :role"))
+    (let ((payload `(("role" . ,(benedict-provider-openrouter--role-string role)))))
+      (cond
+       (tool-calls
+        (push (cons "tool_calls"
+                    (benedict-provider-openrouter--serialize-tool-calls tool-calls))
+              payload)
+        (push (cons "content" (if (stringp content) content "")) payload))
+       (t
+        (push (cons "content" (if (stringp content) content "")) payload)))
       (when (and name (stringp name))
         (push (cons "name" name) payload))
+      (when (and tool-call-id (stringp tool-call-id))
+        (push (cons "tool_call_id" tool-call-id) payload))
       (nreverse payload))))
+
+(defun benedict-provider-openrouter--serialize-tools (tools)
+  "Serialize TOOLS (registry specs) into OpenRouter format."
+  (mapcar #'benedict-provider-openrouter--serialize-tool tools))
+
+(defun benedict-provider-openrouter--serialize-tool (tool)
+  "Serialize TOOL spec plist into a tool definition."
+  (let* ((id (plist-get tool :id))
+         (doc (or (plist-get tool :doc) ""))
+         (schema (plist-get tool :schema)))
+    (list
+     (cons "type" "function")
+     (cons "function"
+           (delq nil
+                 (list (cons "name" (benedict-provider-openrouter--tool-name id))
+                       (cons "description" doc)
+                       (cons "parameters"
+                             (benedict-provider-openrouter--encode-tool-schema schema))))))))
+
+(defun benedict-provider-openrouter--tool-name (id)
+  "Return a provider-safe string for tool ID."
+  (cond
+   ((symbolp id) (symbol-name id))
+   ((stringp id) id)
+   (t (format "%s" id))))
+
+(defun benedict-provider-openrouter--encode-tool-schema (schema)
+  "Convert SCHEMA plist into a JSON schema alist."
+  (let ((properties nil)
+        (required nil))
+    (when (and schema (listp schema))
+      (let ((plist (copy-sequence schema)))
+        (while plist
+          (let ((key (pop plist))
+                (type (pop plist)))
+            (let ((name (benedict-provider-openrouter--tool-argument-name key)))
+              (push (cons name (list (cons "type"
+                                           (benedict-provider-openrouter--tool-type-string type))))
+                    properties)
+              (push name required))))))
+    (let ((payload (list (cons "type" "object")
+                         (cons "properties" (nreverse properties)))))
+      (when required
+        (push (cons "required" (vconcat (nreverse required))) payload))
+      payload)))
+
+(defun benedict-provider-openrouter--tool-type-string (type)
+  "Map TYPE indicator to a JSON schema \"type\" string."
+  (pcase type
+    ((or 'string :string "string") "string")
+    ((or 'integer :integer "integer" 'int :int) "integer")
+    ((or 'number :number "number" 'float :float) "number")
+    ((or 'boolean :boolean "boolean" 'bool :bool) "boolean")
+    (_ "string")))
+
+(defun benedict-provider-openrouter--serialize-tool-calls (calls)
+  "Serialize CALLS (a list of tool call plists) for JSON encoding."
+  (mapcar #'benedict-provider-openrouter--serialize-tool-call calls))
+
+(defun benedict-provider-openrouter--serialize-tool-call (call)
+  "Serialize a single CALL plist into OpenRouter format."
+  (let* ((id (or (plist-get call :id)
+                 (format "call-%s" (cl-gensym))))
+         (type (or (plist-get call :type) "function"))
+         (name (benedict-provider-openrouter--tool-name
+                (or (plist-get call :name) (plist-get call :tool))))
+         (arguments (benedict-provider-openrouter--encode-tool-arguments
+                     (plist-get call :arguments))))
+    (list (cons "id" id)
+          (cons "type" (if (stringp type) type "function"))
+          (cons "function"
+                (delq nil
+                      (list (cons "name" name)
+                            (cons "arguments" arguments)))))))
+
+(defun benedict-provider-openrouter--encode-tool-arguments (arguments)
+  "Encode tool ARGUMENTS plist/alist into a JSON string."
+  (cond
+   ((stringp arguments) arguments)
+   ((null arguments) "{}")
+   (t (let ((alist (benedict-provider-openrouter--tool-arguments->alist arguments)))
+        (encode-coding-string (json-encode alist) 'utf-8)))))
+
+(defun benedict-provider-openrouter--tool-arguments->alist (arguments)
+  "Convert ARGUMENTS (plist/alist) into an alist with string keys."
+  (cond
+   ((null arguments) nil)
+   ((and (listp arguments) (keywordp (car arguments)))
+    (let ((plist (copy-sequence arguments))
+          result)
+      (while plist
+        (let ((key (pop plist))
+              (value (pop plist)))
+          (push (cons (benedict-provider-openrouter--tool-argument-name key) value)
+                result)))
+      (nreverse result)))
+   ((listp arguments)
+    (mapcar (lambda (entry)
+              (cons (benedict-provider-openrouter--tool-argument-name (car entry))
+                    (cdr entry)))
+            arguments))
+   (t nil)))
+
+(defun benedict-provider-openrouter--tool-argument-name (key)
+  "Normalize KEY into a string for tool argument encoding."
+  (cond
+   ((keywordp key) (substring (symbol-name key) 1))
+   ((symbolp key) (symbol-name key))
+   ((stringp key) key)
+   (t (format "%s" key))))
 
 (defun benedict-provider-openrouter--role-string (role)
   "Convert ROLE (symbol/string) to API string."
@@ -1252,10 +1377,64 @@ When STREAM is non-nil, include the \"stream\": true flag in the payload."
   (let ((role (or (benedict-provider-openrouter--aget "role" message)
                   "assistant"))
         (content (or (benedict-provider-openrouter--aget "content" message)
-                     "")))
-    (list :role (intern (downcase role))
-          :content content
-          :raw message)))
+                     ""))
+        (tool-calls (benedict-provider-openrouter--aget "tool_calls" message))
+        (result (list :role (intern (downcase role))
+                      :content content
+                      :raw message)))
+    (when tool-calls
+      (when-let ((decoded (benedict-provider-openrouter--decode-tool-calls tool-calls)))
+        (setq result (plist-put result :tool-calls decoded))))
+    result))
+
+(defun benedict-provider-openrouter--decode-tool-calls (calls)
+  "Return CALLS converted into normalized tool call plists."
+  (let (result)
+    (dolist (call calls (nreverse result))
+      (when-let ((decoded (benedict-provider-openrouter--decode-tool-call call)))
+        (push decoded result)))))
+
+(defun benedict-provider-openrouter--decode-tool-call (call)
+  "Convert CALL alist into a normalized plist."
+  (let* ((id (benedict-provider-openrouter--aget "id" call))
+         (type (or (benedict-provider-openrouter--aget "type" call) "function"))
+         (function (benedict-provider-openrouter--aget "function" call))
+         (name (and function (benedict-provider-openrouter--aget "name" function)))
+         (arguments (and function (benedict-provider-openrouter--aget "arguments" function)))
+         (decoded-args (benedict-provider-openrouter--decode-tool-arguments arguments)))
+    (list :id id
+          :type type
+          :name (benedict-provider-openrouter--normalize-tool-name name)
+          :arguments decoded-args
+          :raw call)))
+
+(defun benedict-provider-openrouter--normalize-tool-name (name)
+  "Return NAME coerced into a symbol for registry lookups."
+  (cond
+   ((symbolp name) name)
+   ((stringp name)
+    (let ((normalized (replace-regexp-in-string "_" "-" (downcase name))))
+      (intern normalized)))
+   (t (intern (format "%s" name)))))
+
+(defun benedict-provider-openrouter--decode-tool-arguments (arguments)
+  "Decode tool ARGUMENTS JSON string into a plist."
+  (cond
+   ((stringp arguments)
+    (if (string-empty-p arguments)
+        nil
+      (condition-case err
+          (json-parse-string arguments :object-type 'plist :array-type 'list
+                             :null-object nil :false-object :json-false)
+        (json-parse-error
+         (benedict-provider-log
+          'openrouter 'warn :tool-args-decode
+          :message "Failed to decode tool arguments"
+          :error err
+          :input arguments)
+         nil))))
+   ((plistp arguments) arguments)
+   (t nil)))
 
 (defun benedict-provider-openrouter--aget (key alist)
   "Return value for KEY within ALIST (keys are strings)."
@@ -1304,7 +1483,7 @@ When STREAM is non-nil, include the \"stream\": true flag in the payload."
   :id 'openrouter
   :name "OpenRouter"
   :send #'benedict-provider-openrouter--send
-  :capabilities '(:streaming t :tools nil)
+  :capabilities '(:streaming t :tools t)
   :cancel #'benedict-provider-openrouter--cancel))
 
 (provide 'benedict-provider-openrouter)
