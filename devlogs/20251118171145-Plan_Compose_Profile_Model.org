@@ -1,0 +1,17 @@
+#+title: Plan: Compose profile/model selection
+#+date: 2025-11-18 17:11:45
+
+* Goal
+Allow compose buffers to pick a profile and model per message, defaulting to configured profile/provider/model while leaving configuration unchanged when a user overrides the model for a single compose session.
+
+* Decisions
+- Extend =benedict-chat-profiles= entries to accept =:provider= and =:model= keys (keeping =:label=, =:preamble=).
+- Resolution order: profile provider → =benedict-provider=; model → profile model → provider default model.
+- Compose overrides are buffer-local (per compose/chat) and do not persist to user configuration.
+- Model picker is free-form for now.
+
+* Plan
+1) Data/config: add structured profile schema (provider/model) and helpers to resolve effective provider/model for a chat/compose buffer with fallbacks to provider defaults.
+2) UI: surface profile/provider/model in compose header; add pickers in compose (profile picker updates defaults; model picker sets transient override for the compose session).
+3) Dispatch: plumb effective provider/model into request build and telemetry/status; compose send uses transient override while keeping config unchanged.
+4) Tests/docs: cover resolution logic and transient overrides; document new profile keys and compose selection UX.

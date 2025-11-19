@@ -312,10 +312,35 @@
             (should (= (overlay-start overlay) initial-start))
             (should (= (overlay-end overlay) initial-end))
             (should (< (overlay-end overlay) assistant-start))
-            (should (string-match-p "Visible answer\\."
-                                    (buffer-string)))))
+              (should (string-match-p "Visible answer\\."
+                                      (buffer-string)))))
       (when (buffer-live-p buffer)
         (kill-buffer buffer)))))
+
+(ert-deftest benedict-chat-resolves-provider-and-model ()
+  "Profile/provider/model resolution follows the configured precedence."
+  (let ((benedict-provider 'fake)
+        (benedict-provider-fake-default-model "benedict/fake-default")
+        (benedict-provider-openrouter-default-model "openrouter/default")
+        (benedict-chat-profiles '((custom :label "Custom"
+                                          :provider openrouter
+                                          :model "profile/model"))))
+    (let ((buffer (generate-new-buffer " *Benedict Chat Resolve*")))
+      (unwind-protect
+          (with-current-buffer buffer
+            (benedict-chat-mode)
+            (setq benedict-chat-profile 'custom)
+            (should (eq (benedict-chat--resolve-provider) 'openrouter))
+            (should (equal (benedict-chat--resolve-model) "profile/model"))
+            (setq benedict-chat--compose-model-override "override/model")
+            (should (equal (benedict-chat--resolve-model) "override/model"))
+            (setq benedict-chat--compose-model-override nil)
+            (setq benedict-chat-profile nil)
+            (should (eq (benedict-chat--resolve-provider) 'fake))
+            (should (equal (benedict-chat--resolve-model)
+                           benedict-provider-fake-default-model)))
+        (when (buffer-live-p buffer)
+          (kill-buffer buffer))))))
 
 (ert-deftest-async benedict-chat-compose-sends-context (done)
   "Compose buffers include context slices in outgoing messages."
@@ -354,19 +379,40 @@
           (unwind-protect
               (when (buffer-live-p chat)
                 (with-current-buffer chat
-                  (let* ((user (cl-find-if (lambda (msg)
+                  (let* ((profile (benedict-chat--effective-profile))
+                         (request (plist-get benedict-chat--last-dispatch :request))
+                         (messages (and request (plist-get request :messages)))
+                         (system (cl-find-if (lambda (msg)
+                                               (eq (plist-get msg :role) 'system))
+                                             messages))
+                         (request-user (cl-find-if (lambda (msg)
+                                                     (eq (plist-get msg :role) 'user))
+                                                   messages))
+                         (user (cl-find-if (lambda (msg)
                                              (eq (plist-get msg :role) 'user))
                                            benedict-chat--messages))
-                         (assistant (benedict-chat--find-last-assistant t)))
+                         (assistant (benedict-chat--find-last-assistant t))
+                         (preamble (benedict-chat--profile-preamble profile)))
                     (should handle)
+                    (should request)
+                    (should (eq (plist-get request :profile) profile))
+                    (should messages)
+                    (should system)
+                    (should (string-match-p "Org-style notation"
+                                            (plist-get system :content)))
+                    (when preamble
+                      (should (string-match-p (regexp-quote preamble)
+                                              (plist-get system :content))))
+                    (should request-user)
+                    (should (plist-get request :tools))
                     (should user)
                     (should (string-match-p "Context:" (plist-get user :content)))
                     (should (string-match-p (regexp-quote (format "<<%s>>" handle))
                                             (plist-get user :content)))
                     (should (string-match-p (regexp-quote (format "[[%s]]" handle))
                                             (plist-get user :content)))
-                    (should (string-match-p "Org-style notation"
-                                            (plist-get user :content)))
+                    (should-not (string-match-p "Org-style notation"
+                                                (plist-get user :content)))
                     (should (string-match-p "Compose region text" (plist-get user :content)))
                     (should (string-match-p "What do you see" (plist-get user :content)))
                     (should assistant)
@@ -376,5 +422,46 @@
             (when (buffer-live-p source)
               (kill-buffer source))))
         (funcall done)))))
+
+(ert-deftest-async benedict-chat-compose-model-override-clears (done)
+  "Compose model overrides apply to dispatch and clear after send."
+  (let ((benedict-provider 'fake)
+        (benedict-chat-buffer-name " *Benedict Compose Override*")
+        (benedict-chat-profiles '((override :label "Override"
+                                            :provider fake
+                                            :model "profile/model")))
+        (benedict-provider-fake-latency-seconds 0.01)
+        (benedict-provider-fake-script (list (list :type 'success :delay 0.01))))
+    (let ((chat (generate-new-buffer benedict-chat-buffer-name)))
+      (with-current-buffer chat
+        (benedict-chat-mode)
+        (setq benedict-chat-profile 'override)
+        (benedict-chat-compose-open))
+      (let ((compose (with-current-buffer chat benedict-chat--compose-buffer)))
+        (with-current-buffer compose
+          (cl-letf (((symbol-function 'read-string)
+                     (lambda (&rest _) "compose/model")))
+            (benedict-chat-choose-model)))
+        (with-current-buffer compose
+          (goto-char (point-max))
+          (insert "Check override usage.")
+          (benedict-chat-compose-send)))
+      (let ((deadline (+ (float-time) 2.0)))
+        (while (and (buffer-live-p chat)
+                    (with-current-buffer chat benedict-chat--pending-request)
+                    (< (float-time) deadline))
+          (sleep-for 0.05)
+          (accept-process-output nil 0.05))
+        (unwind-protect
+            (with-current-buffer chat
+              (let ((request (plist-get benedict-chat--last-dispatch :request)))
+                (should request)
+                (should (eq (plist-get request :provider) 'fake))
+                (should (equal (plist-get request :model) "compose/model"))
+                (should-not benedict-chat--compose-model-override)))
+          (when (buffer-live-p chat)
+            (kill-buffer chat)))
+  (funcall done)))
+))
 (provide 'benedict-chat-test)
 ;;; benedict-chat-test.el ends here

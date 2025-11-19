@@ -1,0 +1,199 @@
+#+title: Plan: Profiles, system messages, and message history
+#+date: 2025-11-19 12:15:00
+
+* Goal
+Clarify how "profiles" interact with system messages, message history, and tool filtering in Benedict, so that we can:
+- Support planner/coder style workflows within a single thread.
+- Keep the chat history immutable and easy to reason about.
+- Scope tools and autonomy per profile cleanly, without surprising the model.
+
+This plan focuses on the conceptual model and request-building pipeline. Concrete Elisp wiring will follow in a later implementation plan.
+
+* Context
+- We already have =benedict-chat-profiles= with entries that include at least =:label= and =:preamble=, and a separate plan to extend profiles with =:provider= and =:model=.
+- Up to now, the "preamble" has been thought of as something that applies to the *user message* (e.g., a prefix or instructions).
+- We now want profiles to also:
+  - Filter which tools are available.
+  - Add role-/mode-specific behavior via system messages.
+  - Optionally constrain autonomy (e.g., planner vs coder).
+- We want to support a common agentic workflow:
+  1. Start in a planner/architect profile that can read context and propose plans.
+  2. Switch to a coder/executor profile that can edit files and run tests.
+  3. Keep this all in a single chat thread while maintaining a clear, immutable history.
+
+Key constraints:
+- Do *not* mutate past messages in history (we want an auditable log).
+- Do *not* rely on the model inferring tool availability from old tool calls.
+- Do rely on:
+  - Session state (current profile, autonomy limits).
+  - Request-time construction of system messages and tool lists.
+
+* Decisions
+** Profiles live in session state, not in history
+- =benedict= will treat "profile" as *session/request state* rather than a message in the stored history.
+- The persisted chat history will be a sequence of:
+  - =user=, =assistant=, and =tool= messages only (plus any explicit "meta" messages we choose to show to the user).
+- The active profile (e.g., =:planner=, =:coder=) will be tracked in buffer-local/session state, not in the message list itself.
+
+** System messages are recomputed per request
+- On every LLM call, we will rebuild the =messages= we send, starting with system messages that reflect the *current* profile:
+  - A base system message (global =benedict= instructions).
+  - A profile-specific system message derived from the active profile entry.
+  - Optionally other overlays (e.g., testing mode, debug flags) later.
+- We do *not* store system messages inside the persisted chat history list; instead we treat them as computed, request-time configuration.
+- This means "switching profiles" is implemented by changing the active profile in session state and recomputing the system messages for the next request, not by editing or appending old system messages in history.
+
+** Profile preamble becomes a system-level snippet
+- Existing =:preamble= on profiles will be interpreted as a profile-specific system-level snippet, not as a user-message prefix.
+- Conceptual structure for system content:
+  - Base system prompt: "You are Benedict, an Emacs coding assistant..." etc.
+  - Profile prompt: "You are the Planner profile. You may only read files and call planning tools. Your job is to propose plans, not edit code..." etc.
+- Implementation detail:
+  - We will logically concatenate the base system prompt and the profile prompt into a single =system= message (simplest) or two separate =system= messages (still fine).
+  - Either way, only the *current* profile's snippet is included at request time.
+
+** Tool filtering is derived from the profile
+- The tools we send in the =tools= field for a request will be computed from the active profile:
+  - Each profile defines:
+    - Either a =:tool-allowlist= (preferred) and/or a =:tool-denylist=.
+    - Or higher-level =:capabilities= (e.g., =:plan=, =:read-files=, =:edit-files=, =:run-tests=) which map to tool groups.
+  - The effective tool list is the intersection of:
+    - Tools registered in the current provider/workspace.
+    - The profile's allowlist or capability-derived tools.
+- Past =tool= messages in history remain as context but do not affect the current tool list.
+- If the model attempts to call a tool that is not present in the current =tools= list, the runtime will treat this as an error and guide the model towards allowed tools (e.g., by injecting a clarification message and retrying or by surfacing an error to the user).
+
+** Autonomy and action budget are profile-level
+- Each profile may specify basic autonomy parameters, e.g.:
+  - =:max-actions=: maximum number of tool calls / plan steps per user request.
+  - =:max-tokens=: an approximate upper bound on response size (soft).
+  - =:auto-approve-tools=: whether the profile may call tools without explicit user confirmation.
+- Planner profiles:
+  - Likely low =:max-actions= and restricted to read/plan tools.
+  - Might require confirmation before switching to an executor profile.
+- Coder profiles:
+  - May have higher =:max-actions= and access to edit/test tools.
+  - Might default to running tests after code changes.
+
+** Planner → coder workflow in one thread is supported
+- We explicitly support the "planner then coder" workflow in a single thread:
+  1. User starts with a Planner profile:
+     - System: planner prompt.
+     - Tools: read + planning tools only.
+  2. After agreeing on a plan, the user (or UI) switches to a Coder profile:
+     - We update the active profile in session state.
+     - Next LLM request uses coder system prompt and coder toolset.
+  3. The coder profile sees the full history of planner messages as context but is constrained by its own system prompt and tools.
+- We do *not* attempt to "rewrite" planner messages or retroactively make them look like coder messages. Past turns are historical; only the current system prompt and tools define current behavior.
+
+* Proposed profile schema
+We already have (or will soon have) profile entries in =benedict-chat-profiles= that look roughly like:
+
+- =:id= (symbol or keyword, e.g. =planner=, =coder=).
+- =:label= (user-facing name for the profile picker).
+- =:preamble= (profile behavior text; will be used as a system snippet).
+- =:provider= (default provider for this profile, optional).
+- =:model= (default model for this profile, optional).
+
+We will extend this conceptually with:
+
+- =:tool-allowlist=
+  - List of tool IDs this profile may use.
+  - Alternately, =nil= meaning "all tools allowed" (subject to workspace/provider).
+- =:tool-denylist=
+  - Optional explicit denylist to block dangerous or irrelevant tools for this profile.
+- =:capabilities=
+  - High-level tags like =(:plan :read-files)= or =(:edit-files :run-tests)=.
+  - These map to tool groups in a separate registry.
+- =:autonomy=
+  - A plist for autonomy settings, e.g.:
+    - =:max-actions= INTEGER
+    - =:auto-approve-tools= t/nil
+- =:verbosity=
+  - Optional hint for reply length / structure (e.g., =:brief= vs =:detailed=).
+
+We will keep the schema backward-compatible:
+- Existing profiles with only =:label= and =:preamble= (and soon =:provider=, =:model=) will continue to work; missing fields will use reasonable defaults.
+- Tool filtering and autonomy will be opt-in per profile until we wire more UI around them.
+
+* Request construction model
+** High-level flow
+Given:
+- Session state (buffer-local):
+  - Active profile ID.
+  - Effective provider/model (resolved per existing profile/provider logic).
+  - Autonomy counters (e.g., actions taken in the current run).
+- Chat history:
+  - A list of =user=, =assistant=, and =tool= messages accumulated over the life of the buffer.
+
+We construct each LLM request as:
+1. Compute the current profile from =benedict-chat-profiles= and session state.
+2. Build system content:
+   - Base system prompt (global).
+   - Profile prompt (the profile's =:preamble=, interpreted as system text).
+   - Optionally other overlays (e.g., debug flags).
+3. Build the =messages= array:
+   - One =system= message whose content is the concatenation of base + profile system text (or two system messages, if we prefer).
+   - Followed by the full chat history (user/assistant/tool).
+4. Compute the =tools= list:
+   - Start from all registered tools for the provider/environment.
+   - Filter via profile =:tool-allowlist= / =:tool-denylist= or =:capabilities=.
+5. Apply autonomy constraints:
+   - (Future) Possibly limit the number of tool calls or require user confirmation before executing certain tools, based on profile =:autonomy=.
+
+** Example (conceptual)
+- Base system prompt:
+  - "You are Benedict, an Emacs coding assistant..."
+- Profile prompt (Planner):
+  - "You are currently in the Planner profile. You may only read files and use planning tools. Do not edit code or run tests. Your job is to propose clear, stepwise plans..."
+- Combined system message:
+  - Base + Planner text in one =system= message.
+- Tools:
+  - Only =read-files=, =list-files=, =update-plan= (plan tool), etc.
+
+When switching to Coder:
+- Profile prompt changes to:
+  - "You are currently in the Coder profile. You may edit files and run tests. Follow the existing plan when possible..."
+- Tools:
+  - Add =edit-files=, =run-tests=, etc.
+- History:
+  - Planner messages remain; coder simply sees them as context.
+
+* Profile switching behavior
+** Internal state change, not history mutation
+- Switching profiles will:
+  - Update the active profile ID in session state.
+  - Optionally reset or adjust autonomy counters for the new profile.
+  - Not modify existing chat history messages.
+
+** Optional user-visible meta messages
+- For transparency in the UI, we may add an assistant meta message like:
+  - "Switching to Coder profile (tools: edit, test)."
+- This would be appended to history as a normal =assistant= message and will be visible to the model as context, but it is not required for correctness; the key behavior is driven by the new system prompt and tool list.
+
+* Autonomy and action budget (sketch)
+- Profile-controlled autonomy provides:
+  - Safety (limit how much a profile can do automatically).
+  - UX shaping (planner vs coder "feel").
+- Initial design:
+  - Each profile config may include:
+    - =:max-actions=: integer, default unlimited or a sensible small number.
+    - =:auto-approve-tools=: whether tools can be run without explicit user confirmation.
+  - =benedict= runtime will:
+    - Track actions taken in the current "run" (tool calls, etc.).
+    - Enforce =:max-actions= by either:
+      - Asking the user for permission to continue.
+      - Or returning a message requesting explicit approval for more actions.
+- We will align autonomy semantics with whatever action-planning behavior we adopt later; for now, the key is that autonomy is a *profile-level* concept, not a property of the thread or provider alone.
+
+* Open questions / follow-ups
+- How much profile information should be surfaced in the chat UI header?
+  - Likely: profile label, provider, model, and maybe autonomy level.
+- Do we want a dedicated "meta" profile for very restricted operations (e.g., read-only diagnostics)?
+- How aggressively should we retry when the model attempts to call disallowed tools?
+  - Immediate error vs. one retry with a clarifying message.
+- Where to define capability-to-tool mappings (e.g., =:plan= → plan tools, etc.)?
+  - Likely in a central registry in =benedict-tools.el= or equivalent.
+
+These questions can be addressed in a follow-up implementation plan once we start wiring profiles into the actual request-building and tool-selection code.
+

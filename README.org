@@ -8,6 +8,105 @@ Benedict is an Emacs package that brings a truly native Emacs experience for int
 
 Status: pre‑alpha, design‑driven. This README describes the vision and interfaces we want to build. See ROADMAP.org for phased delivery.
 
+* Quick Start (Doom Emacs)
+
+The snippet below is an annotated, copy‑pasteable Doom Emacs setup. Drop it into =~/.config/doom/config.el=, then run =doom sync= (if you wired Benedict via =packages.el=) or reload Doom.
+
+#+begin_src elisp
+;; Add your local Benedict checkout to the load-path
+(add-to-list 'load-path "~/github.com/scotttrinh/benedict")
+
+;; Optional: use straight/doom's local-repo wiring instead of load-path
+;; (see README.org → Doom Emacs Dev Setup for details).
+
+;; Core Benedict configuration
+(use-package! benedict
+  :commands (benedict-chat benedict-mode)
+  :init
+  ;; Prefix for Benedict commands when `benedict-mode' is active.
+  ;; This binds: C-c C-b c  ⇒  M-x benedict-chat
+  (setq benedict-keymap-prefix (kbd "C-c C-b")
+
+        ;; Choose the provider:
+        ;; - 'openrouter (default): real network calls
+        ;; - 'fake: offline echo backend for testing
+        benedict-provider 'openrouter)
+
+  :config
+  ;; Enable the minor mode globally so the prefix is always available.
+  (benedict-mode 1))
+
+;; Idiomatic Doom keybindings (leader + local)
+(after! benedict
+  ;; Global leader keys
+  (map! :leader
+        (:prefix ("a" . "ai")
+         :desc "Benedict chat"           "b" #'benedict-chat
+         :desc "Benedict ask region"     "r" #'benedict-chat-ask-region
+         :desc "Benedict ask defun"      "d" #'benedict-chat-ask-defun
+         :desc "Benedict ask buffer"     "B" #'benedict-chat-ask-buffer
+         :desc "Benedict ask project"    "p" #'benedict-chat-ask-project
+         :desc "Benedict ask git"        "g" #'benedict-chat-ask-git-context
+         :desc "Benedict compose"        "c" #'benedict-chat-compose-open
+         :desc "Benedict copy last"      "y" #'benedict-chat-copy-last-response
+         :desc "Benedict retry last"     "R" #'benedict-chat-retry-last
+         :desc "Benedict choose profile" "P" #'benedict-chat-choose-profile
+         :desc "Benedict choose model"   "M" #'benedict-chat-choose-model))
+
+  ;; Extra bindings in Benedict chat buffers
+  (map! :map benedict-chat-mode-map
+        :localleader
+        :desc "Compose"              "c" #'benedict-chat-compose-open
+        :desc "Ask region"           "r" #'benedict-chat-ask-region
+        :desc "Ask defun"            "d" #'benedict-chat-ask-defun
+        :desc "Ask buffer"           "b" #'benedict-chat-ask-buffer
+        :desc "Ask project"          "p" #'benedict-chat-ask-project
+        :desc "Ask git context"      "g" #'benedict-chat-ask-git-context
+        :desc "Copy last response"   "y" #'benedict-chat-copy-last-response
+        :desc "Retry last request"   "R" #'benedict-chat-retry-last
+        :desc "Choose profile"       "P" #'benedict-chat-choose-profile
+        :desc "Choose model"         "M" #'benedict-chat-choose-model))
+
+;; OpenRouter credentials
+;;
+;; Preferred: auth-source (~/.authinfo.gpg, ~/.authinfo, or secrets backend)
+;;   machine openrouter.ai login openrouter password sk-or-1234567890abcdef
+;;
+;; Fallback: environment variable (default name: OPENROUTER_API_KEY)
+;;   export OPENROUTER_API_KEY="sk-or-1234567890abcdef"
+;;
+;; You usually do not need to change these, but they are configurable:
+(after! benedict
+  (setq ;; If you prefer a different env var name:
+        ;; benedict-provider-openrouter-env-var "MY_OPENROUTER_KEY"
+
+        ;; Pin a default model (OpenRouter's "auto" routing is the default).
+        benedict-provider-openrouter-default-model "openrouter/auto"
+
+        ;; Slightly conservative sampling temperature.
+        benedict-provider-openrouter-default-temperature 0.2))
+
+;; Optional: tweak chat behavior and profiles
+(after! benedict
+  (setq benedict-chat-token-display 'prompt+completion   ; or 'total / 'none
+        benedict-chat-default-profile 'coding
+        benedict-chat-profiles
+        '((coding :label "Coding"
+                  :preamble "You assist with code inside Emacs.")
+          (writing :label "Writing"
+                   :preamble "You help draft and edit prose."))))
+
+;; Optional: enable provider logging while you experiment
+;; Logs appear in *Messages*; set to nil once you're happy.
+(after! benedict
+  (setq benedict-provider-log-level 'debug))
+
+;; Usage:
+;;   - Reload Doom (M-x doom/reload or restart).
+;;   - Open a chat buffer with: M-x benedict-chat  (or C-c C-b c).
+;;   - Type C-c C-s to send the current message and stream a reply.
+#+end_src
+
 * Why 'Benedict'?
 - A play on "curse" and "cursor"—we aim for the opposite: a benediction.
 - Etymology (Merriam-Webster): from Late Latin benediction-, benedictio, from benedicere "to bless," from Latin, "to speak well of," from bene "well" (akin to Latin bonus "good") + dicere "to say".
@@ -128,6 +227,12 @@ export OPENROUTER_API_KEY="sk-or-1234567890abcdef"
 
 Optional customization knobs (see =M-x customize-group RET benedict-provider-openrouter=) let you change the endpoint, default model (e.g., =deepseek/chat=), or temperature for manual runs.
 
+** Compose profiles and models
+- Profiles live in =benedict-chat-profiles=; entries accept =:label=, =:preamble=, and optional =:provider= / =:model= defaults used when composing. Preambles are treated as system-level snippets (combined with Benedict's base system prompt) and are not injected into user messages; history stays user/assistant/tool only.
+- Profiles may also opt into =:tool-allowlist= / =:tool-denylist= or high-level =:capabilities= so the request's =:tools= list matches the active profile. Basic =:autonomy= metadata can be attached for future enforcement.
+- Compose headers now show the active profile, provider, and model; click the profile/model labels to pick a profile or set a per-compose model override without touching user configuration.
+- Model overrides are free-form strings scoped to the compose buffer; sending or canceling clears the override so subsequent chats fall back to the profile/provider defaults.
+
 ** Manual testing (non-streaming)
 1. Configure credentials as above and evaluate the Benedict init snippet (or load via =use-package!=).
 2. Run =M-x benedict-chat= to open the chat buffer (Phase 2 wires the send command to OpenRouter).
@@ -183,6 +288,160 @@ All providers emit structured logs through a shared defcustom, so you can trace 
 Example init snippet:
 #+begin_src elisp
 (setq benedict-provider-log-level 'debug)   ; emit per-request diagnostics
+#+end_src
+
+* Configuration (Doom Emacs)
+
+This section assumes a Doom Emacs setup (see AGENT.md for local dev details). The snippets below go in =~/.config/doom/config.el= unless noted otherwise.
+
+** Core package
+
+- =benedict-keymap-prefix= :: Prefix key for =benedict-mode= commands (default: =C-c C-b=).
+- =benedict-provider= :: Active provider symbol, either =openrouter= (default) or =fake=.
+
+Minimal Doom setup with a custom prefix and default provider:
+#+begin_src elisp
+(add-to-list 'load-path "~/github.com/scotttrinh/benedict")
+
+(use-package! benedict
+  :commands (benedict-chat benedict-mode)
+  :init
+  (setq benedict-keymap-prefix (kbd "C-c C-b") ; default, customize if you like
+        benedict-provider      'openrouter))
+#+end_src
+
+Switch to the fake provider globally for offline work:
+#+begin_src elisp
+(after! benedict
+  (setq benedict-provider 'fake))
+#+end_src
+
+** Chat behavior & profiles
+
+- =benedict-chat-apply-buffer-name= :: Name of the temporary buffer used for apply blocks (default: =*Benedict Block*=).
+- =benedict-chat-token-display= :: How token usage appears in status lines; one of =prompt+completion= (default), =total=, or =none=.
+- =benedict-chat-compose-buffer-name-format= :: Format string for compose buffer names (default: =*Benedict Compose: %s*=).
+- =benedict-chat-base-system-prompt= :: Global system prompt prepended to every request; profile preambles are appended as system text (not injected into user messages).
+- =benedict-chat-profiles= :: Alist of profile definitions keyed by symbol; each entry supports =:label=, =:preamble=, optional =:provider= / =:model=, and optional tool/autonomy hints (= :tool-allowlist=, =:tool-denylist=, =:capabilities=, =:autonomy=, =:verbosity=).
+- =benedict-chat-capability-tool-map= :: Maps capability keywords (e.g., =:plan=, =:edit-files=) to tool ID lists used when profiles declare =:capabilities=.
+- =benedict-chat-default-profile= :: Default profile when opening a chat buffer (default: =coding=).
+- =benedict-chat-project-default-profiles= :: Alist mapping project roots (strings) to default profile symbols.
+- =benedict-chat-context-retain-after-send= :: When non-nil, keep pending context slices after sending from compose.
+
+Example: customize token display, tweak compose names, and add a focused “Review” profile plus a “Planner” profile that only advertises plan tools:
+#+begin_src elisp
+(after! benedict
+  (setq benedict-chat-token-display 'total
+        benedict-chat-compose-buffer-name-format "*Benedict Compose <%s>*"
+        benedict-chat-base-system-prompt "You are Benedict, a careful Emacs coding copilot."
+        benedict-chat-capability-tool-map '((:plan update-plan)
+                                            (:read-files list-files read-file))
+        benedict-chat-profiles
+        '((coding :label "Coding"
+                  :preamble "You assist with code inside Emacs.")
+          (review :label "Review"
+                  :preamble "You review patches for bugs and risks."
+                  :model "anthropic/claude-3.5-sonnet")
+          (planner :label "Planner"
+                   :preamble "Propose steps only; do not edit files or run tests."
+                   :capabilities (:plan)))))) ; expands via benedict-chat-capability-tool-map
+#+end_src
+
+Example: set per-project default profiles:
+#+begin_src elisp
+(after! benedict
+  (setq benedict-chat-project-default-profiles
+        '(("~/src/my-monorepo" . coding)
+          ("~/src/knowledge-base" . writing))))
+#+end_src
+
+Keep context slices attached to a chat after sending:
+#+begin_src elisp
+(after! benedict
+  (setq benedict-chat-context-retain-after-send t))
+#+end_src
+
+** Context size limits
+
+- =benedict-context-max-bytes-per-slice= :: Maximum bytes per context slice before truncation (default: =4000=). Truncated slices are marked with “[…] [truncated]” plus byte-size metadata.
+
+Example: increase the limit for large diffs:
+#+begin_src elisp
+(after! benedict
+  (setq benedict-context-max-bytes-per-slice 12000))
+#+end_src
+
+** Provider selection & logging
+
+- =benedict-provider-log-level= :: Minimum severity for logs in =*Messages*=; one of =nil= (off), =error=, =warn=, =info=, =debug=, =trace=.
+- =benedict-provider-log-file-level= :: Minimum severity for logs written to disk; same choices as =benedict-provider-log-level= (default: =trace=).
+- =benedict-provider-log-directory= :: Directory for per-request JSONL log files (default: =nil=, disabled).
+- =benedict-provider-log-retain-count= :: Number of per-request log files to keep (default: =5=).
+
+Example: enable verbose logs for debugging into =~/.local/share/benedict-logs/=:
+#+begin_src elisp
+(after! benedict
+  (setq benedict-provider-log-level       'debug
+        benedict-provider-log-file-level 'trace
+        benedict-provider-log-directory  (expand-file-name "~/.local/share/benedict-logs/")
+        benedict-provider-log-retain-count 20))
+#+end_src
+
+** OpenRouter provider options
+
+All of these live under the Customize group =benedict-provider-openrouter=.
+
+- =benedict-provider-openrouter-endpoint= :: HTTP endpoint for chat completions (default: =https://openrouter.ai/api/v1/chat/completions=).
+- =benedict-provider-openrouter-default-model= :: Default model identifier when none is specified (default: =openrouter/auto=).
+- =benedict-provider-openrouter-default-temperature= :: Default sampling temperature (number or =nil= to use provider defaults; default: =0.2=).
+- =benedict-provider-openrouter-default-reasoning= :: Default reasoning options plist/alist; set to =nil= to keep provider defaults (keys include =effort=, =max_tokens=, =exclude=, =enabled=).
+- =benedict-provider-openrouter-default-usage= :: Default usage options plist/alist; set to =nil= to keep provider defaults (keys include =include=).
+- =benedict-provider-openrouter-max-retries= :: Number of retry attempts after the first try for transient failures (default: =2=).
+- =benedict-provider-openrouter-retry-backoff-seconds= :: Base delay in seconds for exponential retry backoff (default: =0.5=).
+- =benedict-provider-openrouter-env-var= :: Name of the environment variable that carries your OpenRouter API key (default: =OPENROUTER_API_KEY=).
+- =benedict-provider-openrouter-auth-source-user= :: =auth-source= username used when looking up OpenRouter credentials (default: =\"openrouter\"=; set to =nil= to skip matching on user).
+- =benedict-provider-openrouter-referer= :: Referer header OpenRouter requires (default points at the GitHub repo).
+- =benedict-provider-openrouter-app-name= :: Human-readable app name sent via =X-Title= (default: =\"Benedict\"=).
+- =benedict-provider-openrouter-enable-streaming= :: When non-nil, use curl-based streaming when available (default: =t=).
+- =benedict-provider-openrouter-curl-program= :: Path to the =curl= executable for streaming (default: =\"curl\"=; must support =--no-buffer= and =--fail-with-body=).
+- =benedict-provider-openrouter-streaming-extra-args= :: Extra args appended to the curl command (list of strings, e.g., proxy flags).
+
+Example: pin a model and tweak retry/backoff behavior:
+#+begin_src elisp
+(after! benedict
+  (setq benedict-provider-openrouter-default-model "anthropic/claude-3.5-sonnet"
+        benedict-provider-openrouter-default-temperature 0.1
+        benedict-provider-openrouter-max-retries 3
+        benedict-provider-openrouter-retry-backoff-seconds 1.0))
+#+end_src
+
+Use a custom env var name and referer:
+#+begin_src elisp
+(after! benedict
+  (setq benedict-provider-openrouter-env-var "MY_OPENROUTER_KEY"
+        benedict-provider-openrouter-referer "https://your-domain.example.com/benedict"))
+#+end_src
+
+Example: enforce non-streaming behavior globally:
+#+begin_src elisp
+(after! benedict
+  (setq benedict-provider-openrouter-enable-streaming nil))
+#+end_src
+
+** Fake provider options
+
+These live under the Customize group =benedict-provider-fake=.
+
+- =benedict-provider-fake-default-model= :: Model name reported by the fake provider (default: =\"benedict/fake-echo\"=).
+- =benedict-provider-fake-latency-seconds= :: Simulated latency before delivering a response (seconds; default: =0.05=).
+- =benedict-provider-fake-streaming-chunk-delay= :: Delay between streaming chunks for reasoning details (seconds; default: =0.01=).
+
+Example: exaggerate latency to test loading spinners and retry UX:
+#+begin_src elisp
+(after! benedict
+  (setq benedict-provider 'fake
+        benedict-provider-fake-latency-seconds 0.5
+        benedict-provider-fake-streaming-chunk-delay 0.05))
 #+end_src
 
 * Tests
