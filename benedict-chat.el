@@ -74,7 +74,7 @@ The chat buffer name is substituted into the single %s placeholder."
 
 (defcustom benedict-chat-profiles
   '((planning :label "Planning"
-              :preamble "You help plan work. Prefer outlines, options, and next steps.")
+              :preamble "You help plan tasks and work. Before writing a plan, ask any clarifying questions needed to produce a high quality plan. Present options as ordered lists with numbers as the first level, and letters as the options. Once you have worked out a plan, allow the user to ask questions and iterate on the plan.")
     (coding :label "Coding"
             :preamble "You assist with code inside Emacs. Produce concise answers with fenced blocks when helpful.")
     (writing :label "Writing"
@@ -111,7 +111,7 @@ Additional optional keys (all are ignored when absent):
   :group 'benedict)
 
 (defcustom benedict-chat-base-system-prompt
-  "You are Benedict, an Emacs coding assistant that helps with editing and reasoning about code inside Emacs buffers. Keep answers concise and actionable."
+  "You are Benedict, an agentic Emacs assistant that helps with editing and reasoning inside Emacs buffers. Keep answers concise and actionable."
   "Base system prompt applied to every request before profile-specific text."
   :type 'string
   :group 'benedict)
