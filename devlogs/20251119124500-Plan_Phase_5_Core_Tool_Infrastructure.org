@@ -1,0 +1,43 @@
+#+TITLE: Plan: Phase 5, Core Tool Infrastructure
+#+AUTHOR: Benedict
+#+DATE: <2025-11-19 Wed>
+#+PROPERTY: header-args :tangle no
+
+* Overview
+
+This plan details the first part of implementing Phase 5 of the roadmap: "Tools & Approvals". The goal is to build the foundational infrastructure for safely invoking tools with user approval and to implement a simple, read-only search tool.
+
+This plan was created based on our discussion on <2025-11-19 Wed>.
+
+* Phase 5.1: Core Tool Infrastructure
+
+**Tasks:**
+
+- [ ] **Refactor =benedict-tools.el= for approvals**
+  - [ ] Rename =benedict-tool-call= to =benedict--tool-call-direct= to clarify it bypasses approvals.
+  - [ ] Update its signature to accept a single =plist= of arguments instead of =&rest args=.
+  - [ ] Create the new main entry point, =benedict-tool-invoke=, which takes a tool ID and an argument plist. This function will be responsible for:
+    - Looking up the tool's approval policy (=:approval=).
+    - Calling a new approval UI function if confirmation is needed.
+    - Executing the tool via =benedict--tool-call-direct= upon approval.
+  - [ ] Implement a simple, placeholder approval function, =benedict--prompt-for-approval=, that uses =y-or-n-p=. It should display the tool name and its arguments to the user.
+
+- [ ] **Implement the first tool: =project-search=**
+  - [ ] Create a new function, =benedict--tool-project-search=, that accepts a =:query= keyword argument from a plist.
+  - [ ] Per our discussion, this function will not shell out directly. Instead, it will be a wrapper around a new, hypothetical Elisp function, let's call it =benedict-search-project-sync=, which will contain the actual search logic. For now, we can create a stub for this function.
+  - [ ] Register the tool using =benedict-tools-register= with =:id 'project-search=, =:approval 'confirm=, and an appropriate schema.
+
+- [ ] **Update providers and chat UI for tool calls**
+  - [ ] The part of the provider logic that parses responses (e.g., in =benedict-provider-openrouter.el=) needs to be updated to recognize tool call instructions from the model.
+  - [ ] The chat buffer logic (in =benedict-chat.el=) must be updated to handle a new "tool-call" item type.
+  - [ ] On receiving a tool call, the chat logic should trigger =benedict-tool-invoke=.
+  - [ ] After the tool runs, its output must be captured and rendered into the chat buffer inside a "tool-result" item. The result also needs to be sent back to the provider in the next turn, which requires extending the message history format.
+
+- [ ] **Test the flow with the fake provider**
+  - [ ] Add a new scenario to =benedict-provider-fake.el= that simulates a model responding with a request to call the =project-search= tool.
+  - [ ] Write an ERT test that uses this fake provider to verify the end-to-end flow:
+    - User sends a prompt.
+    - Fake provider returns a tool call.
+    - Approval UI is triggered (and programmatically answered "yes" in the test).
+    - Tool is executed.
+    - Tool result is rendered in the chat buffer.
