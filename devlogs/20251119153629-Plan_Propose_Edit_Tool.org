@@ -1,0 +1,90 @@
+#+TITLE: Plan — Propose edit tool
+#+AUTHOR: Benedict maintainers
+#+LANGUAGE: en
+#+OPTIONS: toc:nil num:nil ^:{}
+
+* Goal
+Deliver a =propose-edit= tool so the agent can apply concrete file edits while
+surfacing an Emacs-native diff buffer for the user to inspect at their leisure.
+The edits land immediately (no blocking approval), yet the user keeps a Cursor-
+style review buffer to observe/revert changes.
+
+* Requirements recap
+- Scope a single file per invocation; multi-file batching can be a future tool.
+- Inputs provide: project-relative path, unified diff payload (only hunks for
+  that file), and optional metadata (description, cursor context).
+- The tool applies the diff immediately so buffers/files reflect the new state.
+- Automatically surface a review buffer leveraging =diff-mode=/=ediff= so the
+  user can examine or manually revert hunks without stopping the agent.
+- Produce a succinct chat result message (header + file summary) and stash
+  review artifacts so the user can re-open them later.
+
+* Proposed flow
+1. Agent asks for an edit with (=path=, =diff=, optional description).
+2. Tool verifies the file lives in the current project, captures its pre-edit
+   contents in a temporary buffer, then applies hunks via Emacs diff helpers.
+3. After edits succeed the tool writes the file to disk, triggers hooks (e.g.
+   LSP/save), and creates a =*Benedict Edit:path*= buffer showing the unified diff.
+4. The chat log gains a new tool entry summarizing the edit (path, added/removed
+   line counts, pointer on how to jump to the diff buffer or start =ediff=).
+5. Users can review asynchronously: the diff buffer uses =diff-mode=, so standard
+   keybindings apply (=e= to start ediff, =C-c C-c= to apply/reject hunks, =q= to
+   bury). Because the edits already landed, closing the review buffer is enough
+   unless they explicitly revert hunks.
+
+* Implementation plan
+1. **Schema + registration**
+   - Define a JSON schema for the tool args (=:path= string, =:diff= string,
+     optional =:description=). Reject hunks that mention more than one file.
+   - Register the tool in =benedict-tools.el= (=:id 'propose-edit=) with a short
+     doc so it shows up in =benedict-tools-list=.
+
+2. **Diff ingestion + validation**
+   - Parse the diff string in a temp buffer using =diff-mode= helpers. Ensure
+     file names in headers either match the provided path or are blank.
+   - Bail with actionable errors when the diff is empty, malformed, or touches
+     multiple files.
+   - Count inserted/deleted lines to feed into UI summaries.
+
+3. **Applying the edit**
+   - Visit the target file buffer (open or hidden) and narrow-inhibit to reduce
+     surprises.
+   - Reuse =diff-apply-hunk= / =diff-beginning-of-file= to loop over each hunk
+     while temporarily binding =diff-default-read-only= nil so the hunks can be
+     applied programmatically.
+   - Save the buffer (respecting hooks) and capture the before/after content so
+     we can re-render the diff even if the file changes later.
+   - On failure, revert partial changes via the pre-edit snapshot and bubble an
+     informative error to the chat UI.
+
+4. **Review buffer + navigation**
+   - Populate a =*Benedict Edit: path*= buffer with the unified diff (against the
+     saved “before” snapshot) and enable =diff-mode= so standard commands (ediff,
+     apply/reject hunk) are available.
+   - Track these buffers in a ring/list so users can reopen the latest patch via
+     a helper command (e.g. =benedict-propose-edit-open-last=) from keybindings or
+     from the chat result tooltip.
+   - Optionally add a minor-mode keymap inside the diff buffer for quick actions
+     (jump to file, re-open ediff, revert all).
+
+5. **Chat/tool response**
+   - Return a result plist containing a short header (“Applied edit to foo.el”),
+     stats (inserted/deleted), and instructions on how to view the diff buffer.
+   - Include a reference (buffer name or command) so the UI can render a button
+     to pop to the review buffer without blocking the edit flow.
+
+6. **Docs + tests**
+   - Update =AGENT.md=/=README.org= with usage examples showing how to craft the
+     diff payload and what the user sees after invocation.
+   - Add ERT coverage for: well-formed diff applies, malformed diff errors,
+     prevention of cross-file diffs, and ensuring review buffers exist.
+   - Perform a manual smoke test: run the tool on a sample file, inspect the
+     diff buffer, use =ediff= to revert a hunk, confirm chat summarizes correctly.
+
+* Open questions / risks
+- If the agent supplies large diffs, do we need to chunk/limit the review buffer?
+- Should we auto-focus the diff buffer or simply mention it? (Leaning toward
+  configurable behavior with a defcustom.)
+- Do we store multiple historical diffs per file, and how/when do we prune them?
+- Eventually the tool should support alternative payloads (full-file content or
+  structured replacements) for situations where generating diffs is harder.
