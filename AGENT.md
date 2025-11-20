@@ -118,6 +118,20 @@ The `flake.nix` file defines a reproducible testing environment with Emacs and a
 
 - **When adding new tests**: Ensure they run in batch mode (no interactive prompts, no buffers left behind).
 
+#### Running Lints
+
+- **Check all linters** (strict mode for CI):
+  ```sh
+  nix run .#lint
+  ```
+
+- **Allow warnings during development**:
+  ```sh
+  LINT_WARNINGS_ONLY=1 nix run .#lint
+  ```
+
+Linters run checkdoc (docstring style), package-lint (packaging best practices), and bytecomp (syntax/compilation errors). Temporary compilation happens in a sandboxed directory to avoid polluting the source tree.
+
 ### Test Architecture
 
 Tests use **ERT** (Emacs' standard test runner) with support for **ert-async** (non-blocking tests). This is documented in `test/run-tests.el`.
