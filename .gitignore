@@ -1,2 +1,5 @@
 .elpa/
 .logs/
+result
+result-*
+.dirlocals

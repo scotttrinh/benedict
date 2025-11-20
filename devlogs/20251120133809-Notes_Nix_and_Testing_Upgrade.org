@@ -1,0 +1,54 @@
+#+title: Notes: Nix Flake & Testing Strategy Upgrade
+#+date: 2025-11-20
+
+* Summary
+
+Upgraded Benedict's test infrastructure to use Nix flakes for reproducible dependencies and expanded AGENT.md with comprehensive testing guidance based on the flywire project.
+
+* Changes Made
+
+** 1. Created flake.nix
+
+- Defines a custom Emacs with pre-installed test dependencies: =ert-async=, =dash=, =s=, =package-lint=
+- Two Nix apps:
+  - =nix run .#test= – Runs all tests (reproducible, no package-el bootstrapping needed)
+  - =nix run .#lint= – Scaffolding for future linting (test/run-lint.el)
+- Dev shell via =nix develop= for interactive work
+- Lock file (flake.lock) generated and committed
+
+** 2. Updated .gitignore
+
+Added Nix-specific artifacts:
+- =result=, =result-*= (Nix build outputs)
+- =.dirlocals= (direnv config, if used)
+
+** 3. Expanded AGENT.md Testing Section
+
+- **Nix Setup** subsection explaining reproducibility
+- **Running Tests** with three modes:
+  - =nix run .#test= (recommended, fully reproducible)
+  - =nix develop && emacs -Q --batch -l test/run-tests.el= (manual, for dev)
+  - Interactive debugging in Emacs
+- **Test Architecture** covering ERT, ert-async, test file structure
+- **Mocking & Isolation** using =cl-letf= pattern
+- **Byte-Compilation & Linting** section with future lint runner reference
+
+* Verification
+
+- Flake checks pass: =nix flake check=
+- All 30 tests pass via =nix run .#test=:
+  #+begin_src
+  Ran 30 tests, 30 results as expected, 0 unexpected (2025-11-20 13:38:02-0500, 2.921139 sec)
+  #+end_src
+- No changes to existing test files or run-tests.el needed; they already follow documented patterns
+
+* Next Steps
+
+1. Create =test/run-lint.el= for checkdoc, package-lint, and bytecomp (medium priority)
+2. Audit existing tests to ensure async delays are short and mocking is complete
+3. Consider propcheck integration for property-based testing in future phases (low priority)
+
+* References
+
+- Upstream pattern: flywire project testing guide (mentioned in shared org file)
+- Existing test infrastructure: =test/run-tests.el=, =Cask=, six test files

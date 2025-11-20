@@ -7,8 +7,8 @@ Working notes for future agents contributing to Benedict. This doc explains our 
 - Plans live in `devlogs/` with filenames like `YYYYMMDDHHMM-Plan_Phase_N.org`.
   - Contents: tasks, decisions, acceptance criteria, tentative file layout.
 - Notes (what actually happened) also live in `devlogs/` as `YYYYMMDDHHMM-Notes_*.org`.
-  - Contents: what worked, what didn’t, concrete diffs/decisions, and follow‑ups.
-- Keep planning docs forward‑looking; keep notes factual/retrospective. Don’t mix them.
+  - Contents: what worked, what didn't, concrete diffs/decisions, and follow-ups.
+- Keep planning docs forward-looking; keep notes factual/retrospective. Don't mix them.
 - Reference: see `devlogs/20251116105736-Plan_Phase_0.org`, `devlogs/20251116105752-Plan_Phase_1.org`, and subsequent `Notes_*` entries.
 - Timestamp accuracy
   - Create the file however you like (Org capture, `touch`, Emacs, etc.), then rename it based on the filesystem creation time so the prefix is always correct.
@@ -29,7 +29,7 @@ Choose one of these setups. Option 1 is fastest for iteration.
   ```
 - Reload Doom: `M-x doom/reload` (or restart Emacs).
 
-2) Symlink into straight’s repos (integrated with Doom builds)
+2) Symlink into straight's repos (integrated with Doom builds)
 - Shell:
   ```sh
   ln -s ~/github.com/scotttrinh/benedict \
@@ -92,27 +92,117 @@ Tips
 
 ## Testing & Quality Gates
 
-- Byte-compile clean on Emacs 27.1 and 28.x (reduce warnings early).
-- ERT tests: start small
-  - Chat opens and can send a prompt (echo response).
-  - Tools registry: register/list/call roundtrip.
-- Keep UI non-blocking; prefer `make-process` or `url-retrieve` for IO in later phases.
+### Nix Setup: Reproducible Dependencies
 
-### Running the automated test suite
+The `flake.nix` file defines a reproducible testing environment with Emacs and all dependencies pre-installed. This ensures tests run the same way locally, in CI, and for other contributors.
 
-- Default runner:  
+#### Running Tests
+
+- **With Nix** (recommended, fully reproducible):
   ```sh
+  nix run .#test
+  ```
+
+- **Without Nix** (manual in a dev shell):
+  ```sh
+  nix develop
   emacs -Q --batch -l test/run-tests.el
-  ```  
-  This bootstraps the repo-local `.elpa/` (for `ert-async`), loads every `*-test.el`, and exits non-zero on a failure.
-- The runner prints every asynchronous test’s progress (look for `benedict-chat-*` first). When debugging, re-run with `EDEBUG=1` or add `(message ...)` calls, but remove noisy logging before you ship.
-- If you add new tests, make sure they can run in batch (no interactive prompts, no buffers left behind).
+  ```
+
+- **Interactive debugging** (in Emacs):
+  ```sh
+  emacs -Q
+  M-x load-file test/my-test.el
+  M-x ert RET my-test-name RET
+  ```
+
+- **When adding new tests**: Ensure they run in batch mode (no interactive prompts, no buffers left behind).
+
+### Test Architecture
+
+Tests use **ERT** (Emacs' standard test runner) with support for **ert-async** (non-blocking tests). This is documented in `test/run-tests.el`.
+
+#### Standard unit tests (ERT)
+
+Use `ert-deftest` for deterministic, synchronous tests:
+
+```elisp
+(ert-deftest benedict-chat-opens ()
+  "Chat buffer should open and be ready for input."
+  (let ((buf (benedict-chat)))
+    (should (buffer-live-p buf))
+    (should (string-match-p "Chat:" (buffer-name buf)))))
+```
+
+Assertions: `should`, `should-not`, `should-error`, and others all report full backtraces on failure.
+
+#### Async tests (ert-async)
+
+For code involving timers or deferred execution, use `ert-deftest-async`:
+
+```elisp
+(ert-deftest-async benedict-stream-timeout (done)
+  "Streaming should handle timeout gracefully."
+  (let ((start-time (current-time)))
+    (benedict-stream-with-timeout 0.5
+      (run-with-timer 0.3 nil
+                      (lambda ()
+                        (should (< (float-time (time-subtract (current-time) start-time)) 1.0))
+                        (funcall done))))))
+```
+
+The `done` callback marks the test complete. Schedule assertions with `run-with-timer` after async operations. **Keep delays short** (0.1-0.3s) to avoid timeout. The test runner waits for all `done` calls before exiting.
+
+#### Test file structure
+
+Each test file should follow this pattern:
+
+```elisp
+;;; test/my-feature-test.el --- Tests for my-feature  -*- lexical-binding: t; -*-
+
+(require 'ert)
+(require 'ert-async)  ;; if using async tests
+
+;; Load the feature under test
+(let* ((root (file-name-directory (or load-file-name buffer-file-name)))
+       (repo (expand-file-name ".." root)))
+  (add-to-list 'load-path repo))
+
+(require 'my-feature)
+
+(ert-deftest my-feature-basic () ...)
+(ert-deftest-async my-feature-async (done) ...)
+
+(provide 'test/my-feature-test)
+;;; my-feature-test.el ends here
+```
+
+**Do not use `require` to load test files** if they don't provide a feature; `test/run-tests.el` uses `load` with force=t instead.
+
+### Byte-Compilation & Linting
+
+- **Byte-compile clean** on Emacs 27.1 and 28.x; catch warnings early.
+- Keep UI non-blocking; prefer `make-process` or `url-retrieve` for IO.
+- Consider adding a `test/run-lint.el` for `checkdoc`, `package-lint`, and `bytecomp` in future phases (see the flywire project for a complete example).
+
+### Mocking and Isolation
+
+Use `cl-letf` to dynamically rebind functions and avoid side effects:
+
+```elisp
+(cl-letf (((symbol-function 'benedict-provider-send)
+           (lambda (msg) '(:mock-response t))))
+  (let ((result (benedict-chat-send-prompt "test")))
+    (should (equal result '(:mock-response t)))))
+```
+
+This isolates tests, improves speed, and makes assertions deterministic. Functions are restored automatically after the `let` block exits.
 
 ### Markers, overlays, and folding (read this before editing chat UI)
 
-- Whenever you insert complex UI like folded “Thinking” blocks, store `:content-start` and `:content-end` as markers that use **correct stickiness**. For example, thinking content should use a front-non-sticky marker at the start and a rear-sticky marker for the end so streaming append operations do not invert the region.
-- Capture `:content-end` immediately after inserting the block’s payload, then keep that marker front-sticky while you append closing dividers/newlines. Once the scaffolding is in place, flip it back to rear-sticky so later updates extend the overlay without swallowing the next message.
-- If a block installs an overlay, **always** update it whenever you mutate the block’s text. Forgetting to move the overlay leads to `args-out-of-range` errors once Emacs tries to adjust it during timers.
+- Whenever you insert complex UI like folded "Thinking" blocks, store `:content-start` and `:content-end` as markers that use **correct stickiness**. For example, thinking content should use a front-non-sticky marker at the start and a rear-sticky marker for the end so streaming append operations do not invert the region.
+- Capture `:content-end` immediately after inserting the block's payload, then keep that marker front-sticky while you append closing dividers/newlines. Once the scaffolding is in place, flip it back to rear-sticky so later updates extend the overlay without swallowing the next message.
+- If a block installs an overlay, **always** update it whenever you mutate the block's text. Forgetting to move the overlay leads to `args-out-of-range` errors once Emacs tries to adjust it during timers.
 - When regenerating content (e.g., final reasoning replaces streamed chunks), delete text between the stored markers rather than rewriting the entire block; this keeps downstream markers (buttons, block dividers) valid.
 - New streaming UI must survive timers firing after the buffer is killed. Audit every `run-at-time` callback to guard with `(buffer-live-p buffer)` before touching markers.
 
@@ -134,12 +224,12 @@ Tips
 
 ## Commit/PR Messaging (Future)
 
-- Prefer messages that explain the “why” more than the “what”.
+- Prefer messages that explain the "why" more than the "what".
 - Group changes by phase/task; avoid mixing planning docs with code changes unless directly related.
 
 ## Common Pitfalls
 
 - Autoload failures: ensure `benedict.el` autoloads interactive commands from other files.
-- Reserved key sequences: don’t bind `C-c <letter>`.
+- Reserved key sequences: don't bind `C-c <letter>`.
 - Load-path issues: confirm the working copy is in `load-path` during WIP.
 - Over-eager `require`: avoid heavy `require` at top-level if it creates cycles; autoload where possible.
