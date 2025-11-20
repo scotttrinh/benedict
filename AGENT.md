@@ -167,6 +167,28 @@ For code involving timers or deferred execution, use `ert-deftest-async`:
 
 The `done` callback marks the test complete. Schedule assertions with `run-with-timer` after async operations. **Keep delays short** (0.1-0.3s) to avoid timeout. The test runner waits for all `done` calls before exiting.
 
+#### Property-based tests (propcheck)
+
+Use `propcheck-deftest` to verify that functions behave correctly across random inputs:
+
+```elisp
+(propcheck-deftest benedict-prop-context-slice-size ()
+  "Context slices should always have numeric size-bytes field."
+  (let ((content (propcheck-generate-string "content"))
+        (max-bytes (propcheck-generate-integer "max" 10 10000)))
+    (let ((slice (benedict-context-make-slice :content content :max-bytes max-bytes)))
+      (propcheck-should (numberp (plist-get slice :size-bytes))))))
+```
+
+Propcheck generates 100 random test cases per deftest. Use:
+
+- `propcheck-generate-string` – Random ASCII string.
+- `propcheck-generate-integer` – Integer in a range.
+- `propcheck-generate-proper-list` – List of generated values.
+- `propcheck-should` – Assertion that must hold for all cases.
+
+**Key benefit**: Property tests catch edge cases (extreme values, unusual combinations) that unit tests might miss. When a property test fails, propcheck shrinks the failing input to find the minimal case.
+
 #### Test file structure
 
 Each test file should follow this pattern:
