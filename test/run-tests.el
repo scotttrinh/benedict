@@ -39,6 +39,7 @@
 (add-to-list 'load-path benedict-test-root)
 
 (require 'ert)
+(require 'propcheck)
 
 (defconst benedict-test-directory
   (expand-file-name "test" benedict-test-root))
