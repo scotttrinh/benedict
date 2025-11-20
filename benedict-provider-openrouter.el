@@ -304,7 +304,8 @@ When streaming is enabled, callbacks receive incremental deltas via curl."
        :final-message-text nil
        :usage nil
        :raw-last nil
-       :remote-id nil)
+       :remote-id nil
+       :tool-call-partials nil)
       (setf (plist-get context :partial) ""
             (plist-get context :stdout-log) ""
             (plist-get context :stream-complete) nil
@@ -529,6 +530,7 @@ Returns non-nil when a delta was dispatched."
          (delta (plist-get normalized :delta)))
     (plist-put normalized :index (or (plist-get normalized :index) index))
     (when delta
+      (benedict-provider-openrouter--accumulate-tool-calls-from-delta context delta)
       (when-let ((chunk (benedict-provider-openrouter--accumulate-message-from-delta
                          context delta)))
         (plist-put normalized :text chunk)
@@ -671,6 +673,49 @@ Returns non-nil when a delta was dispatched."
       (benedict-provider-openrouter--state-push* context :message-chunks text)
       text)))
 
+(defun benedict-provider-openrouter--accumulate-tool-calls-from-delta (context delta)
+  "Accumulate tool calls from DELTA for CONTEXT."
+  (when-let ((calls (plist-get delta :tool_calls)))
+    (let* ((state (benedict-provider-openrouter--state-get
+                   (plist-get context :request-id)))
+           (partials (plist-get state :tool-call-partials)))
+      (dolist (call calls)
+        (let* ((index (plist-get call :index))
+               (entry (or (alist-get index partials)
+                          (list :index index :id "" :type "" :name "" :arguments ""))))
+          (when-let ((id (plist-get call :id)))
+            (plist-put entry :id (concat (plist-get entry :id) id)))
+          (when-let ((type (plist-get call :type)))
+            (plist-put entry :type (concat (plist-get entry :type) type)))
+          (when-let ((function (plist-get call :function)))
+            (when-let ((name (plist-get function :name)))
+              (plist-put entry :name (concat (plist-get entry :name) name)))
+            (when-let ((args (plist-get function :arguments)))
+              (plist-put entry :arguments (concat (plist-get entry :arguments) args))))
+          (setf (alist-get index partials) entry)))
+      (benedict-provider-openrouter--state-update
+       (plist-get context :request-id) :tool-call-partials partials))))
+
+(defun benedict-provider-openrouter--finalize-tool-calls (context)
+  "Finalize accumulated tool calls for CONTEXT."
+  (let* ((state (benedict-provider-openrouter--state-get
+                 (plist-get context :request-id)))
+         (partials (plist-get state :tool-call-partials)))
+    (when partials
+      (let (result)
+        (dolist (pair (sort partials (lambda (a b) (< (car a) (car b)))))
+          (let* ((entry (cdr pair))
+                 (name (plist-get entry :name))
+                 (args-str (plist-get entry :arguments))
+                 (decoded-args (benedict-provider-openrouter--decode-tool-arguments args-str)))
+            (push (list :id (plist-get entry :id)
+                        :type (or (plist-get entry :type) "function")
+                        :name (benedict-provider-openrouter--normalize-tool-name name)
+                        :arguments decoded-args
+                        :raw entry)
+                  result)))
+        (nreverse result)))))
+
 (defun benedict-provider-openrouter--delta-text (delta)
   "Extract user-visible text from DELTA."
   (cond
@@ -800,8 +845,9 @@ ERROR-BLOCK is the parsed JSON block when available.  MESSAGE is a fallback stri
          (content (or (plist-get state :final-message-text)
                       (mapconcat #'identity (nreverse chunks) "")))
          (role (or (plist-get state :role) 'assistant))
+         (tool-calls (benedict-provider-openrouter--finalize-tool-calls context))
          (message (or (plist-get state :final-message)
-                      (list :role role :content content)))
+                      (list :role role :content content :tool-calls tool-calls)))
          (thinking (benedict-provider-openrouter--finalize-reasoning context))
          (end-time (current-time))
          (start-time (or (plist-get state :start-time)
@@ -817,7 +863,8 @@ ERROR-BLOCK is the parsed JSON block when available.  MESSAGE is a fallback stri
                        :thinking thinking
                        :latency latency
                        :raw (plist-get state :raw-last)
-                       :empty-response (string-empty-p (or content "")))))
+                       :empty-response (and (string-empty-p (or content ""))
+                                            (null tool-calls)))))
     (benedict-provider-openrouter--state-update request-id
                                                 :status :completed
                                                 :end-time end-time

@@ -1,0 +1,53 @@
+# Plan: Phase 6.1 - Layered Autonomy Profiles
+
+*   Date: 2025-11-20
+*   Goal: Refine agent autonomy by allowing profiles to define their own stricter safeguard limits, which override global defaults.
+
+## Context
+We just shipped the Agent Loop with global safeguards (`benedict-chat-loop-checkpoint-interval`, `benedict-chat-loop-max-time`, etc.).
+However, different tasks require different levels of trust. A "Review" agent should probably not have permission to run 50 autonomous steps, whereas a "Refactor" agent might need exactly that.
+
+## Objectives
+1.  **Profile-Specific Limits**: Allow the `benedict-chat-profiles` plist to carry an `:autonomy` property with specific keys (`:max-turns`, `:max-time`, `:max-tokens`).
+2.  **Layered Enforcement**: When checking constraints, use the **stricter** of the two limits (Global vs. Profile).
+    *   Effective Limit = `min(Global, Profile)` (where `nil` means "no limit", so treat as infinity).
+3.  **Defaults**: If a profile doesn't specify `:autonomy`, it falls back to the global defaults.
+
+## Schema Changes
+
+Modify `benedict-chat-profiles` structure:
+
+```elisp
+(coding
+ :label "Coding"
+ :autonomy (:max-turns 10 :max-time 120) ;; New
+ ...)
+```
+
+## Implementation Plan
+
+### 1. Helper Functions (`benedict-chat.el`)
+Create a helper `benedict-chat--effective-limit (profile-key global-var)`:
+*   Retrieve the value from the active profile's `:autonomy` plist.
+*   Retrieve the global variable value.
+*   Return the stricter (lower) non-nil value.
+
+### 2. Update Constraint Checks
+Refactor `benedict-chat--check-loop-constraints` to use effective limits:
+*   Turn Checkpoint: `(benedict-chat--effective-limit :checkpoint-interval benedict-chat-loop-checkpoint-interval)`
+*   Time Limit: `(benedict-chat--effective-limit :max-time benedict-chat-loop-max-time)`
+*   Token Limit: `(benedict-chat--effective-limit :max-tokens benedict-chat-loop-max-tokens)`
+
+### 3. UI/Docs
+*   Update `benedict-chat-profiles` docstring.
+*   Update README.
+
+## Example Scenario
+*   Global Max Turns = 50 (User allows long runs in general).
+*   "Planner" Profile Max Turns = 1 (Just plan, don't execute).
+*   Result: The Planner agent pauses after 1 turn, even though the global limit is 50.
+
+## Tasks
+1.  [X] **Plan**: This document.
+2.  [X] **Code**: Implement `benedict-chat--effective-limit` and update `benedict-chat--check-loop-constraints`.
+3.  [X] **Test**: Add a test case with a restrictive profile to verify it stops early.

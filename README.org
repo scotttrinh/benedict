@@ -361,6 +361,39 @@ Keep context slices attached to a chat after sending:
   (setq benedict-chat-context-retain-after-send t))
 #+end_src
 
+** Loop and Autonomy Safeguards
+
+Benedict includes safeguards to prevent runaway loops or infinite tool usage. These are configured via the `benedict` customize group.
+
+- =benedict-chat-loop-checkpoint-interval= :: Number of autonomous steps before pausing to ask for user confirmation (default: =5=). Set to =nil= to disable.
+- =benedict-chat-loop-max-time= :: Maximum duration (in seconds) an autonomous loop can run before pausing (default: =60.0=).
+- =benedict-chat-loop-max-tokens= :: Maximum total tokens consumed in a session before pausing (default: =nil=; disabled).
+- Repetition Guard :: Benedict automatically halts if it detects identical tool calls in consecutive turns. This is always enabled.
+
+Example: Allow 10 steps or 2 minutes of autonomy before pausing:
+#+begin_src elisp
+(after! benedict
+  (setq benedict-chat-loop-checkpoint-interval 10
+        benedict-chat-loop-max-time 120.0))
+#+end_src
+
+** Layered Autonomy Profiles
+
+You can define stricter autonomy limits for specific profiles using the `:autonomy` key. When a profile is active, Benedict enforces the *stricter* (lower) of the global or profile-specific limit.
+
+Supported keys: `:max-turns`, `:max-time`, `:max-tokens`.
+
+Example: A "Planner" profile that only allows 1 turn (to produce a plan) even if global limits allow 10:
+
+#+begin_src elisp
+(after! benedict
+  (add-to-list 'benedict-chat-profiles
+               '(planner :label "Planner"
+                         :preamble "Propose a plan, do not execute."
+                         :autonomy (:max-turns 1)
+                         :capabilities (:plan))))
+#+end_src
+
 ** Context size limits
 
 - =benedict-context-max-bytes-per-slice= :: Maximum bytes per context slice before truncation (default: =4000=). Truncated slices are marked with “[…] [truncated]” plus byte-size metadata.

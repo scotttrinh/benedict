@@ -90,7 +90,8 @@ Additional optional keys (all are ignored when absent):
 - :tool-denylist — list of tool IDs to exclude.
 - :capabilities — high-level tags mapped to tools via
   `benedict-chat-capability-tool-map'.
-- :autonomy — plist describing autonomy limits (e.g., :max-actions).
+- :autonomy — plist with keys :max-turns, :max-time, :max-tokens.
+  Overrides global safeguards if stricter (lower).
 - :verbosity — hint about response length/structure."
   :type '(alist :key-type symbol :value-type plist)
   :group 'benedict)
@@ -120,6 +121,24 @@ Additional optional keys (all are ignored when absent):
   "Alist mapping capability keywords to tool ID lists.
 For example: '((:plan update-plan) (:read-files read-file list-files))."
   :type '(alist :key-type symbol :value-type (repeat symbol))
+  :group 'benedict)
+
+(defcustom benedict-chat-loop-checkpoint-interval 5
+  "Number of autonomous turns before pausing to ask for user confirmation.
+Set to nil to disable turn-based checkpoints."
+  :type '(choice (const :tag "Disabled" nil) integer)
+  :group 'benedict)
+
+(defcustom benedict-chat-loop-max-time 60.0
+  "Maximum duration (in seconds) for an autonomous loop before pausing.
+Set to nil to disable time limits."
+  :type '(choice (const :tag "Disabled" nil) number)
+  :group 'benedict)
+
+(defcustom benedict-chat-loop-max-tokens nil
+  "Maximum total tokens consumed in a loop session before pausing.
+Set to nil to disable token limits."
+  :type '(choice (const :tag "Disabled" nil) integer)
   :group 'benedict)
 
 (defconst benedict-chat--block-divider-line
@@ -172,6 +191,15 @@ For example: '((:plan update-plan) (:read-files read-file list-files))."
 (defvar-local benedict-chat--compose-model-override nil
   "Transient model override applied to the next compose send.")
 
+(defvar-local benedict-chat--loop-start-time nil
+  "Float time marking the start of the current autonomous loop.")
+
+(defvar-local benedict-chat--loop-turn-count 0
+  "Number of turns executed in the current autonomous loop.")
+
+(defvar-local benedict-chat--loop-canceled nil
+  "Non-nil when the user has requested the current loop to stop.")
+
 (defvar-local benedict-chat-profile nil
   "Active profile symbol for the current chat, controls prompt preamble.")
 
@@ -191,6 +219,76 @@ THINKING is non-nil when reasoning blocks accompanied the response."
   (if thinking
       benedict-chat--empty-response-thinking-placeholder
     benedict-chat--empty-response-placeholder))
+
+;; -------------------------------------------------------------------
+;; Loop Constraints and Safeguards
+
+(defun benedict-chat--check-loop-constraints ()
+  "Check loop safeguards (checkpoints, time, tokens).
+Returns t if the loop should continue, or nil if it should stop.
+Prompts the user to authorize extensions when limits are reached."
+  (if benedict-chat--loop-canceled
+      nil
+    (let ((continue t)
+          (limit-turns (benedict-chat--effective-limit :max-turns benedict-chat-loop-checkpoint-interval))
+          (limit-time (benedict-chat--effective-limit :max-time benedict-chat-loop-max-time))
+          (limit-tokens (benedict-chat--effective-limit :max-tokens benedict-chat-loop-max-tokens)))
+      ;; 1. Turn Checkpoint
+      (when (and limit-turns
+                 (> benedict-chat--loop-turn-count 0)
+                 (= 0 (mod benedict-chat--loop-turn-count
+                           limit-turns)))
+        (unless (y-or-n-p (format "Benedict has run %d autonomous steps. Continue? "
+                                  benedict-chat--loop-turn-count))
+          (setq continue nil)))
+      
+      ;; 2. Time Limit
+      (when (and continue
+                 limit-time
+                 benedict-chat--loop-start-time
+                 (> (float-time (time-since benedict-chat--loop-start-time))
+                    limit-time))
+        (unless (y-or-n-p (format "Time limit (%.1fs) reached. Continue? "
+                                  limit-time))
+          (setq continue nil)
+          ;; If continued, reset the timer to avoid prompting immediately again?
+          ;; Or just extend? For now, we update start time to give another full window.
+          (when continue
+            (setq benedict-chat--loop-start-time (float-time)))))
+      
+      ;; 3. Token Limit (Best effort based on session telemetry)
+      (when (and continue
+                 limit-tokens)
+        (let* ((usage (plist-get benedict-chat--telemetry :session-usage))
+               (total (or (plist-get usage :total) 0)))
+          (when (> total limit-tokens)
+            (unless (y-or-n-p (format "Token limit (%d) exceeded (current: %d). Continue? "
+                                      limit-tokens total))
+              (setq continue nil)))))
+      
+      continue)))
+
+(defun benedict-chat--check-repetition-guard (current-tool-calls history)
+  "Return non-nil if CURRENT-TOOL-CALLS match the previous assistant message in HISTORY."
+  (let* ((assistants (cl-remove-if-not 
+                      (lambda (m) (eq (benedict-chat--normalize-role (plist-get m :role)) 'assistant))
+                      history))
+         ;; assistants is (current prev ...) because we are called after recording
+         (previous (cadr assistants)))
+    (when previous
+      (equal current-tool-calls (plist-get previous :tool-calls)))))
+
+(defun benedict-chat--loop-step (assistant-message)
+  "Decide whether to continue the autonomous loop after ASSISTANT-MESSAGE."
+  (let ((tool-calls (plist-get assistant-message :tool-calls)))
+    (when tool-calls
+      ;; Check for repetition
+      (if (benedict-chat--check-repetition-guard tool-calls benedict-chat--messages)
+          (message "Benedict: loop stopped (repetition detected)")
+        ;; Check constraints
+        (when (benedict-chat--check-loop-constraints)
+          (setq benedict-chat--loop-turn-count (1+ benedict-chat--loop-turn-count))
+          (benedict-chat--start-dispatch (benedict-chat--build-request)))))))
 
 ;; -------------------------------------------------------------------
 ;; Profiles and project helpers
@@ -240,6 +338,17 @@ THINKING is non-nil when reasoning blocks accompanied the response."
 (defun benedict-chat--profile-autonomy (profile)
   "Return autonomy plist for PROFILE."
   (plist-get (cdr (benedict-chat--profile-entry profile)) :autonomy))
+
+(defun benedict-chat--effective-limit (key global-val)
+  "Return the stricter of the profile's autonomy limit KEY and GLOBAL-VAL.
+NIL represents infinity (no limit). Uses `benedict-chat-profile`."
+  (let* ((autonomy (benedict-chat--profile-autonomy benedict-chat-profile))
+         (profile-limit (plist-get autonomy key)))
+    (cond
+     ((and (null global-val) (null profile-limit)) nil)
+     ((null global-val) profile-limit)
+     ((null profile-limit) global-val)
+     (t (min global-val profile-limit)))))
 
 (defun benedict-chat--profile-verbosity (profile)
   "Return verbosity hint for PROFILE."
@@ -2045,7 +2154,8 @@ LANGUAGE is the identifier included in the fence (may be nil)."
                            :display-content (and empty-response display-content)))
         (setq record (benedict-chat--record-message record)))
       (when tool-calls
-        (benedict-chat--process-tool-calls record tool-calls metadata)))
+        (benedict-chat--process-tool-calls record tool-calls metadata)
+        (benedict-chat--loop-step record)))
     (let* ((provider-label (benedict-chat--provider-label provider))
            (model-label (or (plist-get metadata :model) "provider")))
       (message "Benedict: %s replied via %s" model-label provider-label))))
@@ -2138,6 +2248,9 @@ LANGUAGE is the identifier included in the fence (may be nil)."
   (when (string-blank-p text)
     (user-error "Prompt is empty"))
   (benedict-chat--ensure-not-busy)
+  (setq benedict-chat--loop-start-time (float-time))
+  (setq benedict-chat--loop-turn-count 0)
+  (setq benedict-chat--loop-canceled nil)
   (benedict-chat--record-message
    (list :role 'user :content text :time (current-time)))
   (benedict-chat--start-dispatch (benedict-chat--build-request)))
@@ -2660,8 +2773,18 @@ When INCLUDE-ERRORS is nil, skip entries flagged with :error metadata."
     (define-key m (kbd "C-c C-s") #'benedict-chat-send-prompt)
     (define-key m (kbd "g r") #'benedict-chat-retry-last)
     (define-key m (kbd "w") #'benedict-chat-copy-last-response)
+    (define-key m (kbd "C-c C-k") #'benedict-chat-cancel)
     m)
   "Keymap for `benedict-chat-mode'.")
+
+(defun benedict-chat-cancel ()
+  "Cancel the current autonomous loop or in-flight request."
+  (interactive)
+  (setq benedict-chat--loop-canceled t)
+  (when benedict-chat--pending-request
+    (benedict-provider-abort benedict-chat--pending-request)
+    (setq benedict-chat--pending-request nil))
+  (message "Benedict: loop/request canceled by user"))
 
 (define-derived-mode benedict-chat-mode special-mode "Benedict-Chat"
   "Major mode for Benedict chat buffers backed by network providers."
@@ -2682,6 +2805,9 @@ When INCLUDE-ERRORS is nil, skip entries flagged with :error metadata."
   (setq-local benedict-chat--last-dispatch nil)
   (setq-local benedict-chat--context-slices nil)
   (setq-local benedict-chat--compose-buffer nil)
+  (setq-local benedict-chat--loop-start-time nil)
+  (setq-local benedict-chat--loop-turn-count 0)
+  (setq-local benedict-chat--loop-canceled nil)
   (setq-local benedict-chat-profile (or benedict-chat-profile
                                         (benedict-chat--default-profile)))
   (benedict-chat--telemetry-reset)

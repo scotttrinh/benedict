@@ -58,5 +58,61 @@
     (should (string-match "^openrouter-[0-9]\\{8\\}T[0-9]\\{6\\}Z-[0-9a-f]+$" id))
     (should (not (equal id (benedict-provider-openrouter--make-request-id))))))
 
+(ert-deftest benedict-provider-openrouter-stream-accumulates-tool-calls ()
+  "Streamed tool calls split across chunks are reassembled correctly."
+  (let* ((start (current-time))
+         (request-id "openrouter-tool-test")
+         (result nil)
+         (context (list :request-id request-id
+                        :start-time start
+                        :stream-complete nil
+                        :on-delta (lambda (_payload))
+                        :on-complete (lambda (payload) (setq result payload)))))
+    (benedict-provider-openrouter--state-create
+     :id request-id
+     :provider 'openrouter
+     :model "openrouter/test-model"
+     :start-time start)
+
+    ;; Chunk 1: Tool call start with ID and partial function name
+    (benedict-provider-openrouter--stream-handle-json
+     context
+     (list :choices (list (list :index 0
+                                :delta (list :tool_calls
+                                             (list (list :index 0
+                                                         :id "call_123"
+                                                         :type "function"
+                                                         :function (list :name "project-"))))))))
+
+    ;; Chunk 2: Rest of function name and partial arguments
+    (benedict-provider-openrouter--stream-handle-json
+     context
+     (list :choices (list (list :index 0
+                                :delta (list :tool_calls
+                                             (list (list :index 0
+                                                         :function (list :name "search"
+                                                                         :arguments "{\"query\":"))))))))
+
+    ;; Chunk 3: Rest of arguments
+    (benedict-provider-openrouter--stream-handle-json
+     context
+     (list :choices (list (list :index 0
+                                :delta (list :tool_calls
+                                             (list (list :index 0
+                                                         :function (list :arguments "\"test\"}"))))))))
+
+    ;; Finish stream
+    (benedict-provider-openrouter--finalize-stream context)
+
+    (should result)
+    (let* ((message (plist-get result :message))
+           (tool-calls (plist-get message :tool-calls))
+           (call (car tool-calls)))
+      (should (equal (plist-get message :content) ""))
+      (should (= (length tool-calls) 1))
+      (should (equal (plist-get call :id) "call_123"))
+      (should (eq (plist-get call :name) 'project-search))
+      (should (equal (plist-get call :arguments) (list :query "test"))))))
+
 (provide 'benedict-provider-openrouter-test)
 ;;; benedict-provider-openrouter-test.el ends here
