@@ -47,6 +47,9 @@
 (dolist (file (directory-files benedict-test-directory t "-test\\.el\\'"))
   (load file nil nil t))
 
-(ert-run-tests-batch-and-exit)
+(let ((selector (if command-line-args-left
+                    (pop command-line-args-left)
+                  t)))
+  (ert-run-tests-batch-and-exit selector))
 
 ;;; run-tests.el ends here

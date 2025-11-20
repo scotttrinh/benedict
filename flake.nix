@@ -49,7 +49,7 @@
         apps.test = {
           type = "app";
           program = toString (pkgs.writeShellScript "run-tests" ''
-            exec ${myEmacs}/bin/emacs -Q --batch -l test/run-tests.el
+            exec ${myEmacs}/bin/emacs -Q --batch -l test/run-tests.el "$@"
           '');
         };
 
