@@ -10,16 +10,10 @@
 (require 'benedict-context)
 
 ;; Property test: context slices size-bytes field exists and is a number
-;; TODO: This test exposes a bug when max-bytes parameter interacts with
-;; certain generated content. The size-bytes field becomes nil in some cases.
-;; Investigation needed in benedict-context--truncate-content or callers.
 (propcheck-deftest benedict-prop-context-slice-has-valid-size ()
-  "Slicing context should always produce a numeric size-bytes field.
-
-KNOWN ISSUE: This test fails with certain content/max-bytes combinations,
-suggesting a bug in context slicing when max-bytes parameter is varied."
+  "Slicing context should always produce a numeric size-bytes field."
   (let ((content (propcheck-generate-string "content"))
-        (max-bytes (propcheck-generate-integer "max" 10 10000)))
+        (max-bytes (propcheck-generate-integer "max" :min 10 :max 10000)))
     (let ((slice (benedict-context-make-slice :content content :max-bytes max-bytes)))
       (propcheck-should (numberp (plist-get slice :size-bytes))))))
 

@@ -175,7 +175,7 @@ Use `propcheck-deftest` to verify that functions behave correctly across random 
 (propcheck-deftest benedict-prop-context-slice-size ()
   "Context slices should always have numeric size-bytes field."
   (let ((content (propcheck-generate-string "content"))
-        (max-bytes (propcheck-generate-integer "max" 10 10000)))
+        (max-bytes (propcheck-generate-integer "max" :min 10 :max 10000)))
     (let ((slice (benedict-context-make-slice :content content :max-bytes max-bytes)))
       (propcheck-should (numberp (plist-get slice :size-bytes))))))
 ```
@@ -183,11 +183,15 @@ Use `propcheck-deftest` to verify that functions behave correctly across random 
 Propcheck generates 100 random test cases per deftest. Use:
 
 - `propcheck-generate-string` – Random ASCII string.
-- `propcheck-generate-integer` – Integer in a range.
+- `propcheck-generate-integer` – Integer in a range. **IMPORTANT**: This function takes keyword arguments `:min` and `:max`, not positional arguments.
+  - Correct: `(propcheck-generate-integer "foo" :min 1 :max 10)`
+  - Incorrect: `(propcheck-generate-integer "foo" 1 10)` (causes counterexample errors)
 - `propcheck-generate-proper-list` – List of generated values.
 - `propcheck-should` – Assertion that must hold for all cases.
 
 **Key benefit**: Property tests catch edge cases (extreme values, unusual combinations) that unit tests might miss. When a property test fails, propcheck shrinks the failing input to find the minimal case.
+
+**Note on Error Reporting**: If your test code (including generator calls) raises an error, `propcheck` will catch it and report it as a "Found counterexample". If you see a counterexample that looks impossible (e.g., nil when you expected an integer), check if your test setup code is raising an error (like invalid-argument) that is being swallowed.
 
 #### Test file structure
 

@@ -44,13 +44,13 @@
   "Slices with empty string should have valid size-bytes."
   (let ((slice (benedict-context-make-slice :content "")))
     (should (plist-member slice :size-bytes))
-    (should (numberp (plist-get slice :size-bytes)))))
+    (should (= 0 (plist-get slice :size-bytes)))))
 
 (ert-deftest benedict-context-make-slice-nil-content ()
   "Slices with nil content should have valid size-bytes."
   (let ((slice (benedict-context-make-slice :content nil)))
     (should (plist-member slice :size-bytes))
-    (should (numberp (plist-get slice :size-bytes)))))
+    (should (= 0 (plist-get slice :size-bytes)))))
 
 (provide 'benedict-context-test)
 ;;; benedict-context-test.el ends here
