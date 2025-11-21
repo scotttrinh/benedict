@@ -90,7 +90,15 @@
   "Face for links in chat messages.")
 
 (defface benedict-chat-code-block
-  '((t :inherit (fixed-pitch font-lock-string-face)))
+  '((((class color) (min-colors 88) (background light))
+    :inherit fixed-pitch
+    :background "#f6f8fa"
+    :extend t)
+  (((class color) (min-colors 88) (background dark))
+    :inherit fixed-pitch
+    :background "#161b22"
+    :extend t)
+  (t :inherit fixed-pitch))
   "Face for content inside fenced code blocks.")
 
 (defface benedict-chat-button

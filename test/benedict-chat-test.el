@@ -258,6 +258,39 @@
       (when (buffer-live-p buffer)
         (kill-buffer buffer)))))
 
+(ert-deftest benedict-chat-markdown-lite-decorates-partial-code-block ()
+  "Code block faces are applied correctly even when the block is incomplete (streaming)."
+  (let ((buffer (generate-new-buffer " *Benedict Chat Partial Code*")))
+    (unwind-protect
+        (with-current-buffer buffer
+          (benedict-chat-mode)
+          ;; 1. Initial state with open fence and partial code
+          (let* ((assistant (benedict-chat--record-message
+                             (list :role 'assistant
+                                   :content "Here is code:\n```js\nconst us"
+                                   :metadata nil)))
+                 (item (plist-get assistant :item))
+                 (content-start (marker-position (plist-get item :content-start)))
+                 (content-end (marker-position (plist-get item :content-end))))
+            (goto-char content-start)
+            (search-forward "const us" content-end)
+            (let ((pos (- (point) 2))) ;; inside "us"
+              (should (eq (get-text-property pos 'face) 'benedict-chat-code-block))))
+          
+          ;; 2. Update with more content (simulating streaming append)
+          (let* ((assistant (car benedict-chat--messages))
+                 (item (plist-get assistant :item))
+                 (new-content "Here is code:\n```js\nconst user = {};\n```"))
+            (benedict-chat--replace-message-content assistant new-content)
+            (let ((content-start (marker-position (plist-get item :content-start)))
+                  (content-end (marker-position (plist-get item :content-end))))
+              (goto-char content-start)
+              (search-forward "user" content-end)
+              (let ((pos (- (point) 2))) ;; inside "user"
+                (should (eq (get-text-property pos 'face) 'benedict-chat-code-block))))))
+      (when (buffer-live-p buffer)
+        (kill-buffer buffer)))))
+
 (ert-deftest-async benedict-chat-thinking-blocks (done)
   "Scripted thinking entries render before the assistant response."
   (let ((benedict-provider 'fake)

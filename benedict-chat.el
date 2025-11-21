@@ -1884,9 +1884,6 @@ Returns non-nil when an active streaming entry handled the error."
   "Apply markdown-lite decorations between START and END."
   (when (< start end)
     (let ((inhibit-read-only t))
-      (add-text-properties start end
-                           '(face benedict-chat-body
-                                  font-lock-face benedict-chat-body))
       (benedict-chat--markdown-lite--apply-headings start end)
       (benedict-chat--markdown-lite--apply-lists start end)
       (benedict-chat--markdown-lite--apply-inline-code start end)
@@ -1911,6 +1908,9 @@ Returns non-nil when an active streaming entry handled the error."
                                      benedict-chat-strong nil
                                      benedict-chat-link-url nil
                                      help-echo nil))
+      (add-text-properties start end
+                           '(face benedict-chat-body
+                                  font-lock-face benedict-chat-body))
       (benedict-chat--apply-code-fences start end)
       (benedict-chat--markdown-lite-decorate-region start end))))
 
@@ -1973,32 +1973,34 @@ Returns non-nil when an active streaming entry handled the error."
 (defun benedict-chat--apply-code-fences (start end)
   "Highlight code fences between START and END and install block buttons."
   (save-excursion
-    (goto-char start)
-    (let ((case-fold-search nil))
-      (while (re-search-forward "^```\\([^ \n\r]*\\)?[ \t]*\n" end t)
-        (let* ((language (match-string 1))
-               (body-start (point))
-               (closing (save-excursion
-                          (when (re-search-forward "^```[ \t]*$" end t)
-                            (match-beginning 0)))))
-          (if (and closing (> closing body-start))
-              (let ((button-pos (save-excursion
-                                  (goto-char closing)
-                                  (forward-line 1)
-                                  (point))))
-                (benedict-chat--decorate-code-block body-start closing language button-pos)
-                (goto-char button-pos))
-            (benedict-chat--decorate-code-block body-start end language nil)
-            (goto-char end)))))))
+    (save-match-data
+      (goto-char start)
+      (let ((case-fold-search nil))
+        (while (re-search-forward "^\W*```\\([^ \n\r]*\\)?[ \t]*\n" end t)
+          (let* ((language (match-string 1))
+                 (body-start (point))
+                 (closing (save-excursion
+                            (when (re-search-forward "^\W*```[ \t]*$" end t)
+                              (match-beginning 0)))))
+            (if (and closing (> closing body-start))
+                (let ((button-pos (save-excursion
+                                    (goto-char closing)
+                                    (forward-line 1)
+                                    (point))))
+                  (benedict-chat--decorate-code-block body-start closing language button-pos)
+                  (goto-char button-pos))
+              (benedict-chat--decorate-code-block body-start end language nil)
+              (goto-char end))))))))
 
 (defun benedict-chat--decorate-code-block (body-start body-end language insertion-point)
   "Apply faces to BODY-START → BODY-END and insert buttons near INSERTION-POINT.
 LANGUAGE is the identifier included in the fence (may be nil)."
   (when (> body-end body-start)
-    (let* ((lang (and language (string-trim language)))
+    (let* ((lang (and language (string-trim (substring-no-properties language))))
            (target (list :start (copy-marker body-start t)
                          :end (copy-marker body-end nil)
-                     :language lang)))
+                         :language lang)))
+      (remove-text-properties body-start body-end '(face nil font-lock-face nil))
       (add-text-properties body-start body-end
                            (list 'face 'benedict-chat-code-block
                                  'font-lock-face 'benedict-chat-code-block
