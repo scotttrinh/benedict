@@ -1,0 +1,19 @@
+#+TITLE: Notes: Duplicate Message Fix Part 2
+#+DATE: [2025-11-21]
+#+AUTHOR: Benedict Agent
+
+* Problem
+The duplicate message issue persisted even after modifying `benedict-chat--handle-provider-success` to conditionally insert messages.
+- **Analysis**: `benedict-chat--streaming-message` was malformed. It was initialized as `(:active t)` but lacked the `:message` record field.
+- **Root Cause**: `benedict-chat--ensure-streaming-message` (used by `benedict-chat--handle-provider-delta`) manually inserted the header into the buffer without creating a backing message record.
+- **Consequence**: When `benedict-chat--handle-provider-success` ran, it saw `streaming-state` but `(plist-get streaming-state :message)` was nil. Thus, it fell back to "Path B" (insert new message), causing duplication.
+
+* Fix
+1. **Updated `benedict-chat--ensure-streaming-message`**:
+   - Now uses `benedict-chat--record-message` to properly create and register the message record in history.
+   - Properly initializes `benedict-chat--streaming-message` with `:message`, `:content`, and `:metadata`.
+   - Handles `stream-init` point capture carefully (moving before the footer newline) to ensure streaming content is injected *inside* the message block, not after it.
+
+2. **Verification**:
+   - Ran full test suite (`nix run .#test`). All 48 tests passed.
+   - This ensures that `benedict-chat--handle-provider-success` will now find the streaming message record and update it in place (Path A), preventing duplication.

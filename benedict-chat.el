@@ -64,9 +64,10 @@ Values:
 - prompt+completion: show prompt and completion counts (e.g., \"186p+126c\").
 - total: show a single total token count (e.g., \"312 tok\").
 - none: hide token usage entirely."
-  :type '(choice (const :tag "Prompt + completion" prompt+completion)
-                 (const :tag "Total tokens only" total)
-                 (const :tag "Hide token usage" none))
+  :type '(choice
+          (const :tag "Prompt + completion" prompt+completion)
+          (const :tag "Total tokens only" total)
+          (const :tag "Hide token usage" none))
   :group 'benedict)
 
 (defcustom benedict-chat-compose-buffer-name-format "*Benedict Compose: %s*"
@@ -76,8 +77,9 @@ The chat buffer name is substituted into the single %s placeholder."
   :group 'benedict)
 
 (defcustom benedict-chat-profiles
-  '((planning :label "Planning"
-              :preamble "You are Benedict, an expert engineering lead helping to plan complex tasks.
+  '((planning
+     :label "Planning"
+     :preamble "You are Benedict, an expert engineering lead helping to plan complex tasks.
 
 # Goal
 Create actionable, high-quality plans that address the user's goals.
@@ -90,8 +92,9 @@ Create actionable, high-quality plans that address the user's goals.
 # Output
 - Structured Markdown with clear headers.
 - Tasks should be broken down into manageable chunks.")
-    (coding :label "Coding"
-            :preamble "You are Benedict, an expert AI coding agent built to run inside Emacs.
+    (coding
+     :label "Coding"
+     :preamble "You are Benedict, an expert AI coding agent built to run inside Emacs.
 
 # Agency
 - Take initiative to resolve requests but ask if ambiguous.
@@ -109,8 +112,9 @@ Create actionable, high-quality plans that address the user's goals.
 
 # Context
 - You are in Emacs. Use this to your advantage.")
-    (writing :label "Writing"
-             :preamble "You are Benedict, an expert technical writer and editor.
+    (writing
+     :label "Writing"
+     :preamble "You are Benedict, an expert technical writer and editor.
 
 # Goal
 Draft and edit prose for clarity, brevity, and impact.
@@ -125,8 +129,9 @@ Draft and edit prose for clarity, brevity, and impact.
 - Fix grammar and spelling errors.
 - Remove redundancy.
 - Preserve the original intent and meaning.")
-    (review :label "Review"
-             :preamble "You are Benedict, a senior code reviewer.
+    (review
+     :label "Review"
+     :preamble "You are Benedict, a senior code reviewer.
 
 # Goal
 Identify bugs, security risks, and architectural issues in code.
@@ -972,8 +977,7 @@ This does not affect provider message history."
                                     (benedict-chat--normalize-tool-state
                                      (plist-get normalized :state))))
       (setq normalized (plist-put normalized :state state)))
-    (unless (plist-member normalized :header)
-      (setq normalized (plist-put normalized :header (benedict-chat--tool-default-header call))))
+    ;; Removed default header setting to allow render logic to handle it
     (let ((body (if (plist-member normalized :body)
                     (plist-get normalized :body)
                   nil)))
@@ -985,61 +989,13 @@ This does not affect provider message history."
   "Return the body text for UI."
   (or (plist-get ui :body) ""))
 
-(defun benedict-chat--tool-block-header (item)
-  "Return header label for tool ITEM."
-  (let* ((ui (plist-get item :ui))
-         (metadata (plist-get item :metadata))
-         (header (or (and ui (plist-get ui :header))
-                     (benedict-chat--tool-default-header (plist-get item :tool-call))))
-         (state (and ui (plist-get ui :state)))
-         (state-label (and state (benedict-chat--tool-status-label state)))
-         (summary (benedict-chat--format-metadata-line metadata " · "))
-         (headline (string-join
-                    (delq nil (list header (when state-label (format "(%s)" state-label))))
-                    " ")))
-    (string-join (delq nil (list headline summary)) "")))
-
-(defun benedict-chat--write-block-header (item header face)
-  "Replace ITEM header text with HEADER propertized using FACE."
-  (let ((header-start (plist-get item :header-start))
-        (header-end (plist-get item :header-end)))
-    (when (and header-start header-end
-               (marker-position header-start)
-               (marker-position header-end))
-      (let ((start (marker-position header-start))
-            (end (marker-position header-end)))
-        (let ((inhibit-read-only t))
-          (save-excursion
-            (goto-char start)
-            (delete-region start end)
-            (let ((new-start (point)))
-              (insert (propertize header 'face face) "\n")
-              (set-marker header-start new-start)
-              (set-marker-insertion-type header-start t)
-              (set-marker header-end (point))
-              (set-marker-insertion-type header-end nil))))))))
-
-(defun benedict-chat--render-tool-block (item)
-  "Render ITEM describing a tool call/result block."
-  (let* ((metadata (plist-get item :metadata))
-         (call (plist-get item :tool-call))
-         (ui (benedict-chat--normalize-tool-ui
-              call
-              (plist-get metadata :status)
-              (plist-get item :ui)
-              (or (plist-get item :content)
-                  (benedict-chat--tool-call-content call)))))
-    (plist-put item :ui ui)
-    (plist-put item :content (benedict-chat--tool-ui-body-string ui))
-    (benedict-chat--render-block item (benedict-chat--tool-block-header item)
-                                 'benedict-chat-system)))
 
 (defun benedict-chat--refresh-tool-block (item)
   "Refresh ITEM header and content after UI or metadata changes."
   (let ((ui (plist-get item :ui)))
     (benedict-chat--write-message-item-content item (benedict-chat--tool-ui-body-string ui))
-    (benedict-chat--write-block-header item (benedict-chat--tool-block-header item)
-                                       'benedict-chat-system)))
+    (benedict-chat--update-tool-header item)
+    (benedict-chat--update-tool-visibility item)))
 
 (defun benedict-chat--prepare-thinking-block (item)
   "Install folding controls and overlays for thinking ITEM."
@@ -1211,11 +1167,10 @@ This does not affect provider message history."
                                          :tool-call call
                                          :metadata metadata
                                          :ui initial-ui
-                                         :content (benedict-chat--tool-ui-body-string initial-ui))))
+                                         :content (benedict-chat--tool-ui-body-string initial-ui)
+                                         :tool-folded t)))
     (benedict-chat--track-item item)
-    ;; TODO: Implement tool rendering in benedict-chat-render
-    (let ((inhibit-read-only t))
-      (insert (format "\n[TOOL CALL: %s]\n" (or (plist-get call :name) "unknown"))))
+    (benedict-chat--render-tool-item item)
     item))
 
 (defun benedict-chat--update-tool-block (item metadata ui fallback)
@@ -1653,139 +1608,6 @@ Returns non-nil when an active streaming entry handled the error."
     (benedict-chat--streaming-reset)
     handled))
 
-(defun benedict-chat--markdown-lite--in-code-block-p (pos)
-  "Return non-nil when POS is inside a fenced code block."
-  (get-text-property pos 'benedict-chat-code-block))
-
-(defun benedict-chat--markdown-lite--apply-headings (start end)
-  "Apply heading faces between START and END."
-  (save-excursion
-    (goto-char start)
-    (let ((case-fold-search nil))
-      (while (re-search-forward "^\\(###\\|##\\|#\\)[ \t]+\\(.+\\)$" end t)
-        (let* ((match-start (match-beginning 0))
-               (match-end (match-end 0)))
-          (unless (benedict-chat--markdown-lite--in-code-block-p match-start)
-            (let* ((marker (match-string 1))
-                   (face (pcase (length marker)
-                           (1 'benedict-chat-heading-1)
-                           (2 'benedict-chat-heading-2)
-                           (_ 'benedict-chat-heading-3))))
-              (add-text-properties match-start match-end
-                                   (list 'face face
-                                         'font-lock-face face)))))))))
-
-(defun benedict-chat--markdown-lite--apply-lists (start end)
-  "Apply list marker faces between START and END."
-  (save-excursion
-    (goto-char start)
-    (while (re-search-forward "^[ \t]*\\([-*+]\\|[0-9]+\\.\\)[ \t]+.+$" end t)
-      (let ((bullet-start (match-beginning 1))
-            (bullet-end (match-end 1)))
-        (unless (benedict-chat--markdown-lite--in-code-block-p bullet-start)
-          (add-text-properties bullet-start bullet-end
-                               (list 'face 'benedict-chat-list-bullet
-                                     'font-lock-face 'benedict-chat-list-bullet)))))))
-
-(defun benedict-chat--markdown-lite--apply-inline-code (start end)
-  "Apply inline code faces between START and END."
-  (save-excursion
-    (goto-char start)
-    (while (re-search-forward "\\(`\\)\\([^`\n]+\\)\\(`\\)" end t)
-      (let ((match-start (match-beginning 0))
-            (match-end (match-end 0)))
-        (unless (or (benedict-chat--markdown-lite--in-code-block-p match-start)
-                    (get-text-property match-start 'benedict-chat-inline-code))
-          (add-text-properties match-start match-end
-                               (list 'face 'benedict-chat-inline-code
-                                     'font-lock-face 'benedict-chat-inline-code
-                                     'benedict-chat-inline-code t)))))))
-
-(defun benedict-chat--markdown-lite--apply-strong (start end)
-  "Apply strong emphasis between START and END."
-  (save-excursion
-    (goto-char start)
-    (while (re-search-forward "\\*\\*\\([^*\n]+?\\)\\*\\*" end t)
-      (let ((match-start (match-beginning 0))
-            (match-end (match-end 0)))
-        (unless (or (benedict-chat--markdown-lite--in-code-block-p match-start)
-                    (get-text-property match-start 'benedict-chat-inline-code))
-          (add-text-properties match-start match-end
-                               (list 'face 'benedict-chat-strong
-                                     'font-lock-face 'benedict-chat-strong
-                                     'benedict-chat-strong t)))))))
-
-(defun benedict-chat--markdown-lite--apply-emphasis (start end)
-  "Apply italic emphasis between START and END."
-  (save-excursion
-    (goto-char start)
-    (while (re-search-forward "\\(?:\\s-\\|^\\)\\([*_/]\\)\\([^ \n][^\\1\n]*?[^ \n]\\)\\1" end t)
-      (let* ((match-start (match-beginning 1))
-             (match-end (match-end 0))
-             (delimiter (char-after match-start))
-             (existing (get-text-property match-start 'face)))
-        (unless (or (benedict-chat--markdown-lite--in-code-block-p match-start)
-                    (get-text-property match-start 'benedict-chat-inline-code)
-                    (and (eq delimiter ?*)
-                         (eq (char-after (1+ match-start)) ?*))
-                    (get-text-property match-start 'benedict-chat-strong)
-                    (eq existing 'benedict-chat-strong)
-                    (and (listp existing)
-                         (memq 'benedict-chat-strong existing)))
-          (add-text-properties match-start match-end
-                               (list 'face 'benedict-chat-emphasis
-                                     'font-lock-face 'benedict-chat-emphasis)))))))
-
-(defun benedict-chat--markdown-lite--apply-links (start end)
-  "Apply link faces between START and END."
-  (save-excursion
-    (goto-char start)
-    (while (re-search-forward "\\(\\[\\([^]\n]+\\)\\](\\([^)\n]+\\))\\)" end t)
-          (let ((match-start (match-beginning 1))
-                (match-end (match-end 1))
-                (url (match-string 3)))
-        (unless (or (benedict-chat--markdown-lite--in-code-block-p match-start)
-                    (get-text-property match-start 'benedict-chat-inline-code))
-          (add-text-properties match-start match-end
-                                  (list 'face 'benedict-chat-link
-                                        'font-lock-face 'benedict-chat-link
-                                        'benedict-chat-link-url url
-                                        'help-echo url)))))))
-
-(defun benedict-chat--markdown-lite-decorate-region (start end)
-  "Apply markdown-lite decorations between START and END."
-  (when (< start end)
-    (let ((inhibit-read-only t))
-      (benedict-chat--markdown-lite--apply-headings start end)
-      (benedict-chat--markdown-lite--apply-lists start end)
-      (benedict-chat--markdown-lite--apply-inline-code start end)
-      (benedict-chat--markdown-lite--apply-strong start end)
-      (benedict-chat--markdown-lite--apply-emphasis start end)
-      (benedict-chat--markdown-lite--apply-links start end))))
-
-(defun benedict-chat--decorate-message (item)
-  "Apply markdown-lite decorations for ITEM."
-  (let* ((start-marker (plist-get item :content-start))
-         (end-marker (plist-get item :content-end))
-         (start (and start-marker (marker-position start-marker)))
-         (end (and end-marker (marker-position end-marker))))
-    (when (and start end (> end start))
-      (benedict-chat--clear-block-buttons start-marker end-marker)
-      (remove-text-properties start end
-                              '(face nil
-                                     font-lock-face nil
-                                     benedict-chat-code-language nil
-                                     benedict-chat-code-block nil
-                                     benedict-chat-inline-code nil
-                                     benedict-chat-strong nil
-                                     benedict-chat-link-url nil
-                                     help-echo nil))
-      (add-text-properties start end
-                           '(face benedict-chat-body
-                                  font-lock-face benedict-chat-body))
-      (benedict-chat--apply-code-fences start end)
-      (benedict-chat--markdown-lite-decorate-region start end))))
-
 (defun benedict-chat--format-metadata-line (metadata &optional prefix)
   "Return a user-facing line for METADATA plist with optional PREFIX."
   (when metadata
@@ -2012,16 +1834,34 @@ LANGUAGE is the identifier included in the fence (may be nil)."
           (setq metadata (plist-put metadata key value)))))
     metadata))
 
-(defun benedict-chat--ensure-streaming-message (_payload)
+(defun benedict-chat--ensure-streaming-message (payload)
   "Ensure a streaming assistant message exists in the buffer."
   (unless benedict-chat--streaming-message
-    (let ((inhibit-read-only t))
-      (goto-char (point-max))
-      (unless (eq (char-before) ?\n) (insert "\n"))
-      (insert "\n")
-      (insert (propertize "[ASSISTANT]\n" 'face 'benedict-chat-role 'benedict-region-kind 'header))
-      (benedict-chat--stream-init (current-buffer))
-      (setq benedict-chat--streaming-message (list :active t)))))
+    (let* ((metadata (benedict-chat--metadata
+                      :provider (plist-get payload :provider)
+                      :model (plist-get payload :model)
+                      :usage (plist-get payload :usage)))
+           (record (list :role 'assistant
+                         :content ""
+                         :time (current-time)
+                         :metadata metadata)))
+      ;; Insert header and register item in history
+      (setq record (benedict-chat--record-message record))
+      
+      ;; Initialize stream state.
+      ;; benedict-chat--insert-message appends a newline at the end.
+      ;; We want to stream content *before* that footer newline so it stays inside the block.
+      (with-current-buffer (current-buffer)
+        (save-excursion
+          (goto-char (point-max))
+          (when (eq (char-before) ?\n)
+            (backward-char 1))
+          (benedict-chat--stream-init (current-buffer))))
+
+      (setq benedict-chat--streaming-message
+            (list :message record
+                  :content ""
+                  :metadata metadata)))))
 
 (defun benedict-chat--handle-provider-delta (payload)
   "Handle structured PAYLOAD updates from the provider."
@@ -2039,10 +1879,9 @@ LANGUAGE is the identifier included in the fence (may be nil)."
 
 (defun benedict-chat--handle-provider-success (result)
   "Handle RESULT returned from the provider."
-  (setq benedict-chat--pending-request nil)
-  (setq benedict-chat--active-request-id nil)
-  (benedict-chat--streaming-reset)
-  (let* ((request (plist-get benedict-chat--last-dispatch :request))
+  (let* ((streaming-state benedict-chat--streaming-message)
+         (streaming-msg (and streaming-state (plist-get streaming-state :message)))
+         (request (plist-get benedict-chat--last-dispatch :request))
          (message (plist-get result :message))
          (content (or (plist-get message :content) ""))
          (role (or (plist-get message :role) 'assistant))
@@ -2059,17 +1898,38 @@ LANGUAGE is the identifier included in the fence (may be nil)."
                     :model model
                     :latency latency
                     :usage usage)))
+
+    (setq benedict-chat--pending-request nil)
+    (setq benedict-chat--active-request-id nil)
+    (benedict-chat--streaming-reset)
+
     (benedict-chat--telemetry-finish 'complete metadata)
     
-    ;; Record in history
-    (let ((record (list :role role :content content :time (current-time) :metadata metadata)))
-      (when tool-calls (plist-put record :tool-calls tool-calls))
-      (push record benedict-chat--messages)
-      (benedict-chat--insert-message record)
+    (if streaming-msg
+        ;; Path A: Update the existing streaming message
+        (let ((record streaming-msg))
+          ;; Update record fields
+          (plist-put record :content content)
+          (plist-put record :metadata metadata)
+          (when tool-calls (plist-put record :tool-calls tool-calls))
+
+          ;; Note: The record is already in benedict-chat--messages
+          ;; and already rendered in the buffer.
+          
+          ;; If we have tool calls, we need to render them now.
+          (when tool-calls
+            (benedict-chat--process-tool-calls record tool-calls metadata)
+            (benedict-chat--loop-step record)))
       
-      (when tool-calls
-        (benedict-chat--process-tool-calls record tool-calls metadata)
-        (benedict-chat--loop-step record)))
+      ;; Path B: Insert new message (non-streaming)
+      (let ((record (list :role role :content content :time (current-time) :metadata metadata)))
+        (when tool-calls (plist-put record :tool-calls tool-calls))
+        (push record benedict-chat--messages)
+        (benedict-chat--insert-message record)
+        
+        (when tool-calls
+          (benedict-chat--process-tool-calls record tool-calls metadata)
+          (benedict-chat--loop-step record))))
     
     (message "Benedict: %s replied via %s" 
              (or model "provider") 
@@ -2086,7 +1946,7 @@ LANGUAGE is the identifier included in the fence (may be nil)."
            (list (when code (format "Error %s" code))
                  (when status (format "HTTP %s" status))
                  message
-                (when retryable "Retry is available.")))
+                 (when retryable "Retry is available.")))
      " — ")))
 
 (defun benedict-chat--handle-provider-error (payload)
@@ -2480,18 +2340,18 @@ Returns a plist (:slice :replacing) where :slice carries the final handle."
             (setq benedict-chat--context-slices
                   (benedict-chat--upsert-context-slice benedict-chat--context-slices final))
             (setq existing (benedict-chat--context-handles benedict-chat--context-slices)))))
-       (setq prepared (nreverse prepared)))
-     (when (buffer-live-p compose)
-       (with-current-buffer compose
-         (benedict-chat-compose--render-header)
-         (when (and benedict-chat-compose--body-start
-                    (< (point) (marker-position benedict-chat-compose--body-start)))
-           (goto-char (marker-position benedict-chat-compose--body-start)))
-         (dolist (entry prepared)
-           (let ((handle (plist-get (plist-get entry :slice) :handle)))
-             (when (and handle (not (plist-get entry :replacing)))
-               (benedict-chat--insert-handle-link handle))))))
-     (pop-to-buffer compose)))
+      (setq prepared (nreverse prepared)))
+    (when (buffer-live-p compose)
+      (with-current-buffer compose
+        (benedict-chat-compose--render-header)
+        (when (and benedict-chat-compose--body-start
+                   (< (point) (marker-position benedict-chat-compose--body-start)))
+          (goto-char (marker-position benedict-chat-compose--body-start)))
+        (dolist (entry prepared)
+          (let ((handle (plist-get (plist-get entry :slice) :handle)))
+            (when (and handle (not (plist-get entry :replacing)))
+              (benedict-chat--insert-handle-link handle))))))
+    (pop-to-buffer compose)))
 
 ;; -------------------------------------------------------------------
 ;; Context capture commands
@@ -2737,6 +2597,8 @@ When INCLUDE-ERRORS is nil, skip entries flagged with :error metadata."
                 (kill-buffer benedict-chat--compose-buffer)))
             nil t)
   (benedict-chat--ensure-thinking-invisibility)
+  (unless (assoc 'benedict-tool-details buffer-invisibility-spec)
+    (add-to-invisibility-spec 'benedict-tool-details))
   (let ((inhibit-read-only t))
     (erase-buffer)
     (insert (propertize

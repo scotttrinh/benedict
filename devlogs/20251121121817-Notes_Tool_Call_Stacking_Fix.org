@@ -1,0 +1,27 @@
+#+TITLE: Notes: Tool Call Stacking Fix
+#+DATE: [2025-11-21]
+#+AUTHOR: Benedict Agent
+
+* Problem
+Multiple tool calls were appearing "stacked" or interleaved in the chat buffer.
+- **Symptom**: [Header 1] [Header 2] [Body 1] [Body 2] instead of [Header 1] [Body 1] [Header 2] [Body 2].
+- **Cause**: Marker insertion types for region boundaries (especially `content-end` and `header-end`) were set to `t` (insert-after). When subsequent blocks were inserted at the end of the previous block, the previous block's end marker advanced to include the new block.
+
+* Fix
+1. **Adjusted Marker Insertion Types**:
+   - Changed `header-end`, `content-end`, and `end` markers to `nil` (insert-before).
+   - This ensures that when new text is appended *at* these markers, the markers stay behind, effectively closing the region before the new content.
+
+2. **Updated Content Replacement Logic**:
+   - `benedict-chat--write-message-item-content` relied on `delete-region` + `insert` expanding the region automatically.
+   - With `content-end` set to `nil`, the region would collapse and not re-expand around inserted text (resulting in empty content regions).
+   - **Solution**:
+     - Temporarily set `content-start` to `nil` during the update to prevent it from jumping forward.
+     - Manually move `content-end` (and `end`) to the end of the inserted text after insertion.
+     - Restore `content-start` type to `t` (to handle header insertions correctly).
+
+* Verification
+- Added regression tests in `test/benedict-chat-render-test.el`:
+  - `benedict-chat-render-tool-stacking`: Verifies that two sequential tool calls maintain disjoint regions.
+  - `benedict-chat-render-tool-update-content`: Verifies that updating content works correctly with the new marker logic.
+- Ran all tests via `nix run .#test` (48 tests passed).

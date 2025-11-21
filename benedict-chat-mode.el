@@ -20,7 +20,7 @@
   "Keymap for `benedict-chat-mode'.")
 
 (defun benedict-chat--extend-region-body-only ()
-  "Extend font-lock region, restricting markdown to body regions.
+  "Restrict font-lock to only body regions.
 Non-body regions are marked with the `benedict-region-kind' text property.
 This function is a member of `font-lock-extend-region-functions', so it
 takes no arguments and modifies `font-lock-beg' and `font-lock-end' dynamically."
@@ -29,25 +29,33 @@ takes no arguments and modifies `font-lock-beg' and `font-lock-end' dynamically.
       (let ((new-start font-lock-beg)
             (new-end font-lock-end)
             (changed nil))
-        ;; Move START backward to the beginning of the current body run.
-        (goto-char new-start)
-        (while (and (> (point) (point-min))
-                    (eq (get-text-property (1- (point)) 'benedict-region-kind)
-                        'body))
-          (backward-char))
-        (when (< (point) new-start)
-          (setq new-start (point))
-          (setq changed t))
+        ;; If we're not in a body region, don't fontify
+        (unless (eq (get-text-property new-start 'benedict-region-kind) 'body)
+          (setq new-start (point-max)
+                new-end (point-max)
+                changed t))
 
-        ;; Move END forward to the end of the current body run.
-        (goto-char new-end)
-        (while (and (< (point) (point-max))
-                    (eq (get-text-property (point) 'benedict-region-kind)
-                        'body))
-          (forward-char))
-        (when (> (point) new-end)
-          (setq new-end (point))
-          (setq changed t))
+        ;; Move START backward to the beginning of the current body run
+        (when (eq (get-text-property new-start 'benedict-region-kind) 'body)
+          (goto-char new-start)
+          (while (and (> (point) (point-min))
+                      (eq (get-text-property (1- (point)) 'benedict-region-kind)
+                          'body))
+            (backward-char))
+          (when (< (point) new-start)
+            (setq new-start (point))
+            (setq changed t)))
+
+        ;; Move END forward to the end of the current body run
+        (when (eq (get-text-property new-end 'benedict-region-kind) 'body)
+          (goto-char new-end)
+          (while (and (< (point) (point-max))
+                      (eq (get-text-property (point) 'benedict-region-kind)
+                          'body))
+            (forward-char))
+          (when (> (point) new-end)
+            (setq new-end (point))
+            (setq changed t)))
 
         (when changed
           (setq font-lock-beg new-start

@@ -30,6 +30,44 @@
   "Face for system messages."
   :group 'benedict-chat-faces)
 
+(defface benedict-chat-tool-header
+  '((t :inherit benedict-chat-header))
+  "Face for tool call headers."
+  :group 'benedict-chat-faces)
+
+(defface benedict-chat-tool-success
+  '((t :inherit success))
+  "Face for successful tool calls."
+  :group 'benedict-chat-faces)
+
+(defface benedict-chat-tool-error
+  '((t :inherit error))
+  "Face for failed tool calls."
+  :group 'benedict-chat-faces)
+
+(defface benedict-chat-tool-running
+  '((t :inherit warning))
+  "Face for running tool calls."
+  :group 'benedict-chat-faces)
+
+(defvar benedict-chat-tool-toggle-map
+  (let ((map (make-sparse-keymap)))
+    (define-key map [mouse-1] #'benedict-chat-tool-toggle)
+    (define-key map (kbd "RET") #'benedict-chat-tool-toggle)
+    map)
+  "Keymap for tool toggle buttons.")
+
+(defun benedict-chat-tool-toggle (&optional event)
+  "Toggle tool details visibility at point."
+  (interactive (list last-nonmenu-event))
+  (when event (goto-char (posn-point (event-start event))))
+  (let* ((item (get-text-property (point) 'benedict-chat-item)))
+    (when item
+      (let ((folded (plist-get item :tool-folded)))
+        (plist-put item :tool-folded (not folded))
+        (benedict-chat--update-tool-header item)
+        (benedict-chat--update-tool-visibility item)))))
+
 (defun benedict-chat--insert-message (message)
   "Insert MESSAGE (plist) into chat buffer at point.
 MESSAGE must contain :role and :content."
@@ -50,7 +88,9 @@ MESSAGE must contain :role and :content."
 (defun benedict-chat--render-block (item header face)
   "Render a block ITEM with HEADER and FACE at point.
 Sets markers in ITEM for :start, :header-start, :header-end,
-:content-start, :content-end, and :end."
+:content-start, :content-end, and :end.
+Uses the 'Sentinel Pattern': regions exclude the trailing newline to allow
+insert-after markers to work without swallowing subsequent blocks."
   (let ((start (point-marker))
         (inhibit-read-only t))
     (set-marker-insertion-type start t)
@@ -58,33 +98,157 @@ Sets markers in ITEM for :start, :header-start, :header-end,
     
     (let ((header-start (point-marker)))
       (set-marker-insertion-type header-start t)
-      (insert (propertize (concat header "\n") 'face face 'benedict-region-kind 'header))
+      (insert (propertize header 'face face 'benedict-region-kind 'header))
+      ;; Sentinel newline for header
+      (insert (propertize "\n" 'face face 'benedict-region-kind 'header))
       (plist-put item :header-start header-start)
-      (plist-put item :header-end (point-marker)))
+      ;; End marker excludes sentinel
+      (plist-put item :header-end (copy-marker (1- (point)) t)))
     
     (let ((content-start (point-marker)))
       (set-marker-insertion-type content-start t)
       (insert (propertize (or (plist-get item :content) "") 'benedict-region-kind 'tool-ui))
+      ;; Sentinel newline for content
       (insert (propertize "\n" 'benedict-region-kind 'tool-ui))
       (plist-put item :content-start content-start)
-      (plist-put item :content-end (point-marker)))
+      ;; End marker excludes sentinel
+      (plist-put item :content-end (copy-marker (1- (point)) t)))
     
     (insert (propertize (concat (make-string 60 ?-) "\n") 'benedict-region-kind 'header))
     (plist-put item :start start)
-    (plist-put item :end (point-marker))))
+    ;; End marker at the very end (excluding potential future insertions?)
+    ;; For the block itself, we might want to include the footer.
+    ;; But to prevent stacking, we should ideally have a sentinel after the block too.
+    ;; Currently blocks are separated by the chat loop?
+    ;; Let's make the block end marker exclude the final newline of the footer.
+    (plist-put item :end (copy-marker (1- (point)) t))))
+
+(defun benedict-chat--tool-status-icon (status)
+  "Return icon string for STATUS."
+  (pcase status
+    ('success "✓")
+    ('failure "✗")
+    ('running "◒")
+    (_ "?")))
+
+(defun benedict-chat--tool-status-face (status)
+  "Return face for STATUS."
+  (pcase status
+    ('success 'benedict-chat-tool-success)
+    ('failure 'benedict-chat-tool-error)
+    ('running 'benedict-chat-tool-running)
+    (_ 'benedict-chat-header)))
+
+(defun benedict-chat--format-tool-header (item)
+  "Return formatted header string for tool ITEM."
+  (let* ((metadata (plist-get item :metadata))
+         (status (plist-get metadata :status))
+         (call (plist-get item :tool-call))
+         (name (or (plist-get call :name) "unknown"))
+         (ui (plist-get item :ui))
+         (ui-header (and ui (plist-get ui :header)))
+         (folded (plist-get item :tool-folded))
+         (icon (benedict-chat--tool-status-icon status))
+         (arrow (if folded "▶" "▼"))
+         (label (cond
+                 ((and ui-header (not (string-empty-p ui-header)))
+                  ui-header)
+                 ((eq status 'running)
+                  (let ((args (plist-get call :arguments)))
+                    (if args
+                        (format "%s %s..." name (json-encode args))
+                      (format "%s..." name))))
+                 (t name))))
+    (format "%s %s %s" arrow icon label)))
+
+(defun benedict-chat--render-tool-item (item)
+  "Render tool ITEM at point.
+Uses the 'Sentinel Pattern': regions exclude the trailing newline to allow
+insert-after markers to work without swallowing subsequent blocks."
+  (let ((start (point-marker))
+        (inhibit-read-only t))
+    ;; start marker stays type nil during insertion, will be set to t at end
+    
+    ;; Header
+    (let ((header-start (point-marker))
+          (header-text (benedict-chat--format-tool-header item)))
+      (insert (propertize header-text
+                          'face 'benedict-chat-tool-header
+                          'benedict-region-kind 'header
+                          'benedict-chat-item item
+                          'keymap benedict-chat-tool-toggle-map
+                          'mouse-face 'highlight))
+      ;; Sentinel newline
+      (insert (propertize "\n" 'benedict-region-kind 'header))
+
+      (set-marker-insertion-type header-start t)
+      (plist-put item :header-start header-start)
+      
+      ;; Header end excludes sentinel
+      (plist-put item :header-end (copy-marker (1- (point)) t)))
+    
+    ;; Body
+    (let ((content-start (point-marker)))
+      (insert (propertize (or (plist-get item :content) "")
+                          'benedict-region-kind 'tool-ui))
+      ;; Sentinel newline
+      (insert (propertize "\n" 'benedict-region-kind 'tool-ui))
+      
+      (set-marker-insertion-type content-start t)
+      (plist-put item :content-start content-start)
+      
+      ;; Content end excludes sentinel
+      (plist-put item :content-end (copy-marker (1- (point)) t)))
+    
+    (set-marker-insertion-type start t)
+    (plist-put item :start start)
+    
+    ;; Item end excludes sentinel (which is the content's sentinel here)
+    (plist-put item :end (copy-marker (1- (point)) t))
+    
+    ;; Initial visibility
+    (benedict-chat--update-tool-visibility item)))
+
+(defun benedict-chat--update-tool-header (item)
+  "Refresh the header text for ITEM."
+  (let ((start (plist-get item :header-start))
+        (end (plist-get item :header-end)))
+    (when (and start end (marker-position start))
+      (with-current-buffer (marker-buffer start)
+        (let ((inhibit-read-only t)
+              (text (benedict-chat--format-tool-header item)))
+          (add-text-properties start (1- end)
+                               `(display ,text)))))))
+
+(defun benedict-chat--update-tool-visibility (item)
+  "Update body visibility for ITEM."
+  (let ((start (plist-get item :content-start))
+        (end (plist-get item :content-end))
+        (folded (plist-get item :tool-folded)))
+    (when (and start end (marker-position start))
+      (with-current-buffer (marker-buffer start)
+        (let ((inhibit-read-only t))
+          (if folded
+              (add-text-properties start end '(invisible benedict-tool-details))
+            (remove-text-properties start end '(invisible benedict-tool-details))))))))
 
 (defun benedict-chat--write-message-item-content (item content)
-  "Replace ITEM's content region with CONTENT."
+  "Replace ITEM's content region with CONTENT.
+Does NOT append a newline, as the region is expected to be followed by a sentinel."
   (let ((start (plist-get item :content-start))
         (end (plist-get item :content-end)))
     (when (and start end (marker-position start) (marker-position end))
       (with-current-buffer (marker-buffer start)
-        (let ((inhibit-read-only t))
+        (let ((inhibit-read-only t)
+              (start-type (marker-insertion-type start)))
           (save-excursion
+            ;; Lock start marker so it stays before the inserted content
+            (set-marker-insertion-type start nil)
             (goto-char start)
             (delete-region start end)
             (insert (propertize (or content "") 'benedict-region-kind 'tool-ui))
-            (insert (propertize "\n" 'benedict-region-kind 'tool-ui))))))))
+            ;; Restore start marker type (usually t)
+            (set-marker-insertion-type start start-type)))))))
 
 (provide 'benedict-chat-render)
 ;;; benedict-chat-render.el ends here

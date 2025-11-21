@@ -510,7 +510,7 @@ ARGS must be a plist passed directly to the tool implementation."
  :id 'propose-edit
  :fn #'benedict--tool-propose-edit
  :schema '(:path string :diff string :description string)
- :approval 'auto
+ :approval 'confirm
  :doc "Apply a single-file diff patch and show an Emacs review buffer.")
 
 ;; Seed demo tool
@@ -522,8 +522,8 @@ ARGS must be a plist passed directly to the tool implementation."
  :id 'project-search
  :fn #'benedict--tool-project-search
  :schema '(:query string)
- :approval 'confirm
- :doc "Search files within the current project.")
+ :approval 'auto
+ :doc "Search files within the current project using grep patterns.")
 
 (cl-defun benedict--tool-read-file (&key path start-line end-line)
   "Return the content of the file at PATH.

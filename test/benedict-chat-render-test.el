@@ -19,5 +19,53 @@
     ;; Face should be nil initially (left to markdown-mode)
     (should (null (get-text-property (point) 'face)))))
 
+(ert-deftest benedict-chat-render-tool-stacking ()
+  "Test that multiple tool calls do not stack/nest incorrectly."
+  (with-temp-buffer
+    (let ((item1 (list :tool-call '(:name "tool1") :content "Output1"))
+          (item2 (list :tool-call '(:name "tool2") :content "Output2")))
+      
+      ;; Render first tool
+      (benedict-chat--render-tool-item item1)
+      (should (string-match-p "tool1" (buffer-string)))
+      (should (string-match-p "Output1" (buffer-string)))
+      
+      ;; Render second tool immediately after
+      (benedict-chat--render-tool-item item2)
+      (should (string-match-p "tool2" (buffer-string)))
+      (should (string-match-p "Output2" (buffer-string)))
+      
+      ;; Verify order
+      (goto-char (point-min))
+      (search-forward "tool1")
+      (search-forward "Output1")
+      (search-forward "tool2")
+      (search-forward "Output2")
+      
+      ;; Verify markers of Item 1 do NOT include Item 2
+      ;; specifically, item1 end should be before or at item2 start
+      (let ((end1 (plist-get item1 :end))
+            (start2 (plist-get item2 :start)))
+        (should (<= (marker-position end1) (marker-position start2)))))))
+
+(ert-deftest benedict-chat-render-tool-update-content ()
+  "Test that updating tool content adjusts markers correctly."
+  (with-temp-buffer
+    (let ((item (list :tool-call '(:name "tool1") :content "Old")))
+      (benedict-chat--render-tool-item item)
+      
+      ;; Verify initial content
+      (should (string-match-p "Old" (buffer-string)))
+      
+      ;; Update content
+      (benedict-chat--write-message-item-content item "NewContent")
+      (should (string-match-p "NewContent" (buffer-string)))
+      (should-not (string-match-p "Old" (buffer-string)))
+      
+      ;; Verify markers moved
+      (let ((start (plist-get item :content-start))
+            (end (plist-get item :content-end)))
+        (should (equal (buffer-substring-no-properties start end) "NewContent"))))))
+
 (provide 'test/benedict-chat-render-test)
 ;;; benedict-chat-render-test.el ends here
