@@ -1,0 +1,125 @@
+#+title: Guide: Emacs Styling for Web Developers
+#+author: Benedict Agent
+#+date: 2025-11-20
+
+* Introduction: The Mental Model
+
+Coming from a web development background (HTML/CSS/JS), Emacs styling requires a slight shift in mental model. Emacs is primarily a text engine, not a box-layout engine.
+
+| Web Concept         | Emacs Concept        | Notes                                                         |
+| :---                | :---                 | :---                                                          |
+| **CSS Class**       | **Face**             | Reusable collection of attributes (color, font, weight, box). |
+| **Inline Style**    | **Text Properties**  | Attributes attached to specific characters in the buffer.     |
+| **DOM Node**        | **Buffer Region**    | A range of text (start to end) that holds content.            |
+| **Z-Index / Layer** | **Overlay**          | A styling layer that floats "over" the text buffer.           |
+| **DOM Refresh**     | **Buffer Redisplay** | Emacs deciding what faces to draw based on properties.        |
+
+**Key Limitation**: You cannot easily do "layout" in the CSS Grid/Flexbox sense. You can't float a div to the right while text flows on the left easily. Everything is character-based flow. Margins are often just spaces or newlines.
+
+* 1. Defining Styles (The CSS)
+
+Styles are defined as **Faces**. See `benedict.el` for our "stylesheet".
+
+**Example: The Code Block Face**
+```elisp
+(defface benedict-chat-code-block
+  '((((class color) (min-colors 88) (background light)) ;; Media query: High color, Light mode
+     :inherit (fixed-pitch font-lock-string-face)       ;; Inheritance (like @extend)
+     :background "#f6f8fa"                              ;; CSS background-color
+     :extend t                                          ;; "width: 100%" (extends to edge of window)
+     :box (:line-width -1 :color "#d0d7de"))            ;; CSS border
+
+    (((class color) (min-colors 88) (background dark))  ;; Media query: Dark mode
+     :inherit (fixed-pitch font-lock-string-face)
+     :background "#161b22"
+     :extend t
+     :box (:line-width -1 :color "#30363d"))
+
+    (t :inherit (fixed-pitch font-lock-string-face)))   ;; Fallback
+  "Face for content inside fenced code blocks.")
+```
+
+*Search Terms*: `defface`, `Displaying Faces`, `Face Attributes`.
+
+* 2. Applying Styles (The HTML)
+
+In the web, you wrap text in tags `<div class="highlight">...</div>`.
+In Emacs, you apply properties to a range of text.
+
+**Method A: `propertize` (String Creation)**
+Great for static strings you are about to insert.
+
+```elisp
+;; benedict-chat.el
+(insert (propertize "Header Text" 'face 'benedict-chat-heading-1))
+```
+
+**Method B: `add-text-properties` (DOM Manipulation)**
+Great for modifying text that already exists in the buffer.
+
+```elisp
+;; benedict-chat.el -> benedict-chat--decorate-code-block
+(add-text-properties start end
+                     '(face benedict-chat-code-block
+                       font-lock-face benedict-chat-code-block))
+```
+
+**Note**: We usually set both `face` and `font-lock-face`.
+- `face`: Immediate, low-level styling.
+- `font-lock-face`: Used by syntax highlighting engines (Jit-lock). Using both ensures your styles stick even if Emacs redraws the screen.
+
+* 3. Layout & Spacing
+
+Emacs doesn't have `padding` or `margin` in the CSS sense.
+- **Vertical Space**: Insert `\n` (newlines) with properties (or without) to create gaps.
+- **Horizontal Space**: Insert spaces ` ` or tabs.
+- **Padding**: You can simulate padding inside a "box" face using the `:box` attribute (see the code block example above), but it's limited.
+
+* 4. The Feedback Loop (HMR)
+
+You don't need to restart Emacs to see changes. Here is your "Hot Module Reload" workflow:
+
+**Scenario 1: Tweaking a Color (CSS change)**
+1. Open `benedict.el`.
+2. Find `benedict-chat-code-block`.
+3. Change `:background "#f6f8fa"` to `:background "red"`.
+4. Place cursor inside the `(defface ...)` block.
+5. Press `C-M-x` (`eval-defun`).
+   - *Effect*: The face updates immediately in all active buffers. You should see the red background appear in your chat buffer instantly.
+
+**Scenario 2: Changing Layout/Structure (HTML change)**
+1. Open `benedict-chat.el`.
+2. Find `benedict-chat--render-block`.
+3. Change how the divider line is inserted or how spacing is calculated.
+4. Press `C-M-x` (`eval-defun`) on the function.
+   - *Effect*: The function is redefined in memory.
+5. **Trigger a Redraw**:
+   - *Option A*: Send a new message in chat (`C-c C-s`). The new message will use the new logic.
+   - *Option B (Nuclear)*: Run `M-x benedict-chat` again, or clear the buffer.
+
+**Pro-Tip: The Scratchpad**
+Use `M-x ielm` (Interactive Emacs Lisp Mode) as your browser console. You can inspect values or try applying faces to strings to see what happens.
+
+```elisp
+(insert (propertize "Test String" 'face 'benedict-chat-code-block))
+```
+
+* 5. Debugging Styles (The Inspector)
+
+1. Place your cursor on any character in the chat buffer.
+2. Run `M-x describe-char` (often bound to `C-u C-x =`).
+3. Look at the "Text Properties" section. It will list exactly what faces are applied.
+   - If you see `font-lock-face` but not `face`, Jit-lock might be lagging.
+   - If you see multiple faces, they merge (last one usually wins attributes).
+
+* Summary Checklist
+
+- [ ] Define `defface` in `benedict.el`.
+- [ ] Apply it using `propertize` (strings) or `add-text-properties` (regions).
+- [ ] Use `C-M-x` to hot-reload face definitions.
+- [ ] Use `describe-char` to debug why a style isn't showing up.
+
+#+begin_src elisp
+(this is dope
+      (+ 1 1))
+#+end_src
