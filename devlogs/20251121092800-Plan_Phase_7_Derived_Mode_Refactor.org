@@ -1,0 +1,375 @@
+#+TITLE: Plan: Phase 7 — Derived Mode Refactor & Provider Abstraction
+#+AUTHOR: Benedict maintainers
+#+LANGUAGE: en
+#+OPTIONS: toc:nil num:nil ^:{}
+
+* Summary
+Introduce a dedicated, read-only chat major mode that keeps full control over the entire buffer layout while delegating message-body rendering and styling to markdown-mode’s fontification machinery. This plan removes the "lite" markdown-mode logic, cleanly separates message content from surrounding UI regions, and abstracts buffer updates away from the provider layer so providers become stateless dispatchers while the chat mode manages all display concerns.
+
+* Current State
+
+** Architecture Issues
+- =benedict-chat-mode= is a special-mode, which provides minimal UI infrastructure.
+- Chat rendering is tightly coupled to message insertion; providers are aware of buffer updates and call =benedict-chat--*= functions directly.
+- Fontification (bold, code, headings) is done via crude regex-based text properties, not leveraging Emacs' font-lock system.
+- No syntax highlighting in code blocks despite having language information.
+- Marker/overlay stickiness is fragile, causing errors when streaming into complex message structures.
+
+** What Works Well
+- Message history tracking in =benedict-chat--messages= (plist list, newest first).
+- Per-message UI state (thinking blocks, tool calls, spinner state).
+- Context slices and compose buffer integration.
+- Provider dispatch infrastructure (async callbacks).
+
+* Goals
+
+1. **Use markdown-mode for message regions** while keeping a dedicated chat major mode:
+   - Robust fontification (headers, emphasis, code, links) via markdown-mode’s font-lock.
+   - Syntax highlighting in fenced code blocks (Python, Bash, etc.).
+   - Message bodies feel like read-only markdown-mode regions.
+   - Chat mode retains full control over non-message regions (headers, separators, tool UI).
+
+2. **Decouple providers from rendering**:
+   - Providers return structured data (messages, tool calls).
+   - Chat mode receives and buffers this data.
+   - Chat mode drives all buffer updates, marker management, and UI state.
+   - Providers are stateless; they don't call =benedict-chat--*= functions.
+
+3. **Remove "lite" markdown-mode logic**:
+   - Rely on markdown-mode's full font-lock infrastructure instead of custom regex patterns.
+   - Delete custom markup-hiding overlays where markdown-mode's `invisible` property suffices.
+   - Use markdown-mode's existing code block detection for syntax highlighting.
+
+4. **Improve marker/overlay lifecycle management**:
+   - Use correct stickiness for streaming regions (front-non-sticky start, rear-sticky end initially).
+   - Flip stickiness after closing sections to avoid accidental region inversions.
+   - Audit all timers to guard with buffer liveness checks.
+
+* Implementation Plan
+
+**Region Model & Read-Only Invariants**
+
+Define a single text property, =benedict-region-kind=, that classifies each span of the chat buffer:
+- =body=: message content that should be rendered as markdown (assistant/user/system messages).
+- =header=: message headers, timestamps, model names, separators.
+- =tool-ui=: structured tool call UI and results (non-markdown regions with richer widgets).
+- =system=: any global system/status banners.
+
+Invariants:
+- The entire chat buffer is read-only by default; user editing happens via explicit “fork/edit” affordances, not direct modification.
+- Only =benedict-region-kind 'body= regions participate in markdown-mode fontification.
+- Non-body regions (header/tool-ui/system) use custom faces, overlays, and display properties without interference from markdown-mode’s font-lock.
+
+## Phase 7.1: Prepare Environment
+
+### Create auxiliary files
+- =benedict-chat-mode.el= — The dedicated chat major mode (read-only, region model, markdown integration).
+- =benedict-chat-render.el= — Buffer insertion, marker management, face application (extracted from chat).
+- =benedict-chat-stream.el= — Streaming state machine, throttling, delta buffering.
+
+### Keep in =benedict-chat.el=
+- Message history and state tracking.
+- Dispatch logic and provider interface.
+- Loop constraints and safeguards.
+- Compose buffer and context handling.
+
+### Deprecate/Delete
+- All =benedict-chat--*render*= functions that touch the buffer.
+- Custom "lite markdown" logic (if any).
+- Direct text property application scattered across dispatch callbacks.
+
+## Phase 7.2: Major Mode & Region Integration
+
+### Define =benedict-chat-mode= (read-only chat mode)
+```elisp
+(define-derived-mode benedict-chat-mode special-mode "Benedict-Chat"
+  "Major mode for Benedict chat buffers."
+  (setq buffer-read-only t)
+  (setq-local benedict-region-kind-property 'benedict-region-kind)
+  (setq-local word-wrap t)
+  (setq-local truncate-lines nil)
+  ;; Enable markdown-mode fontification for body regions.
+  (benedict-chat--enable-markdown-fontification-in-body))
+```
+
+### Markdown Integration for Body Regions
+
+Re-use markdown-mode’s internals (syntax-propertize, font-lock keywords, code-block highlighting) without changing the major mode:
+- Borrow =markdown-syntax-propertize-function= and =markdown-mode-font-lock-keywords= into chat-local variables.
+- Enable =markdown-fontify-code-blocks-natively= in chat buffers.
+- Ensure only =body= regions are passed through markdown’s font-lock; other regions are explicitly excluded.
+
+### Custom Font-Lock Extension
+Extend font-lock to constrain markdown-mode fontification to =body= regions and skip everything else (metadata, role tags, timestamps, tool UI):
+
+```elisp
+(defun benedict-chat--extend-region-body-only (start end)
+  "Extend font-lock region, restricting markdown to body regions.
+Non-body regions are marked with the `benedict-region-kind' text property."
+  (save-excursion
+    (save-match-data
+      (let ((new-start start)
+            (new-end end))
+        ;; Move START backward to the beginning of the current body run.
+        (goto-char start)
+        (while (and (> (point) (point-min))
+                    (eq (get-text-property (1- (point)) 'benedict-region-kind)
+                        'body))
+          (backward-char))
+        (setq new-start (point))
+
+        ;; Move END forward to the end of the current body run.
+        (goto-char end)
+        (while (and (< (point) (point-max))
+                    (eq (get-text-property (point) 'benedict-region-kind)
+                        'body))
+          (forward-char))
+        (setq new-end (point))
+
+        (cons new-start new-end))))))
+
+(add-hook 'font-lock-extend-region-functions
+          #'benedict-chat--extend-region-body-only nil t)
+```
+
+This mirrors the guide's Strategy 3 (Font-Lock Extensions), keeping the mode simple while allowing markdown-mode to do the heavy lifting inside body regions only.
+
+## Phase 7.3: Streaming Integration (JIT-Lock First)
+
+Streaming remains important, but we defer complex throttling/timer machinery to a later phase.
+
+### Streaming Helpers
+
+- Keep streaming logic factored (e.g., =benedict-chat-stream.el=) so providers send deltas to a small API.
+- For each delta:
+  - Insert the chunk at the current message’s =content-end= marker.
+  - Let JIT-lock/markdown-mode handle fontification lazily.
+  - Optionally, if under-fontification is observed, call =font-lock-flush=/=font-lock-ensure= on the new region only.
+
+### Responsiveness Considerations
+
+- Rely on JIT-lock’s built-in coalescing and idle timers to keep Emacs responsive while agents stream.
+- Design the streaming helpers so that a future “Phase X: Throttled Streaming” can add timers/queues without changing provider callbacks or the region model.
+
+## Phase 7.4: Provider → Chat Interface
+
+### New Provider Callback Signature
+Providers no longer invoke =benedict-chat--*= functions. Instead, they emit structured data:
+
+```elisp
+(funcall on-delta :message-id mid
+                  :kind 'content-delta
+                  :text chunk)
+
+(funcall on-delta :message-id mid
+                  :kind 'thinking-delta
+                  :text chunk)
+
+(funcall on-complete :message-id mid
+                     :kind 'tool-calls
+                     :calls [...])
+
+(funcall on-success :messages (final-history)
+                    :usage (...))
+```
+
+### Chat Mode as Orchestrator
+=benedict-chat.el= receives these events and:
+
+1. **For deltas**: Route to =benedict-chat-stream.el= for throttled buffering.
+2. **For tool calls**: Create tool call blocks and pause loop.
+3. **For completion**: Finalize message, update history, check loop constraints.
+
+No buffer mutations in callbacks; all done via request-response, not side effects.
+
+## Phase 7.5: Rendering Abstractions
+
+### Message Insertion
+In =benedict-chat-render.el=:
+
+```elisp
+(defun benedict-chat--insert-message (message)
+  "Insert MESSAGE (plist) into chat buffer at point."
+  (let ((role (plist-get message :role))
+        (content (plist-get message :content))
+        (metadata (plist-get message :metadata)))
+    ;; Insert role tag as a non-body region
+    (insert (propertize (format "[%s]\n" (upcase (symbol-name role)))
+                        'face 'benedict-chat-role
+                        'benedict-region-kind 'header))
+    ;; Insert content (markdown-mode will fontify body regions)
+    (insert (propertize content
+                        'face nil
+                        'benedict-region-kind 'body))  ;; Let markdown-mode apply faces
+    (insert "\n")))
+```
+
+### Streaming Insertion
+```elisp
+(defun benedict-chat--stream-insert-delta (stream text)
+  "Buffer TEXT into STREAM for throttled application."
+  (with-current-buffer (benedict-chat--stream-state-buffer stream)
+    (let ((state (plist-get (current-buffer) 'benedict-stream-state)))
+      (setf (benedict-chat--stream-state-pending-text state)
+            (concat (benedict-chat--stream-state-pending-text state) text))
+      ;; Reschedule or create timer
+      (benedict-chat--throttle-update stream))))
+```
+
+### Face Application
+After streaming:
+```elisp
+(defun benedict-chat--apply-buffered-faces (stream)
+  "Apply any buffered faces and reset state."
+  (with-current-buffer (benedict-chat--stream-state-buffer stream)
+    ;; Trust markdown-mode's font-lock
+    (font-lock-flush (benedict-chat--stream-state-content-start stream)
+                     (benedict-chat--stream-state-content-end stream))
+    ;; Ensure faces are applied immediately if needed
+    (font-lock-ensure (benedict-chat--stream-state-content-start stream)
+                      (benedict-chat--stream-state-content-end stream))))
+```
+
+This delegates all fontification to markdown-mode, eliminating custom face logic.
+
+## Phase 7.6: Code Block Syntax Highlighting
+
+### Leverage markdown-mode's Native Support
+Markdown-mode already has =markdown-fontify-code-block-natively=, which:
+- Detects fenced blocks with language specifiers.
+- Creates a temp buffer, runs the language's major mode, applies font-lock.
+- Copies faces back to the markdown buffer.
+
+We merely ensure this is enabled:
+```elisp
+(setq-local markdown-fontify-code-blocks-natively t)
+```
+
+No additional work required; markdown-mode handles it.
+
+## Phase 7.7: Testing & Verification
+
+### Unit Tests
+- =test/benedict-chat-mode-test.el=: Verify mode derivation, font-lock setup, region-kind behavior.
+- =test/benedict-chat-stream-test.el=: Test streaming insertion and marker stickiness (no timers/throttling).
+- =test/benedict-chat-render-test.el=: Test message/tool call insertion, face application.
+
+### Integration Tests
+- Fake provider emits structured deltas; chat mode buffers and applies them correctly.
+- Streaming response produces correctly styled markdown output.
+- Code blocks in responses show syntax highlighting.
+- Markers remain valid after buffer mutations.
+
+### Manual Verification
+- Send a request and observe:
+  1. **Markdown formatting** in assistant response (bold, code, links).
+  2. **Syntax highlighting** in Python/Bash code blocks.
+  3. **Tool calls** render with clear labels and result blocks.
+  4. **No UI lag** during large streaming responses.
+
+## Phase 7.8: Cleanup & Migration
+
+### Remove Old Logic
+- Delete any "lite markdown" regex patterns.
+- Remove =benedict-chat--render*= functions replaced by =benedict-chat-render.el=.
+- Strip provider callbacks that manipulated the buffer.
+
+### Update Providers
+- Teach =benedict-provider-openrouter.el= and =benedict-provider-fake.el= to emit structured deltas instead of calling =benedict-chat--*=.
+- Update tests to verify delta emission.
+
+### Documentation
+- Update README to note markdown-mode-backed message regions.
+- Add inline comments explaining region kinds, marker stickiness, and streaming expectations.
+
+* Tasks
+
+## Pre-Phase Work
+- [ ] Review the attached markdown-mode fontification guide.
+- [ ] Audit current =benedict-chat.el= for all buffer-mutating code (grep for =insert=, =put-text-property=, =make-overlay=).
+- [ ] Identify which "lite markdown" logic (if any) exists and mark for deletion.
+ - [ ] Decide and document the full set of =benedict-region-kind= values and how each is rendered (body vs header vs tool-ui vs system).
+
+## Phase 7.1 — Preparation
+- [ ] Create =benedict-chat-mode.el= skeleton (mode definition).
+- [ ] Create =benedict-chat-render.el= skeleton (rendering abstractions).
+- [ ] Create =benedict-chat-stream.el= skeleton (streaming integration; no custom throttling yet).
+
+## Phase 7.2 — Major Mode & Region Integration
+- [ ] Define =benedict-chat-mode= derived from =special-mode=, enforcing a read-only chat buffer.
+- [ ] Implement =benedict-region-kind= classification and ensure all insertion paths set it.
+- [ ] Implement =benedict-chat--enable-markdown-fontification-in-body= to borrow markdown-mode font-lock/syntax for body regions.
+- [ ] Implement =benedict-chat--extend-region-body-only= to restrict font-lock to body regions.
+- [ ] Test mode loads and fontifies markdown correctly in body regions while leaving headers/tool UI un-fontified by markdown-mode.
+
+## Phase 7.3 — Streaming Integration
+- [ ] Adapt existing streaming path to call the new render/mode abstractions.
+- [ ] Ensure per-chunk insertion cooperates with JIT-lock/markdown-mode (no manual throttling).
+- [ ] Add minimal helpers for “insert at content-end and maybe flush/ensure region”.
+- [ ] Test with fake provider emitting realistic deltas while using Emacs normally, to confirm responsiveness.
+
+## Phase 7.4 — Provider Refactor
+- [ ] Update provider callback signatures (on-delta, on-success, on-complete).
+- [ ] Update =benedict-provider-openrouter.el= to emit structured deltas.
+- [ ] Update =benedict-provider-fake.el= likewise.
+- [ ] Update =benedict-chat.el= to route provider events to stream/render.
+
+## Phase 7.5 — Rendering
+- [ ] Implement =benedict-chat--insert-message= (minimal, delegate to markdown-mode).
+- [ ] Implement streaming insertion functions.
+- [ ] Implement face application (=font-lock-flush=/=font-lock-ensure=).
+- [ ] Remove old custom face logic.
+
+## Phase 7.6 — Code Block Highlighting
+- [ ] Verify markdown-mode's native code block highlighting works.
+- [ ] Enable =markdown-fontify-code-blocks-natively=.
+- [ ] Test with Python/Bash code samples.
+
+## Phase 7.7 — Testing
+- [ ] Write unit tests for mode, streaming, rendering.
+- [ ] Write integration tests for provider → chat flow.
+- [ ] Manual smoke test: send a complex response with code, markdown, tool calls.
+
+## Phase 7.8 — Cleanup
+- [ ] Delete old buffer-mutating code.
+- [ ] Update provider implementations.
+- [ ] Update documentation.
+- [ ] Run full test suite; address any regressions.
+
+* Acceptance Criteria
+
+- [ ] =benedict-chat-mode= is a proper major mode derived from =special-mode= and presents a read-only chat buffer.
+- [ ] Message body regions (=benedict-region-kind 'body=) display with proper markdown formatting (bold, italics, code, links).
+- [ ] Code blocks in message bodies show syntax highlighting for common languages.
+- [ ] Non-body regions (headers, separators, tool UI) are not fontified by markdown-mode and can use custom faces/overlays freely.
+- [ ] Streaming responses do not lag, even with large deltas.
+- [ ] Tool calls and results render clearly without custom inline markdown logic, using structured =tool-ui= regions.
+- [ ] Providers are stateless; they emit structured data, not buffer mutations.
+- [ ] All tests pass (unit + integration).
+- [ ] Manual testing shows stable, responsive chat UI.
+
+* Dependencies & Risks
+
+## Dependencies
+- Requires =markdown-mode= to be available. Add to =Cask= or test environment.
+- Depends on completing Phase 6 (agent loop) first, as this refactor may affect dispatch flow.
+
+## Risks
+- **Markdown-mode incompatibility**: Some chat-specific elements (tool calls, thinking blocks) may not render well in markdown-mode. Mitigation: Use =invisible= property or custom overlay properties to hide non-markdown regions.
+- **Marker stickiness bugs**: Incorrect stickiness can cause overlays to vanish or invert. Mitigation: Careful testing with markers; audit every marker creation and modification.
+- **Performance regressions**: Throttling may improve responsiveness but could introduce subtle timing bugs. Mitigation: Comprehensive tests with rapid delta sequences.
+- **Provider refactoring**: Changing provider callbacks is a breaking change. Mitigation: Update all providers and tests in lockstep; no partial rollout.
+
+* Future Improvements (Post-Phase 7)
+
+1. **Custom faces for metadata**: Render role tags, timestamps in a subtle color (e.g., =shadow= face).
+2. **Interactive code blocks**: Add copy/run buttons to Bash/Python blocks (like the guide describes).
+3. **Indirect buffers for editing**: Allow editing long assistant responses in a full markdown buffer.
+4. **Org-mode alternative**: Optionally use =org-mode= instead of markdown-mode for more structure (headings, lists, drawers).
+5. **Synchronization**: Keep compose buffer and chat buffer in sync via shared text regions.
+
+* Notes
+
+- The guide in =20251121092701-Guide_on_Markdown_Mode_Fontification.md= is essential reading for understanding JIT-lock, font-lock-extend-region, and marker stickiness.
+- Start with a single test case: stream a simple markdown response and verify formatting.
+- Avoid over-engineering; markdown-mode does most of the work. The chat layer only needs to manage message boundaries and metadata.

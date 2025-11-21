@@ -30,6 +30,7 @@
           dash
           s
           package-lint
+          markdown-mode
         ] ++ [ propcheckPkg ]);
 
       in

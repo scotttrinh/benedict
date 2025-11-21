@@ -41,8 +41,8 @@
 
 (defvar benedict-provider-fake-script nil
   "Queue of scripted responses for deterministic tests.
-Each entry is a plist describing either a success (:type 'success) or
-error (:type 'error) payload. When nil, responses echo the last user
+Each entry is a plist describing either a success (:type \='success) or
+error (:type \='error) payload. When nil, responses echo the last user
 message using default metadata.")
 
 (defmacro benedict-provider-fake-with-script (script &rest body)
@@ -294,18 +294,16 @@ Returns a handle plist with :request, :entry, :provider, and :timers."
                                :chunk chunk-content)
                               (when (functionp on-delta)
                                 (funcall on-delta
-                                         (list :content chunk-content
-                                               :index chunk-idx
-                                               :provider 'fake
-                                               :done nil)))))
+                                         :message-id request-id
+                                         :kind 'content-delta
+                                         :text chunk-content))))
                   (setq last-chunk-time (+ last-chunk-time chunk-delay))
                   (setq chunk-count (1+ chunk-count)))))
             ;; Schedule reasoning chunks
             (when thinking-details
               (dolist (detail thinking-details)
                 (dolist (chunk (plist-get detail :chunks))
-                  (let* ((chunk-text (or chunk ""))
-                         (delta (benedict-provider-fake--make-reasoning-delta detail chunk-text model)))
+                  (let* ((chunk-text (or chunk "")))
                     (register last-thinking-time
                               (lambda ()
                                 (benedict-provider-log-trace
@@ -315,9 +313,12 @@ Returns a handle plist with :request, :entry, :provider, and :timers."
                                  :detail (plist-get detail :id)
                                  :chunk chunk-text)
                                 (when (functionp on-delta)
-                                  (funcall on-delta delta)))))
+                                  (funcall on-delta
+                                           :message-id request-id
+                                           :kind 'thinking-delta
+                                           :text chunk-text)))))
                   (setq last-thinking-time (+ last-thinking-time chunk-delay)))))
-            
+
             ;; Schedule completion callback
             (let ((completion-delay (if chunks
                                         (max delay last-chunk-time last-thinking-time)
@@ -339,7 +340,7 @@ Returns a handle plist with :request, :entry, :provider, and :timers."
                                 (funcall on-complete payload)
                               (when (functionp on-success)
                                 (funcall on-success payload)))))))))))
-    
+        
     ;; Return handle with timers for cancellation
     (list :request request
           :entry entry

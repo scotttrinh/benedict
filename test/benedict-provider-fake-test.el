@@ -57,8 +57,9 @@
                        :delay 0.01))))
       (benedict-provider-dispatch
        (list :messages (list (list :role 'user :content "streaming test")))
-       :on-delta (lambda (payload)
-                   (push (plist-get payload :content) chunks))
+       :on-delta (lambda (&rest payload)
+                   (should (eq (plist-get payload :kind) 'content-delta))
+                   (push (plist-get payload :text) chunks))
        :on-success (lambda (payload)
                      (should (equal (nreverse chunks) '("chunk-1" "chunk-2")))
                      (should (equal (plist-get (plist-get payload :message) :content)

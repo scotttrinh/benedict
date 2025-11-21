@@ -42,15 +42,17 @@
 Set to nil to keep provider defaults. This alist/plist accepts keys
 EFFORT (string), MAX_TOKENS (number), EXCLUDE (boolean), and ENABLED
 (boolean)."
-  :type '(choice (const :tag "Provider default" nil)
-                 (plist :tag "Custom reasoning plist"))
+  :type '(choice
+          (const :tag "Provider default" nil)
+          (plist :tag "Custom reasoning plist"))
   :group 'benedict-provider-openrouter)
 
 (defcustom benedict-provider-openrouter-default-usage '((include . t))
   "Default usage options sent with every request when non-nil.
 Set to nil to keep provider defaults. Keys include INCLUDE (boolean)."
-  :type '(choice (const :tag "Provider default" nil)
-                 (plist :tag "Custom usage plist"))
+  :type '(choice
+          (const :tag "Provider default" nil)
+          (plist :tag "Custom usage plist"))
   :group 'benedict-provider-openrouter)
 
 (defcustom benedict-provider-openrouter-max-retries 2
@@ -212,10 +214,10 @@ When streaming is enabled, callbacks receive incremental deltas via curl."
                          :max-attempts (max 1 (+ 1 (max 0 benedict-provider-openrouter-max-retries)))
                          :start-time start-time
                          :provider 'openrouter)))
-    (if streaming
-        (benedict-provider-openrouter--start-stream context)
-      (benedict-provider-openrouter--perform-request context))
-    context)))
+      (if streaming
+          (benedict-provider-openrouter--start-stream context)
+        (benedict-provider-openrouter--perform-request context))
+      context)))
 
 (defun benedict-provider-openrouter--perform-request (context)
   "Execute the HTTP request described by CONTEXT."
@@ -440,25 +442,46 @@ When streaming is enabled, callbacks receive incremental deltas via curl."
         (benedict-provider-openrouter--handle-sse-payload context payload event-type)))))
 
 (defun benedict-provider-openrouter--handle-sse-payload (context payload _event)
-  "Handle SSE PAYLOAD for CONTEXT."
+  "Handle SSE PAYLOAD for CONTEXT.
+Handles standard JSON payloads as well as newline-delimited JSON (NDJSON)
+which some providers (like xAI/Grok) seem to emit within a single SSE block."
   (if (string= payload "[DONE]")
       (benedict-provider-openrouter--stream-handle-done context)
-    (condition-case err
-        (let ((json (json-parse-string payload :object-type 'plist :array-type 'list
-                                       :null-object nil :false-object :json-false)))
-          (benedict-provider-openrouter--stream-handle-json context json))
-      (json-parse-error
-       (benedict-provider-log
-        'openrouter 'warn :stream-parse-error
-        :request-id (plist-get context :request-id)
-        :payload payload
-        :error err)))))
+    (let ((lines (split-string payload "\n" t))
+          (parsed-objects nil)
+          (parse-error nil))
+      ;; Attempt to parse each line as a separate JSON object
+      (dolist (line lines)
+        (unless parse-error
+          (condition-case _err
+              (push (json-parse-string line :object-type 'plist :array-type 'list
+                                       :null-object nil :false-object :json-false)
+                    parsed-objects)
+            (json-parse-error
+             (setq parse-error t)))))
+      
+      (if (and parsed-objects (not parse-error))
+          ;; Successfully parsed as NDJSON
+          (dolist (json (nreverse parsed-objects))
+            (benedict-provider-openrouter--stream-handle-json context json))
+        ;; Fallback: Parse the entire payload as a single JSON object
+        (condition-case err
+            (let ((json (json-parse-string payload :object-type 'plist :array-type 'list
+                                           :null-object nil :false-object :json-false)))
+              (benedict-provider-openrouter--stream-handle-json context json))
+          (json-parse-error
+           (benedict-provider-log
+            'openrouter 'warn :stream-parse-error
+            :request-id (plist-get context :request-id)
+            :payload payload
+            :error err)))))))
 
 (defun benedict-provider-openrouter--stream-handle-json (context event)
   "Handle parsed streaming EVENT for CONTEXT."
   (unless (plist-get context :stream-complete)
     (let* ((request-id (plist-get context :request-id))
-           (remote-id (plist-get event :id)))
+           (remote-id (plist-get event :id))
+           (on-delta (plist-get context :on-delta)))
       (benedict-provider-openrouter--state-update
        request-id :raw-last event)
       (if-let ((error-block (plist-get event :error)))
@@ -475,23 +498,31 @@ When streaming is enabled, callbacks receive incremental deltas via curl."
             (cond
              (choices
               (let* ((normalized (benedict-provider-openrouter--normalize-delta-choices
-                                  context choices))
-                     (reasoning-count (apply #'+ (mapcar
-                                                  (lambda (choice)
-                                                    (length (benedict-provider-openrouter--normalize-seq
-                                                             (plist-get (plist-get choice :delta)
-                                                                        :reasoning_details))))
-                                                  normalized))))
+                                  context choices)))
                 (benedict-provider-log-trace
                  'openrouter :stream-delta
                  :request-id request-id
                  :remote-id remote-id
-                 :choices (length normalized)
-                 :reasoning reasoning-count)
-                (when (functionp (plist-get context :on-delta))
-                  (let ((payload (benedict-provider-openrouter--stream-build-delta-payload
-                                  context event normalized)))
-                    (funcall (plist-get context :on-delta) payload)))))
+                 :choices (length normalized))
+                (when (functionp on-delta)
+                  (dolist (choice normalized)
+                    (let ((delta (plist-get choice :delta)))
+                      (when-let ((text (plist-get delta :text)))
+                        (funcall on-delta
+                                 :message-id request-id
+                                 :kind 'content-delta
+                                 :text text))
+                      (when-let ((reasoning (plist-get delta :reasoning_details)))
+                        (mapc (lambda (detail)
+                                (let ((chunk (or (plist-get detail :text)
+                                                 (plist-get detail :summary)
+                                                 (plist-get detail :data))))
+                                  (when (and chunk (> (length chunk) 0))
+                                    (funcall on-delta
+                                             :message-id request-id
+                                             :kind 'thinking-delta
+                                             :text chunk))))
+                              reasoning)))))))
              ((benedict-provider-openrouter--stream-handle-reasoning-event
                context event)
               nil))))))))
@@ -500,19 +531,25 @@ When streaming is enabled, callbacks receive incremental deltas via curl."
   "Handle reasoning-only EVENT by emitting a synthetic delta.
 Returns non-nil when a delta was dispatched."
   (let ((details (benedict-provider-openrouter--normalize-reasoning-delta
-                  context event)))
+                  context event))
+        (on-delta (plist-get context :on-delta))
+        (request-id (plist-get context :request-id)))
     (when details
-      (let* ((delta (list :reasoning_details (apply #'vector details)))
-             (choice (list :index 0 :delta delta))
-             (payload (benedict-provider-openrouter--stream-build-delta-payload
-                       context event (list choice))))
-        (benedict-provider-log-trace
-         'openrouter :stream-reasoning-event
-         :request-id (plist-get context :request-id)
-         :details (length details))
-        (when (functionp (plist-get context :on-delta))
-          (funcall (plist-get context :on-delta) payload))
-        t))))
+      (benedict-provider-log-trace
+       'openrouter :stream-reasoning-event
+       :request-id request-id
+       :details (length details))
+      (when on-delta
+        (mapc (lambda (detail)
+                (let ((chunk (or (plist-get detail :text)
+                                 (plist-get detail :summary)
+                                 (plist-get detail :data))))
+                  (when (and chunk (> (length chunk) 0))
+                    (funcall on-delta :message-id request-id
+                             :kind 'thinking-delta
+                             :text chunk))))
+              details))
+      t)))
 
 (defun benedict-provider-openrouter--normalize-delta-choices (context choices)
   "Return normalized CHOICES for CONTEXT."
@@ -580,7 +617,7 @@ Returns non-nil when a delta was dispatched."
    ((stringp entry)
     (benedict-provider-openrouter--prepare-reasoning-detail
      context (list :type "reasoning.text" :text entry)))
-  ((listp entry)
+   ((listp entry)
     (let* ((detail (copy-tree entry t))
            (type (or (plist-get detail :type) "reasoning.text")))
       (plist-put detail :type type)
@@ -607,7 +644,7 @@ Returns non-nil when a delta was dispatched."
                         (t "")))
                      (benedict-provider-openrouter--normalize-seq content) ""))))))
         (when text
-        (plist-put detail :text text)))
+          (plist-put detail :text text)))
       (if (or (plist-get detail :text)
               (plist-get detail :summary)
               (plist-get detail :data))

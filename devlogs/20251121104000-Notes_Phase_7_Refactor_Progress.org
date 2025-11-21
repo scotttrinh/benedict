@@ -1,0 +1,37 @@
+#+TITLE: Notes: Phase 7 — Derived Mode Refactor & Provider Abstraction
+#+AUTHOR: Benedict maintainers
+#+DATE: 2025-11-21
+
+* Summary
+We have implemented the core of Phase 7, introducing a dedicated `benedict-chat-mode` derived from `special-mode` and refactoring the provider interface to emit structured deltas. The rendering logic has been extracted to `benedict-chat-render.el`, and streaming state is now managed by `benedict-chat-stream.el`.
+
+* Completed Tasks
+- [x] Created `benedict-chat-mode.el` with markdown-mode integration (native code blocks enabled).
+- [x] Created `benedict-chat-render.el` for message insertion using `benedict-region-kind`.
+- [x] Created `benedict-chat-stream.el` for handling streaming deltas.
+- [x] Refactored `benedict-provider-openrouter.el` to emit structured `(:kind 'content-delta ...)` events.
+- [x] Refactored `benedict-provider-fake.el` to match the new event structure.
+- [x] Updated `benedict-chat.el` to consume the new events and use the new render/stream modules.
+- [x] Removed obsolete rendering functions (`benedict-chat--render-item`, etc.) from `benedict-chat.el`.
+- [x] Migrated logic tests to `test/benedict-chat-logic-test.el` and created `test/benedict-chat-integration-test.el`.
+
+* Current Status
+Core functionality is implemented, but the test suite is failing with timeouts, indicating issues with the async callback chain in the fake provider or test harness.
+
+** Test Failures
+1. **benedict-chat-integration-flow**: Fails with timeout. Earlier error "No buffer named *Benedict Chat*" suggests buffer context issues in callbacks.
+2. **benedict-chat-tool-call-flow**: Fails with timeout. Error "tool-message value nil" implies the tool execution loop isn't completing or recording history.
+3. **benedict-provider-fake-default-echo**: Fails with timeout. This is a direct provider test, suggesting `benedict-provider-fake` isn't firing callbacks reliably in the test environment.
+4. **benedict-provider-fake-streaming-delivers-chunks**: Fails with timeout.
+
+** Debugging Findings
+- **Syntax Errors**: Fixed several "End of file during parsing" errors caused by unbalanced parentheses in `benedict-provider-fake.el` and test files.
+- **Callback Signatures**: Fixed `wrong-number-of-arguments` errors by updating test lambdas to accept keyword arguments (`&rest payload`).
+- **Buffer Context**: Identified a potential issue where `run-at-time` callbacks in tests attempt to access the default `*Benedict Chat*` buffer instead of the test-specific one because `benedict-chat-buffer-name` is dynamically bound but the callback runs outside the `let` scope.
+- **Fake Provider Timers**: Suspect that `benedict-provider-fake`'s `run-at-time` usage might be interacting poorly with `ert-async` or that errors inside callbacks (like `benedict-provider-log` failures) are silently aborting execution.
+
+* Next Steps
+1. **Fix Buffer Context in Tests**: Ensure integration tests capture the specific buffer object/name lexically before passing it to `run-at-time`.
+2. **Debug Fake Provider**: Add robust error handling and logging to `benedict-provider-fake--send` to confirm timers are scheduled and fired.
+3. **Verify Callback Execution**: Isolate `benedict-provider-fake-default-echo` to determine if it's a logic error in the provider or a test harness issue.
+4. **Restore Tool Rendering**: The tool rendering logic in `benedict-chat.el` currently uses a placeholder `insert`. It needs to be properly migrated to `benedict-chat-render.el`.
