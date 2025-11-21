@@ -1,0 +1,33 @@
+#+TITLE: Notes: Improved Search Tools
+#+DATE: 2025-11-20
+
+* Summary
+We improved the agent's ability to explore the codebase by adding dedicated tools for finding and reading files, reducing reliance on the token-heavy `project-search` (grep). This moves the agent workflow closer to how a human navigates: finding files by name, then reading them, rather than grepping for everything.
+
+* Evolution from Plan
+Our original plan (`20251120163000-Plan_Improved_Search_Tools.org`) focused on adding basic `read-file` and `find-files` tools. During implementation, we refined these ideas:
+
+1.  **Gitignore Complexity in `find-files`**:
+    We discovered that passing a wildcard glob (`*`) to `ripgrep` forces it to search *everything*, overriding standard `.gitignore` rules. To fix this, we updated `benedict-find-files-sync` to omit the glob argument entirely when the pattern is a generic wildcard, allowing `rg` to default to its standard, gitignore-respecting behavior. We also ensured that default exclusion globs (like `.git/`) always take precedence over user arguments.
+
+2.  **Curbing `project-search` Verbosity**:
+    The original complaint was that search returned too much context. We addressed this by adding `benedict-search-project-max-matches-per-file` (defaulting to 10). This prevents a single file with hundreds of matches from flooding the context window, forcing the agent to be more selective or use `read-file` for deep dives.
+
+3.  **Line Ranges in `read-file`**:
+    Originally listed as a "maybe later" feature, we implemented `start-line` and `end-line` support immediately. This complements the search limit—if an agent finds 50 matches in a file (but only sees the first 10), it can now use `read-file` with a range to examine specific sections.
+
+* Implementation Details
+
+** `benedict-tools.el`
+- **`find-files`**: New tool wrapping `rg --files`. Optimized to respect `.gitignore`.
+- **`read-file`**: New tool using Emacs buffer operations to read files or slices.
+- **`project-search`**: Updated with post-processing logic to enforce per-file match limits.
+- **Path Resolution**: Extracted `benedict--resolve-target-path` to ensure all file-accessing tools share robust security checks (preventing access outside project root).
+
+** Testing
+- Added `test/benedict-tools-test.el` with 49 tests covering the new tools and edge cases (like missing files, invalid ranges, and gitignore handling).
+- Used `ert-deftest` and `unwind-protect` patterns to manage temporary test directories.
+
+* Status
+- All tests passing.
+- Tools registered and ready for Phase 1.
