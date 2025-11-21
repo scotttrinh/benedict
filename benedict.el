@@ -136,6 +136,7 @@
 (autoload 'benedict-chat "benedict-chat" "Open Benedict chat buffer." t)
 
 (require 'benedict-provider-openrouter)
+(require 'benedict-provider-vercel)
 (require 'benedict-provider-fake)
 
 (provide 'benedict)

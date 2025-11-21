@@ -227,6 +227,27 @@ export OPENROUTER_API_KEY="sk-or-1234567890abcdef"
 
 Optional customization knobs (see =M-x customize-group RET benedict-provider-openrouter=) let you change the endpoint, default model (e.g., =deepseek/chat=), or temperature for manual runs.
 
+** Configure Vercel AI Gateway access
+Benedict looks for credentials in =~/.authinfo= (or any auth-source backend) first, then falls back to the environment variable listed in =benedict-provider-vercel-env-var= (=VERCEL_API_KEY= by default).
+
+Auth-source example (machine derived from =benedict-provider-vercel-endpoint=):
+#+begin_src text
+machine ai-gateway.vercel.sh login vercel password sk_live_xxxxx
+#+end_src
+
+Environment variable fallback:
+#+begin_src sh
+export VERCEL_API_KEY="sk_live_xxxxx"
+#+end_src
+
+Optional customization knobs (see =M-x customize-group RET benedict-provider-vercel=) let you change the endpoint, default model (e.g., =gpt-4=), or temperature for manual runs.
+
+To use Vercel as your active provider, set:
+#+begin_src elisp
+(after! benedict
+  (setq benedict-provider 'vercel))
+#+end_src
+
 ** Compose profiles and models
 - Profiles live in =benedict-chat-profiles=; entries accept =:label=, =:preamble=, and optional =:provider= / =:model= defaults used when composing. Preambles are treated as system-level snippets (combined with Benedict's base system prompt) and are not injected into user messages; history stays user/assistant/tool only.
 - Profiles may also opt into =:tool-allowlist= / =:tool-denylist= or high-level =:capabilities= so the request's =:tools= list matches the active profile. Basic =:autonomy= metadata can be attached for future enforcement.
@@ -459,6 +480,46 @@ Example: enforce non-streaming behavior globally:
 #+begin_src elisp
 (after! benedict
   (setq benedict-provider-openrouter-enable-streaming nil))
+#+end_src
+
+** Vercel AI Gateway provider options
+
+All of these live under the Customize group =benedict-provider-vercel=.
+
+- =benedict-provider-vercel-endpoint= :: HTTP endpoint for chat completions (default: =https://ai-gateway.vercel.sh/v1/chat/completions=).
+- =benedict-provider-vercel-default-model= :: Default model identifier when none is specified (default: =gpt-4=).
+- =benedict-provider-vercel-default-temperature= :: Default sampling temperature (number or =nil= to use provider defaults; default: =0.2=).
+- =benedict-provider-vercel-default-reasoning= :: Default reasoning options plist/alist; set to =nil= to keep provider defaults (keys include =effort=, =max_tokens=, =exclude=, =enabled=).
+- =benedict-provider-vercel-default-usage= :: Default usage options plist/alist; set to =nil= to keep provider defaults (keys include =include=).
+- =benedict-provider-vercel-max-retries= :: Number of retry attempts after the first try for transient failures (default: =2=).
+- =benedict-provider-vercel-retry-backoff-seconds= :: Base delay in seconds for exponential retry backoff (default: =0.5=).
+- =benedict-provider-vercel-env-var= :: Name of the environment variable that carries your Vercel API key (default: =AI_GATEWAY_API_KEY=).
+- =benedict-provider-vercel-auth-source-user= :: =auth-source= username used when looking up Vercel credentials (default: ="vercel"=; set to =nil= to skip matching on user).
+- =benedict-provider-vercel-referer= :: Referer header sent with requests (default points at the GitHub repo).
+- =benedict-provider-vercel-app-name= :: Human-readable app name sent via =X-Title= (default: ="Benedict"=).
+- =benedict-provider-vercel-enable-streaming= :: When non-nil, use curl-based streaming when available (default: =t=).
+- =benedict-provider-vercel-curl-program= :: Path to the =curl= executable for streaming (default: ="curl"=; must support =--no-buffer= and =--fail-with-body=).
+- =benedict-provider-vercel-streaming-extra-args= :: Extra args appended to the curl command (list of strings, e.g., proxy flags).
+
+Example: pin a model and tweak retry/backoff behavior:
+#+begin_src elisp
+(after! benedict
+  (setq benedict-provider-vercel-default-model "gpt-4o"
+        benedict-provider-vercel-default-temperature 0.1
+        benedict-provider-vercel-max-retries 3
+        benedict-provider-vercel-retry-backoff-seconds 1.0))
+#+end_src
+
+Use a custom env var name:
+#+begin_src elisp
+(after! benedict
+  (setq benedict-provider-vercel-env-var "MY_VERCEL_KEY"))
+#+end_src
+
+Example: enforce non-streaming behavior globally:
+#+begin_src elisp
+(after! benedict
+  (setq benedict-provider-vercel-enable-streaming nil))
 #+end_src
 
 ** Fake provider options
