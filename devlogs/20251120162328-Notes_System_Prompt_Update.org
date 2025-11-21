@@ -1,0 +1,23 @@
+#+TITLE: Notes: System Prompt Improvements
+#+DATE: 2025-11-20
+
+* Context
+The user requested improvements to the system prompts for Benedict's profiles (`coding`, `planning`, `writing`, `review`) and the general system prompt, based on the "Amp" agent persona (expert, concise, agentic).
+
+* Changes
+- Updated `benedict-chat-base-system-prompt` in `benedict-chat.el` to be more robust and define the core "Benedict" persona.
+- Updated `benedict-chat-profiles` in `benedict-chat.el` with detailed, markdown-formatted preambles for each profile.
+
+* Details
+** Base Prompt
+Refocused on "expert AI engineering agent" with core principles: Expert, Concise, Safe, Agentic.
+
+** Profiles
+- **Planning**: Added "Analyze -> Draft -> Iterate" process.
+- **Coding**: Added sections for Agency, Communication, Code, and Context.
+- **Writing**: Defined Voice, Tone, and specific Instructions.
+- **Review**: Defined a 4-step review process (Prioritize, Analyze, Improve, Summarize).
+
+* Verification
+- Checked `benedict-chat.el` for syntax correctness (balanced parens).
+- Verified the new strings are correctly formatted as Elisp multiline strings.
