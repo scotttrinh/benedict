@@ -1915,7 +1915,7 @@ LANGUAGE is the identifier included in the fence (may be nil)."
 
           ;; Note: The record is already in benedict-chat--messages
           ;; and already rendered in the buffer.
-          
+
           ;; If we have tool calls, we need to render them now.
           (when tool-calls
             (benedict-chat--process-tool-calls record tool-calls metadata)
@@ -1991,10 +1991,6 @@ LANGUAGE is the identifier included in the fence (may be nil)."
                                (when (buffer-live-p buffer)
                                  (with-current-buffer buffer
                                    (benedict-chat--handle-provider-success result))))
-                 :on-complete (lambda (result)
-                                (when (buffer-live-p buffer)
-                                  (with-current-buffer buffer
-                                    (benedict-chat--handle-provider-success result))))
                  :on-error (lambda (payload)
                              (when (buffer-live-p buffer)
                                (with-current-buffer buffer

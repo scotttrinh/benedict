@@ -208,7 +208,6 @@ When streaming is enabled, callbacks receive incremental deltas via curl."
                          :on-success on-success
                          :on-error on-error
                          :on-delta on-delta
-                         :on-complete on-complete
                          :streaming streaming
                          :mode (if streaming 'stream 'http)
                          :attempt 1
@@ -248,9 +247,7 @@ When streaming is enabled, callbacks receive incremental deltas via curl."
             :on-error (lambda (err)
                         (benedict-provider-openrouter--handle-error err context))
             :on-delta (lambda (_type data)
-                        (benedict-provider-openrouter--handle-sse-payload context data nil))
-            :on-complete (lambda (&rest _args)
-                           (benedict-provider-openrouter--stream-handle-done context)))))
+                        (benedict-provider-openrouter--handle-sse-payload context data nil)))))
       (setf (plist-get context :process) process)
       context)))
 
