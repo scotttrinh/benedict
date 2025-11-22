@@ -521,6 +521,45 @@ ARGS must be a plist passed directly to the tool implementation."
   :approval 'confirm
   :doc "Apply a single-file diff patch and show an Emacs review buffer.")
 
+(cl-defun benedict--tool-create-file (&key path content description &allow-other-keys)
+  "Create a new file at PATH with CONTENT."
+  (let* ((path (string-trim (or path "")))
+         (content (or content ""))
+         (root (or (benedict--search-project-root)
+                   (signal 'benedict-error "Project root unavailable")))
+         (root (expand-file-name root)))
+    (unless (and (stringp path) (not (string-empty-p path)))
+      (signal 'benedict-error "Path argument must be non-empty"))
+    (let ((expanded (expand-file-name path root)))
+      (unless (file-in-directory-p expanded root)
+        (signal 'benedict-error "Path must stay inside the project root"))
+      (when (file-exists-p expanded)
+        (signal 'benedict-error (format "File %s already exists" path)))
+      ;; Create parent directories if needed
+      (let ((parent (file-name-directory expanded)))
+        (unless (file-directory-p parent)
+          (make-directory parent t)))
+      ;; Write the file
+      (write-region content nil expanded nil 'silent)
+      ;; Verify it was written
+      (unless (file-exists-p expanded)
+        (signal 'benedict-error (format "Failed to create file %s" path)))
+      ;; Return success result
+      (let ((relative-path (file-relative-name expanded root))
+            (line-count (length (split-string content "\n" t))))
+        (list :path path
+              :content (format "Created file %s with %d lines" relative-path line-count)
+              :ui (list :header (format "Created file — %s" relative-path)
+                        :state 'success
+                        :body (format "File created with %d lines of content" line-count)))))))
+
+(benedict-tools-register
+  :id 'create-file
+  :fn #'benedict--tool-create-file
+  :schema '(:path string :content string :description string)
+  :approval 'confirm
+  :doc "Create a new file with the given content.")
+
 ;; Seed demo tool
 (benedict-tools-register :id 'uppercase :fn #'benedict--tool-uppercase
                          :schema '(:text string) :approval 'auto
