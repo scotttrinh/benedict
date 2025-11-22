@@ -189,6 +189,20 @@ DATA mirrors `benedict-provider-log'."
   "Return provider struct registered under ID, or nil."
   (gethash id benedict-provider--registry))
 
+(defun benedict-provider-list-ids ()
+  "Return a list of all registered provider ID symbols."
+  (let (ids)
+    (maphash (lambda (id _provider) (push id ids)) benedict-provider--registry)
+    (sort ids (lambda (a b) (string< (symbol-name a) (symbol-name b))))))
+
+(defun benedict-provider-display-name (provider-id)
+  "Return a human-readable name for PROVIDER-ID.
+Falls back to capitalized ID if provider is not registered."
+  (if-let ((provider (benedict-provider-lookup provider-id)))
+      (benedict-provider-name provider)
+    (when provider-id
+      (capitalize (symbol-name provider-id)))))
+
 (defun benedict-provider-current ()
   "Return the currently configured provider struct.
 Signals an error when `benedict-provider' is not registered."

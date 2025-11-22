@@ -1,0 +1,60 @@
+#+title: Plan: Provider Switching
+#+date: 2025-11-22 11:00:00
+
+* Goal
+Implement provider switching in compose headers and chat buffers, mirroring the existing model and profile selection UI.
+
+* Current State
+- Profile selection: `benedict-chat-choose-profile` prompts user, updates `benedict-chat-profile`.
+- Model selection: `benedict-chat-choose-model` prompts user, updates `benedict-chat--compose-model-override` (transient).
+- Provider resolution: `benedict-chat--resolve-provider` uses profile's `:provider` key, falls back to `benedict-provider` global.
+- Providers registered via `benedict-provider-register` in: `benedict-provider-openrouter.el`, `benedict-provider-vercel.el`, `benedict-provider-fake.el`.
+
+* Decisions
+1. **Scope**: Provider switching is buffer-local (chat-level), not transient per-message like model overrides. A provider change applies to all subsequent requests in that chat until changed.
+2. **Storage**: Add `benedict-chat--provider-override` (buffer-local) to store selected provider symbol.
+3. **UI**: Add clickable provider label in compose header (next to profile, model) and status line. Bind to `benedict-chat-choose-provider`.
+4. **Fallback**: `benedict-chat--resolve-provider` checks: profile `:provider` → override → global `benedict-provider`.
+5. **Registry listing**: Collect all registered providers via `benedict-provider-lookup-all` (new helper) for completions.
+
+* Plan
+
+** Phase 1: Provider Registry & Helpers
+- Add `benedict-provider-list-ids` → returns all registered provider IDs (symbols).
+- Add `benedict-provider-display-name` → returns human-readable name for provider ID.
+- Update `benedict-chat--resolve-provider` to respect `benedict-chat--provider-override`.
+
+** Phase 2: Buffer State & UI
+- Add `(defvar-local benedict-chat--provider-override nil)` to store transient provider selection.
+- Initialize to nil in `benedict-chat--init-buffer`.
+- Update `benedict-chat--compose-header-text` to show provider in addition to profile/model.
+- Install clickable keymap for provider label (reuse `benedict-chat--profile-button-map` pattern).
+
+** Phase 3: Provider Selection Command
+- Implement `benedict-chat-choose-provider` (interactive):
+  - List available providers (from registry).
+  - Show current effective provider.
+  - Set `benedict-chat--provider-override` to user's choice.
+  - Update telemetry/header.
+  - Refresh compose buffer header.
+- Bind to key (suggest `O` for provider in addition to `P` for profile, `M` for model).
+
+** Phase 4: Telemetry & Model Fallback
+- Ensure telemetry reflects chosen provider in header/status line.
+- When provider changes, clear model override if it's incompatible (or defer to next compose).
+- Update `benedict-chat--clear-compose-state` to reset provider override (or preserve it—TBD based on UX preference).
+
+** Phase 5: Tests & Docs
+- Test provider resolution with override.
+- Test provider listing from registry.
+- Document new `benedict-chat--provider-override` in buffer-local variable comments.
+- Update README with new keybinding (`O`).
+
+* Acceptance Criteria
+- [ ] User can click provider name in compose header to change provider.
+- [ ] Selected provider applies to subsequent messages in that chat.
+- [ ] Completing-read offers all registered providers.
+- [ ] Telemetry shows current provider.
+- [ ] Provider override persists until changed or buffer closed.
+- [ ] Resolves correctly: override → profile → global.
+- [ ] Tests verify resolution chain and registry listing.

@@ -182,5 +182,64 @@
            (kill-buffer buffer)))
          (funcall done)))))
 
+(ert-deftest benedict-chat-resolves-provider-override ()
+  "Provider override takes precedence in resolution chain."
+  (let ((benedict-provider 'fake)
+        (benedict-chat-profiles '((custom :label "Custom"
+                                          :provider openrouter))))
+    (let ((buffer (generate-new-buffer " *Benedict Chat Provider Override*")))
+      (unwind-protect
+          (with-current-buffer buffer
+            (benedict-chat-mode)
+            (benedict-chat--init-buffer)
+            ;; Profile specifies openrouter, but override takes precedence
+            (setq benedict-chat-profile 'custom)
+            (should (eq (benedict-chat--resolve-provider) 'openrouter))
+            ;; Set override
+            (setq benedict-chat--provider-override 'fake)
+            (should (eq (benedict-chat--resolve-provider) 'fake))
+            ;; Clear override reverts to profile
+            (setq benedict-chat--provider-override nil)
+            (should (eq (benedict-chat--resolve-provider) 'openrouter)))
+        (when (buffer-live-p buffer)
+          (kill-buffer buffer))))))
+
+(ert-deftest benedict-chat-provider-registry ()
+  "Provider registry lists and displays available providers."
+  ;; Verify fake and openrouter are registered
+  (let ((provider-ids (benedict-provider-list-ids)))
+    (should (member 'fake provider-ids))
+    (should (member 'openrouter provider-ids))))
+
+(ert-deftest benedict-chat-provider-display-name ()
+  "Provider display names render correctly."
+  (let ((fake-name (benedict-provider-display-name 'fake))
+        (openrouter-name (benedict-provider-display-name 'openrouter))
+        (unknown-name (benedict-provider-display-name 'nonexistent)))
+    (should (stringp fake-name))
+    (should (stringp openrouter-name))
+    ;; Unknown providers get capitalized symbol name
+    (should (equal unknown-name "Nonexistent"))))
+
+(ert-deftest-async benedict-chat-choose-provider-updates-state (done)
+  "Choosing a provider updates buffer state and telemetry."
+  (let ((benedict-provider 'fake)
+        (benedict-chat-buffer-name " *Benedict Provider Choice*"))
+    (let ((chat (generate-new-buffer benedict-chat-buffer-name)))
+      (with-current-buffer chat
+        (benedict-chat-mode)
+        (benedict-chat--init-buffer)
+        ;; Verify initial state
+        (should-not benedict-chat--provider-override)
+        ;; Mock the completing-read to select openrouter
+        (cl-letf (((symbol-function 'completing-read)
+                   (lambda (&rest _) "OpenRouter")))
+          (benedict-chat-choose-provider))
+        ;; Verify provider override is set
+        (should (eq benedict-chat--provider-override 'openrouter)))
+      (when (buffer-live-p chat)
+        (kill-buffer chat))
+      (funcall done))))
+
 (provide 'test/benedict-chat-logic-test)
 ;;; benedict-chat-logic-test.el ends here

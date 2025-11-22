@@ -240,6 +240,14 @@ Set to nil to disable token limits."
     map)
   "Keymap for clicking the provider/model display in status lines.")
 
+(defvar benedict-chat--provider-button-map
+  (let ((map (make-sparse-keymap)))
+    (define-key map [header-line mouse-1] #'benedict-chat-choose-provider)
+    (define-key map [down-mouse-1] #'benedict-chat-choose-provider)
+    (define-key map (kbd "RET") #'benedict-chat-choose-provider)
+    map)
+  "Keymap for interacting with the provider display in compose headers.")
+
 (defvar benedict-chat-model-history nil
   "Minibuffer history for `benedict-chat-choose-model'.")
 
@@ -257,6 +265,10 @@ Set to nil to disable token limits."
 
 (defvar-local benedict-chat--compose-model-override nil
   "Transient model override applied to the next compose send.")
+
+(defvar-local benedict-chat--provider-override nil
+  "Buffer-local provider override for the current chat.
+When non-nil, this symbol takes precedence over profile :provider and global benedict-provider.")
 
 (defvar-local benedict-chat--loop-start-time nil
   "Float time marking the start of the current autonomous loop.")
@@ -441,8 +453,10 @@ NIL represents infinity (no limit). Uses `benedict-chat-profile`."
     (_ nil)))
 
 (defun benedict-chat--resolve-provider (&optional profile)
-  "Resolve provider using PROFILE or the buffer's effective profile."
-  (or (benedict-chat--profile-provider (or profile (benedict-chat--effective-profile)))
+  "Resolve provider using PROFILE or the buffer's effective profile.
+Resolution order: buffer override → profile :provider → global `benedict-provider'."
+  (or benedict-chat--provider-override
+      (benedict-chat--profile-provider (or profile (benedict-chat--effective-profile)))
       benedict-provider))
 
 (defun benedict-chat--resolve-model (&optional provider profile override)
@@ -552,8 +566,39 @@ NIL represents infinity (no limit). Uses `benedict-chat-profile`."
       (benedict-chat--refresh-compose-header))
     (message "Benedict profile set to %s" (benedict-chat--profile-label profile))))
 
-;; -------------------------------------------------------------------
-;; Internal helpers for block items
+    (defun benedict-chat-choose-provider ()
+    "Select an active provider for the current chat."
+    (interactive)
+    (let* ((chat (or (benedict-chat--resolve-chat-buffer)
+                  (user-error "Not in a Benedict chat or compose buffer")))
+        (available-ids (benedict-provider-list-ids))
+        (candidates (mapcar (lambda (id)
+                              (cons (or (benedict-provider-display-name id)
+                                      (symbol-name id))
+                                    id))
+                            available-ids))
+        (current (with-current-buffer chat
+                   (benedict-chat--resolve-provider)))
+        (current-name (or (benedict-provider-display-name current)
+                         (symbol-name current)))
+        (choice (completing-read
+                 "Provider: "
+                 candidates nil t nil nil current-name))
+        (provider (cdr (assoc choice candidates))))
+    (with-current-buffer chat
+     (setq benedict-chat--provider-override provider)
+     (let* ((model (benedict-chat--resolve-model
+                    provider (benedict-chat--effective-profile) 
+                    benedict-chat--compose-model-override)))
+       (benedict-chat--telemetry-update
+        :provider (benedict-chat--provider-label provider)
+        :model model))
+     (benedict-chat--refresh-compose-header))
+    (message "Benedict provider set to %s" (or (benedict-provider-display-name provider)
+                                              (symbol-name provider)))))
+
+    ;; -------------------------------------------------------------------
+    ;; Internal helpers for block items
 
 (defun benedict-chat--next-item-id ()
   "Return a fresh identifier for chat items."
@@ -2079,7 +2124,10 @@ LANGUAGE is the identifier included in the fence (may be nil)."
                                       'help-echo "Choose a Benedict profile (click)"
                                       'local-map benedict-chat--profile-button-map))
            (provider (benedict-chat--resolve-provider profile))
-           (provider-label (benedict-chat--provider-label provider))
+           (provider-label (propertize (benedict-chat--provider-label provider)
+                                       'mouse-face 'mode-line-highlight
+                                       'help-echo "Choose a Benedict provider (click)"
+                                       'local-map benedict-chat--provider-button-map))
            (model (benedict-chat--resolve-model
                    provider profile benedict-chat--compose-model-override))
            (override (and (stringp benedict-chat--compose-model-override)
@@ -2272,11 +2320,14 @@ Returns a plist (:slice :replacing) where :slice carries the final handle."
     (kill-buffer benedict-chat--compose-buffer))
   (setq benedict-chat--compose-model-override nil)
   (setq benedict-chat--compose-buffer nil)
-  (benedict-chat--telemetry-update
-   :model (benedict-chat--resolve-model
-           (benedict-chat--resolve-provider)
-           (benedict-chat--effective-profile)
-           benedict-chat--compose-model-override)))
+  (let* ((provider (benedict-chat--resolve-provider))
+         (model (benedict-chat--resolve-model
+                 provider
+                 (benedict-chat--effective-profile)
+                 benedict-chat--compose-model-override)))
+    (benedict-chat--telemetry-update
+     :provider (benedict-chat--provider-label provider)
+     :model model)))
 
 (defun benedict-chat-compose-send ()
   "Send the composed prompt to the associated chat buffer."
@@ -2578,6 +2629,7 @@ When INCLUDE-ERRORS is nil, skip entries flagged with :error metadata."
   (setq-local benedict-chat--last-dispatch nil)
   (setq-local benedict-chat--context-slices nil)
   (setq-local benedict-chat--compose-buffer nil)
+  (setq-local benedict-chat--provider-override nil)
   (setq-local benedict-chat--loop-start-time nil)
   (setq-local benedict-chat--loop-turn-count 0)
   (setq-local benedict-chat--loop-canceled nil)
