@@ -13,6 +13,7 @@
 (require 'cl-lib)
 (require 'subr-x)
 (require 'json)
+(require 'lgr)
 (require 'benedict-provider)
 
 (defgroup benedict-http nil
@@ -74,12 +75,9 @@ Returns the process object."
                         :stdout-log ""
                         :stderr-log "")))
     
-    (benedict-provider-log-debug
-     provider :http-start
-     :request-id request-id
-     :method method
-     :url url
-     :stream stream)
+    (let ((lgr (lgr-get-logger "benedict.http")))
+      (lgr-debug lgr "HTTP start: %s %s (stream=%s, request-id=%s)"
+                 method url stream request-id))
 
     (let ((command (benedict-http--make-command url method headers body stream))
           (stderr-buffer (generate-new-buffer (format " *benedict-http-stderr-%s*" request-id))))
@@ -100,10 +98,8 @@ Returns the process object."
             (process-put process 'benedict-http-command command)
             process)
         (error
-         (benedict-provider-log
-          provider 'error :http-start-failed
-          :request-id request-id
-          :message (error-message-string err))
+         (let ((lgr (lgr-get-logger "benedict.http")))
+           (lgr-error lgr "HTTP start failed: %s (request-id=%s)" (error-message-string err) request-id))
          (when (buffer-live-p stderr-buffer)
            (kill-buffer stderr-buffer))
          (when on-error
@@ -187,11 +183,9 @@ Returns the process object."
     (let ((payload (string-join (nreverse (delq nil data-lines)) "\n"))
           (on-delta (plist-get context :on-delta)))
       (when (and on-delta (> (length payload) 0))
-        (benedict-provider-log-trace
-         (plist-get context :provider) :stream-event
-         :request-id (plist-get context :request-id)
-         :event event-type
-         :payload-len (length payload))
+        (let ((lgr (lgr-get-logger "benedict.http")))
+          (lgr-trace lgr "Stream event: %s (payload-len=%d, request-id=%s)"
+                     event-type (length payload) (plist-get context :request-id)))
         (funcall on-delta event-type payload)))))
 
 (defun benedict-http--process-sentinel (process _event)
@@ -207,11 +201,8 @@ Returns the process object."
         (when (buffer-live-p stderr-buf)
           (kill-buffer stderr-buf))
         
-        (benedict-provider-log-debug
-         (plist-get context :provider) :http-exit
-         :request-id (plist-get context :request-id)
-         :exit-code exit-code
-         :stderr stderr)
+        (let ((lgr (lgr-get-logger "benedict.http")))
+          (lgr-debug lgr "HTTP exit: exit-code=%d (request-id=%s)" exit-code (plist-get context :request-id)))
 
         (if (zerop exit-code)
             (benedict-http--finish-success context)
@@ -243,22 +234,16 @@ Returns the process object."
     ;; Check if it's an HTTP error (curl code 22)
     (if (eq code 22)
         (let ((body (or (plist-get context :partial) "")))
-           (benedict-provider-log
-            provider 'warn :http-error-response
-            :request-id request-id
-            :code code
-            :body-len (length body))
+           (let ((lgr (lgr-get-logger "benedict.http")))
+             (lgr-warn lgr "HTTP error response: code=%d (request-id=%s)" code request-id))
            (when on-error
              ;; Try to parse body if JSON? 
              ;; For now just pass raw body and let caller handle it.
              (funcall on-error (list :type 'http :code code :body body :stderr stderr))))
       
       ;; Other network/process error
-      (benedict-provider-log
-       provider 'error :curl-error
-       :request-id request-id
-       :code code
-       :stderr stderr)
+      (let ((lgr (lgr-get-logger "benedict.http")))
+        (lgr-error lgr "Curl error: code=%d (request-id=%s)" code request-id))
       (when on-error
         (funcall on-error (list :type 'process :code code :stderr stderr))))))
 

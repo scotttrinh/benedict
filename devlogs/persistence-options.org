@@ -1,0 +1,34 @@
+#+TITLE: Devlog - Persistence Options for Benedict Chat
+
+* Context
+- We need chat/thread persistence that works across Emacs builds, remains human-readable when possible, and supports future SQLite-backed search/indexing.
+- Current state is buffer-local only; nothing persists.
+
+* Options Considered
+- File-per-thread (chosen for 1.x)
+  - Pros: portable, greppable, easy to inspect/edit; no sqlite dependency; smaller blast radius per file.
+  - Cons: need our own versioning/migrations; performance depends on format; less convenient for cross-thread queries without an index file.
+- SQLite (deferred to 2.0+)
+  - Pros: indexing/FTS, transactional writes, single file, future multi-client story.
+  - Cons: not on every Emacs build (pre-29 or sqlite disabled), opaque for hand-editing, needs async/locking care.
+- Org export/import (rejected as primary)
+  - Good for human reading/sharing but complicates round-trip and user edits; better as explicit export/import, not canonical storage.
+
+* Proposed Layout
+- Project-local default: `.benedict/threads/<id>.jsonl` (or `.sexp`), gitignored; global fallback under XDG data dir for non-project buffers.
+- Optional index file per scope for fast listing (id/title/updated-at/profile).
+- Pluggable storage backend: start with file-per-thread; keep interface so SQLite can slot in later without changing callers.
+
+* Format & Versioning
+- Per-thread file carries a mandatory version field; tolerate unknown keys; supply defaults for missing fields.
+- Migrate on load/save via small versioned functions; if file is newer than supported, open read-only and warn, don’t clobber.
+- Atomic writes (temp + rename) and optional `.bak` before rewrite.
+
+* Resume Fidelity vs Human Readability
+- Persist role/content order, tool calls/results, minimal metadata (timestamps, provider/model). Ephemeral UI (fold state, markers) is recomputed.
+- Keep one record per line/object for readability; avoid longlines where possible.
+
+* Next Steps
+- Define storage interface (list/create/update threads; append message; search stub) with feature detection for sqlite.
+- Choose on-disk format (lean JSONL vs sexp) and index shape.
+- Implement version tag + migration scaffold shared by both backends.

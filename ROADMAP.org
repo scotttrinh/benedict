@@ -99,7 +99,9 @@ Acceptance:
 
 * Phase 7 — Persistence, History, UX Polish
 Tasks:
-- Thread histories: SQLite DB (sqlite.el, WAL); normalized tables; FTS search; per-project quick switch; file watchers and after-save hooks for incremental reindex
+- Thread histories: storage interface with file-per-thread, human-readable format (JSONL/sexp); per-project quick switch; file watchers and after-save hooks for incremental reindex; SQLite deferred to a later release
+- Placement: project-local .benedict/ (gitignored) with global fallback under XDG data dir; user-configurable
+- Versioning/migrations: per-thread schema version tags; migrate on load/save; refuse to write “newer-than-supported” files
 - Snippet library for prompts; message pinning; attachments (files/regions)
 - Faces/themes tweaks; customization group tidy; command palette via transient
 Acceptance:
@@ -159,5 +161,5 @@ Acceptance:
 * Open Questions
 - Minimum Emacs version? (27.1+ recommended; streaming smoother on 28+)
 - Which provider first for best DX? (Defaulting to OpenRouter for breadth; evaluate Anthropic/raw SSE later)
-- DB location by default? (XDG data dir: ~/.local/share/benedict/benedict.sqlite; allow per-project override at .benedict/benedict.sqlite)
+- Storage defaults? (Prefer project .benedict/ threads with global fallback; SQLite deferred)
 - How strict should default approvals be? (lean safe; allow per-project relax)

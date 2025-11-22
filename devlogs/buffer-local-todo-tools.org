@@ -1,0 +1,73 @@
+#+TITLE: Devlog - Buffer-Local TODO Management Tools
+
+* Goals
+- Provide interactive tools for managing TODO items local to each buffer.
+- Ensure state persistence across buffer sessions by embedding it in the buffer text.
+- Integrate seamlessly with existing ~benedict-tools.el~ and ~benedict-chat.el~.
+- Commands: ~benedict-todo-add~, ~benedict-todo-list~, ~benedict-todo-toggle~, ~benedict-todo-clear~.
+
+* Key Design Decisions
+** State Management
+- Use buffer-local variable ~benedict-todo-items~: alist of ~(id . plist)~ where plist has keys ~:text~, ~:done~, ~:created~, ~:priority~.
+- Persist via a hidden text block at ~point-max~:
+  #+BEGIN_EXAMPLE
+  ;; Local Variables:
+  ;; ben-todo-state: (sexp of alist)
+  ;; End:
+  #+END_EXAMPLE
+- On buffer load/activation: parse ~Local Variables~ section if present, populate ~benedict-todo-items~.
+- On state change: update variable and rewrite the ~Local Variables~ block (invisible, font-lock-hidden).
+- Why buffer interaction? Avoids separate files; state travels with buffer text. Robust to kills/reopens.
+
+** Alternatives Considered
+| Method | Pros | Cons |
+|--------|------|------|
+| Buffer-local vars only | Simple | Lost on kill-buffer/reopen |
+| Separate ~.todos~ file per buffer | Persistent | File management overhead |
+| Overlays | Visual | Not saved |
+| Text properties on todo lines | Editable | Complex parsing/UI |
+| Org-mode embedding | Rich | Overkill for simple todos |
+
+Chosen: ~Local Variables~ hack – simple, standard Emacs, hidden.
+
+** Chat Buffer Integration
+- Auto-enable in ~*benedict-chat*~ buffers (hook into ~benedict-chat.el~).
+- Todos for tracking action items from AI responses.
+- ~benedict-todo-from-selection~: add selected text as todo.
+
+* TODO Implementation Steps
+** DONE Define state structure
+   CLOSED: [timestamp]
+** Define serialize/deserialize functions
+   - ~ben-todo--parse-state~: scan buffer for ~Local Variables: ben-todo-state~.
+   - ~ben-todo--write-state~: insert/update at end, make invisible.
+** Commands
+   *** ~benedict-todo-add~ (interactive)
+       - Prompt for text, priority.
+       - Generate UUID id.
+       - Add to list, write state.
+   *** ~benedict-todo-list~
+       - Show in ~*Todos*~ buffer or popup (use ~consult~ or ~vertico~ if avail).
+   *** ~benedict-todo-toggle~ (at point or id)
+       - Find nearest todo or prompt.
+   *** ~benedict-todo-clear-done~
+** Keymap
+   - Minor mode ~benedict-todo-mode~ with map: C-c t a/add, l/list, etc.
+   - Enable buffer-locally on demand or in chat buffers.
+** Hooks
+   - ~find-file-hook~: check/parse state.
+   - ~kill-buffer-hook~: write state if dirty.
+** Polish
+   - Visual: font-lock todo keywords if visible.
+   - Dirty flag for state changes.
+   - Error handling (malformed state).
+
+* Risks/Challenges
+- ~Local Variables~ parsing: use ~hack-local-variables~ safely.
+- Performance: negligible for small lists.
+- Conflicts: namespace ~ben-todo--~.
+- Chat-specific: ensure no interference with chat state.
+
+* Next Actions
+- Implement prototype in ~benedict-tools.el~.
+- Test in chat buffer.

@@ -13,8 +13,23 @@
 (require 'url-http)
 (require 'url-parse)
 (require 'json)
+(require 'lgr)
 (require 'benedict-provider)
 (require 'benedict-http)
+
+;; Temporary compatibility layer for old logging calls
+;; TODO: Replace all call sites with direct lgr calls
+(cl-defun benedict-provider-log (_provider _level _event &rest _data)
+  "Stub for old logging infrastructure - replaced by lgr."
+  nil)
+
+(cl-defun benedict-provider-log-debug (_provider _event &rest _data)
+  "Stub for old logging infrastructure - replaced by lgr."
+  nil)
+
+(cl-defun benedict-provider-log-trace (_provider _event &rest _data)
+  "Stub for old logging infrastructure - replaced by lgr."
+  nil)
 
 (defgroup benedict-provider-vercel nil
   "Settings for the Benedict Vercel provider."

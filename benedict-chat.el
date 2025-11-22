@@ -1093,6 +1093,8 @@ Also validates and normalizes :actions if present."
   "Return the body text for UI."
   (or (plist-get ui :body) ""))
 
+(declare-function backtrace-to-string "backtrace" (&optional frames))
+(declare-function current-backtrace "backtrace" ())
 
 (defun benedict-chat--refresh-tool-block (item)
   "Refresh ITEM header and content after UI or metadata changes."

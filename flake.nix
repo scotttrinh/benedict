@@ -29,6 +29,7 @@
           ert-async
           dash
           s
+          lgr
           package-lint
           markdown-mode
         ] ++ [ propcheckPkg ]);

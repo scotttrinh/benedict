@@ -1,7 +1,7 @@
 ;;; benedict.el --- Emacs-first AI assistant  -*- lexical-binding: t; -*-
 ;; Author: Benedict maintainers
 ;; Version: 0.1.0-pre
-;; Package-Requires: ((emacs "27.1"))
+;; Package-Requires: ((emacs "27.1") (lgr "0.3"))
 ;; Keywords: tools, convenience, ai
 ;; URL: https://github.com/scotttrinh/benedict
 
@@ -30,6 +30,7 @@
   :type 'symbol
   :group 'benedict)
 
+(require 'benedict-logging)
 (require 'benedict-provider)
 
 ;; Faces (initial, minimal)

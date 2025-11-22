@@ -13,6 +13,7 @@
 (require 'url-http)
 (require 'url-parse)
 (require 'json)
+(require 'lgr)
 (require 'benedict-provider)
 (require 'benedict-http)
 
@@ -223,15 +224,9 @@ When streaming is enabled, callbacks receive incremental deltas via curl."
          (headers (benedict-provider-openrouter--build-headers token))
          (payload (plist-get context :payload))
          (streaming (plist-get context :streaming)))
-    (benedict-provider-log-debug
-     'openrouter :request
-     :request-id (plist-get context :request-id)
-     :attempt (plist-get context :attempt)
-     :endpoint benedict-provider-openrouter-endpoint
-     :headers (benedict-provider-openrouter--redact-headers headers)
-     :body payload
-     :body-bytes (and payload (string-bytes payload))
-     :credential-source (plist-get (plist-get context :credential) :source))
+    (let ((lgr (lgr-get-logger "benedict.openrouter")))
+      (lgr-debug lgr "Request: attempt=%d (request-id=%s)"
+                 (plist-get context :attempt) (plist-get context :request-id)))
     
     (let ((process 
            (benedict-http-request
@@ -281,23 +276,16 @@ which some providers (like xAI/Grok) seem to emit within a single SSE block."
                                            :null-object nil :false-object :json-false)))
               (benedict-provider-openrouter--stream-handle-json context json))
           (json-parse-error
-           (benedict-provider-log
-            'openrouter 'warn :stream-parse-error
-            :request-id (plist-get context :request-id)
-            :payload payload
-            :error err)))))))
+           (let ((lgr (lgr-get-logger "benedict.openrouter")))
+             (lgr-warn lgr "Stream parse error (request-id=%s)" (plist-get context :request-id)))))))))
 
 (defun benedict-provider-openrouter--stream-handle-error (context error-block _ignored)
   "Handle streaming ERROR-BLOCK for CONTEXT."
   (let ((message (or (plist-get error-block :message) "Unknown streaming error"))
         (code (plist-get error-block :code))
         (type (plist-get error-block :type)))
-    (benedict-provider-log
-     'openrouter 'error :stream-error
-     :request-id (plist-get context :request-id)
-     :code code
-     :type type
-     :message message)
+    (let ((lgr (lgr-get-logger "benedict.openrouter")))
+      (lgr-error lgr "Stream error (request-id=%s)" (plist-get context :request-id)))
     (benedict-provider-openrouter--emit-error
      context (list :type 'api :code code :message message :body error-block :retryable nil))))
 
@@ -324,11 +312,8 @@ which some providers (like xAI/Grok) seem to emit within a single SSE block."
              (choices
               (let* ((normalized (benedict-provider-openrouter--normalize-delta-choices
                                   context choices)))
-                (benedict-provider-log-trace
-                 'openrouter :stream-delta
-                 :request-id request-id
-                 :remote-id remote-id
-                 :choices (length normalized))
+                (let ((lgr (lgr-get-logger "benedict.openrouter")))
+                  (lgr-trace lgr "Stream delta (request-id=%s, choices=%d)" request-id (length normalized)))
                 (when (functionp on-delta)
                   (dolist (choice normalized)
                     (let ((delta (plist-get choice :delta)))
@@ -360,10 +345,8 @@ Returns non-nil when a delta was dispatched."
         (on-delta (plist-get context :on-delta))
         (request-id (plist-get context :request-id)))
     (when details
-      (benedict-provider-log-trace
-       'openrouter :stream-reasoning-event
-       :request-id request-id
-       :details (length details))
+      (let ((lgr (lgr-get-logger "benedict.openrouter")))
+        (lgr-trace lgr "Stream reasoning event (request-id=%s, details=%d)" request-id (length details)))
       (when on-delta
         (mapc (lambda (detail)
                 (let ((chunk (or (plist-get detail :text)
@@ -674,13 +657,8 @@ Returns non-nil when a delta was dispatched."
                                                 :status :completed
                                                 :end-time end-time
                                                 :latency latency)
-    (benedict-provider-log
-     'openrouter 'info :stream-complete
-     :request-id request-id
-     :remote-id (plist-get state :remote-id)
-     :latency latency
-     :model (plist-get result :model)
-     :content-bytes (length (or content "")))
+    (let ((lgr (lgr-get-logger "benedict.openrouter")))
+      (lgr-info lgr "Stream complete (request-id=%s, latency=%.2fs)" request-id latency))
     (benedict-provider-openrouter--stream-cleanup context)
     (benedict-provider-openrouter--state-clear request-id)
     (let ((on-complete (plist-get context :on-complete))
@@ -738,18 +716,10 @@ Returns non-nil when a delta was dispatched."
              (attempt (plist-get context :attempt))
              (err-msg (or message stderr "Unknown error")))
         (if (benedict-provider-openrouter--maybe-retry context nil err-msg)
-            (benedict-provider-log
-             'openrouter 'warn :network-error
-             :request-id request-id
-             :attempt attempt
-             :message err-msg
-             :retry t)
-          (benedict-provider-log
-           'openrouter 'error :network-error
-           :request-id request-id
-           :attempt attempt
-           :message err-msg
-           :retry nil)
+            (let ((lgr (lgr-get-logger "benedict.openrouter")))
+              (lgr-warn lgr "Network error (request-id=%s, attempt=%d): %s" request-id attempt err-msg))
+          (let ((lgr (lgr-get-logger "benedict.openrouter")))
+            (lgr-error lgr "Network error (request-id=%s, attempt=%d): %s" request-id attempt err-msg))
           (benedict-provider-openrouter--emit-error
            context (list :type 'network :message err-msg :retryable nil)))))))
 
@@ -766,20 +736,10 @@ Returns non-nil when a delta was dispatched."
     (json-parse-error
      (let ((request-id (plist-get context :request-id)))
        (if (benedict-provider-openrouter--maybe-retry context status-code "JSON parse error")
-           (benedict-provider-log
-            'openrouter 'warn :decode-error
-            :request-id request-id
-            :status status-code
-            :body body
-            :error err
-            :retry t)
-         (benedict-provider-log
-          'openrouter 'error :decode-error
-          :request-id request-id
-          :status status-code
-          :body body
-          :error err
-          :retry nil)
+           (let ((lgr (lgr-get-logger "benedict.openrouter")))
+             (lgr-warn lgr "Decode error: status=%d (request-id=%s)" status-code request-id))
+         (let ((lgr (lgr-get-logger "benedict.openrouter")))
+           (lgr-error lgr "Decode error: status=%d (request-id=%s)" status-code request-id))
          (benedict-provider-openrouter--emit-error
           context (list :type 'decode :status status-code :message "Failed to parse response"
                         :body body :retryable nil :error err)))))))
@@ -817,15 +777,8 @@ Returns non-nil when a delta was dispatched."
     (benedict-provider-openrouter--state-update
      request-id :usage usage :model model :latency latency
      :status :completed :end-time end-time)
-    (benedict-provider-log
-     'openrouter log-level :completion
-     :request-id request-id
-     :attempt (plist-get context :attempt)
-     :status status-code
-     :model model
-     :latency latency
-     :usage usage
-     :empty-response empty-response)
+    (let ((lgr (lgr-get-logger "benedict.openrouter")))
+      (lgr-info lgr "Completion: model=%s (request-id=%s, latency=%.2fs)" model request-id latency))
     ;; Prefer :on-complete over :on-success for consistency with streaming protocol
     (if (functionp (plist-get context :on-complete))
         (funcall (plist-get context :on-complete) result)
@@ -843,22 +796,10 @@ Returns non-nil when a delta was dispatched."
          (retry (and retryable
                      (benedict-provider-openrouter--maybe-retry context status-code message))))
     (if retry
-        (benedict-provider-log
-         'openrouter 'warn :http-error
-         :request-id (plist-get context :request-id)
-         :attempt (plist-get context :attempt)
-         :status status-code
-         :code code
-         :message message
-         :retry t)
-      (benedict-provider-log
-       'openrouter 'error :http-error
-       :request-id (plist-get context :request-id)
-       :attempt (plist-get context :attempt)
-       :status status-code
-       :code code
-       :message message
-       :retry nil)
+        (let ((lgr (lgr-get-logger "benedict.openrouter")))
+          (lgr-warn lgr "HTTP error: status=%d (request-id=%s)" status-code (plist-get context :request-id)))
+      (let ((lgr (lgr-get-logger "benedict.openrouter")))
+        (lgr-error lgr "HTTP error: status=%d (request-id=%s)" status-code (plist-get context :request-id)))
       (benedict-provider-openrouter--emit-error
        context (list :type 'http :status status-code :code code :message message
                      :retryable retryable :body body)))))
@@ -877,14 +818,9 @@ Returns non-nil when a delta was dispatched."
          (plist-get context :request-id)
          :status :retrying
          :start-time (plist-get next :start-time))
-        (benedict-provider-log-debug
-         'openrouter :retry
-         :request-id (plist-get context :request-id)
-         :current-attempt attempt
-         :next-attempt (plist-get next :attempt)
-         :delay delay
-         :status status
-         :message message)
+        (let ((lgr (lgr-get-logger "benedict.openrouter")))
+          (lgr-debug lgr "Retry: attempt %d -> %d after %fs (request-id=%s)"
+                     attempt (plist-get next :attempt) delay (plist-get context :request-id)))
         (run-at-time delay #'benedict-provider-openrouter--perform-request next)
         t))))
 
@@ -1278,11 +1214,8 @@ When STREAM is non-nil, include the \"stream\": true flag in the payload."
           (json-parse-string arguments :object-type 'plist :array-type 'list
                              :null-object nil :false-object :json-false)
         (json-parse-error
-         (benedict-provider-log
-          'openrouter 'warn :tool-args-decode
-          :message "Failed to decode tool arguments"
-          :error err
-          :input arguments)
+         (let ((lgr (lgr-get-logger "benedict.openrouter")))
+           (lgr-warn lgr "Failed to decode tool arguments"))
          nil))))
    ((plistp arguments) arguments)
    (t nil)))
