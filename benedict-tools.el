@@ -468,50 +468,58 @@ ARGS must be a plist passed directly to the tool implementation."
     expanded))
 
 (cl-defun benedict--tool-propose-edit (&key path diff description &allow-other-keys)
-  "Apply DIFF to PATH and expose an Emacs diff buffer for review."
-  (let* ((path (string-trim (or path "")))
-         (diff (or diff ""))
-         (root (or (benedict--search-project-root)
-                   (signal 'benedict-error "Project root unavailable")))
-         (root (expand-file-name root))
-         (target (benedict--resolve-target-file path root))
-         (relative-path (file-relative-name target root)))
-    (when (string-empty-p diff)
-      (signal 'benedict-error "propose-edit requires a non-empty :diff"))
-    (let* ((diff (if (string-suffix-p "\n" diff) diff (concat diff "\n")))
-           (stats (benedict--propose-edit--count-diff-stats diff))
-           (diff-paths (benedict--propose-edit--unique-diff-paths diff root)))
-      (unless (= (length diff-paths) 1)
-        (signal 'benedict-error "Diff must touch exactly one file"))
-      (unless (string= (car diff-paths) relative-path)
-        (signal 'benedict-error
-                (format "Diff header %s does not match expected path %s"
-                        (car diff-paths) relative-path)))
-      (let* ((review-name (benedict--propose-edit--review-buffer-name relative-path))
-             (review-buffer (benedict--propose-edit--prepare-review-buffer
-                             review-name diff root))
-             (description-suffix (if (and description (not (string-empty-p description)))
-                                     (format " (%s)" description)
-                                   "")))
-        (benedict--propose-edit--apply-review-buffer review-buffer)
-        (benedict--propose-edit--record-review-buffer review-name)
-        (list :path path
-              :content (format "Applied edit to %s%s" relative-path description-suffix)
-              :stats stats
-              :review-buffer review-name
-              :ui (list :header (format "Proposed edit — %s" relative-path)
-                        :state 'success
-                        :body (format "Diff: %d hunks, +%d/-%d lines. Open %s to review."
-                                      (plist-get stats :hunks)
-                                      (plist-get stats :added)
-                                      (plist-get stats :removed)
-                                      review-name)))))))
-(benedict-tools-register
- :id 'propose-edit
- :fn #'benedict--tool-propose-edit
- :schema '(:path string :diff string :description string)
- :approval 'confirm
- :doc "Apply a single-file diff patch and show an Emacs review buffer.")
+   "Apply DIFF to PATH and expose an Emacs diff buffer for review."
+   (let* ((path (string-trim (or path "")))
+          (diff (or diff ""))
+          (root (or (benedict--search-project-root)
+                    (signal 'benedict-error "Project root unavailable")))
+          (root (expand-file-name root))
+          (target (benedict--resolve-target-file path root))
+          (relative-path (file-relative-name target root)))
+     (when (string-empty-p diff)
+       (signal 'benedict-error "propose-edit requires a non-empty :diff"))
+     (let* ((diff (if (string-suffix-p "\n" diff) diff (concat diff "\n")))
+            (stats (benedict--propose-edit--count-diff-stats diff))
+            (diff-paths (benedict--propose-edit--unique-diff-paths diff root)))
+       (unless (= (length diff-paths) 1)
+         (signal 'benedict-error "Diff must touch exactly one file"))
+       (unless (string= (car diff-paths) relative-path)
+         (signal 'benedict-error
+                 (format "Diff header %s does not match expected path %s"
+                         (car diff-paths) relative-path)))
+       (let* ((review-name (benedict--propose-edit--review-buffer-name relative-path))
+              (review-buffer (benedict--propose-edit--prepare-review-buffer
+                              review-name diff root))
+              (description-suffix (if (and description (not (string-empty-p description)))
+                                      (format " (%s)" description)
+                                    ""))
+              (summary-line (format "Diff: %d hunks, +%d/-%d lines"
+                                    (plist-get stats :hunks)
+                                    (plist-get stats :added)
+                                    (plist-get stats :removed)))
+              ;; Format diff for inline display with syntax highlighting
+              (formatted-diff (concat summary-line "\n\n"
+                                      (concat "```diff\n" diff "```")))
+              ;; Action to open the review buffer
+              (open-diff-action (list :label "Open diff"
+                                      :handler (lambda ()
+                                                 (pop-to-buffer review-name)))))
+         (benedict--propose-edit--apply-review-buffer review-buffer)
+         (benedict--propose-edit--record-review-buffer review-name)
+         (list :path path
+               :content (format "Applied edit to %s%s" relative-path description-suffix)
+               :stats stats
+               :review-buffer review-name
+               :ui (list :header (format "Proposed edit — %s" relative-path)
+                         :state 'success
+                         :body formatted-diff
+                         :actions (list open-diff-action)))))))
+ (benedict-tools-register
+  :id 'propose-edit
+  :fn #'benedict--tool-propose-edit
+  :schema '(:path string :diff string :description string)
+  :approval 'confirm
+  :doc "Apply a single-file diff patch and show an Emacs review buffer.")
 
 ;; Seed demo tool
 (benedict-tools-register :id 'uppercase :fn #'benedict--tool-uppercase

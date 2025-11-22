@@ -1005,17 +1005,67 @@ This does not affect provider message history."
    (t 'in-progress)))
 
 (defun benedict-chat--tool-ui--stringify-body (value fallback)
-  "Return VALUE formatted as a string for tool UI, or FALLBACK."
-  (cond
-   ((and (stringp value) (not (string-empty-p value))) value)
-   ((null value) (or fallback ""))
-   ((listp value) (string-join (mapcar #'benedict-chat--tool-value-string value) "\n"))
-   (t (benedict-chat--tool-value-string value))))
+   "Return VALUE formatted as a string for tool UI, or FALLBACK."
+   (cond
+    ((and (stringp value) (not (string-empty-p value))) value)
+    ((null value) (or fallback ""))
+    ((listp value) (string-join (mapcar #'benedict-chat--tool-value-string value) "\n"))
+    (t (benedict-chat--tool-value-string value))))
+
+(defun benedict-chat--format-diff-body (diff &optional lang)
+   "Format DIFF string for display with syntax highlighting.
+LANG is optional language hint (defaults to 'diff').
+Returns the formatted diff wrapped in a markdown code block."
+   (let* ((language (or lang "diff"))
+          (formatted (concat "```" language "\n" diff "\n```")))
+     formatted))
+
+(defun benedict-chat--validate-action (action)
+  "Validate that ACTION is a plist with :label and :handler.
+Returns the action plist or signals an error."
+  (message "[Benedict--validate-action] Validating: %S" (type-of action))
+  (unless (listp action)
+    (message "[Benedict--validate-action] ERROR: not a list: %S" (type-of action))
+    (signal 'wrong-type-argument (list 'listp action)))
+  (unless (plist-member action :label)
+    (message "[Benedict--validate-action] ERROR: missing :label in %S" action)
+    (signal 'benedict-error "Action must have :label"))
+  (let ((label (plist-get action :label)))
+    (unless (stringp label)
+      (message "[Benedict--validate-action] ERROR: :label not string: %S" (type-of label))
+      (signal 'wrong-type-argument (list 'stringp label))))
+  (unless (plist-member action :handler)
+    (message "[Benedict--validate-action] ERROR: missing :handler in %S" action)
+    (signal 'benedict-error "Action must have :handler"))
+  (let ((handler (plist-get action :handler)))
+    (unless (functionp handler)
+      (message "[Benedict--validate-action] ERROR: :handler not functionp: %S" (type-of handler))
+      (signal 'wrong-type-argument (list 'functionp handler))))
+  (message "[Benedict--validate-action] VALID: action with label=%s" (plist-get action :label))
+  action)
+
+(defun benedict-chat--normalize-actions (actions)
+  "Normalize ACTIONS list, validating each action.
+Returns a list of validated action plists, or nil if ACTIONS is null/empty."
+  (message "[Benedict--normalize-actions] Processing: %S (count: %d)" 
+           (type-of actions) (if (listp actions) (length actions) 0))
+  (when actions
+    (unless (listp actions)
+      (message "[Benedict--normalize-actions] ERROR: actions not a list: %S" (type-of actions))
+      (signal 'wrong-type-argument (list 'listp actions)))
+    (let ((result (mapcar #'benedict-chat--validate-action actions)))
+      (message "[Benedict--normalize-actions] DONE: %d actions validated" (length result))
+      result)))
 
 (defun benedict-chat--normalize-tool-ui (call state ui fallback-body)
-  "Return CALL UI plist normalized with STATE and FALLBACK-BODY."
+  "Return CALL UI plist normalized with STATE and FALLBACK-BODY.
+Also validates and normalizes :actions if present."
+  (message "[Benedict--normalize-tool-ui] START: state=%s, ui=%S, fallback=%S" 
+           state (type-of ui) (type-of fallback-body))
   (let* ((state (benedict-chat--normalize-tool-state state))
          (normalized (if (listp ui) (copy-sequence ui) nil)))
+    (message "[Benedict--normalize-tool-ui] After normalize-state: state=%s, normalized=%S"
+             state (type-of normalized))
     (setq normalized (or normalized (list)))
     (if (plist-member normalized :state)
         (setq normalized (plist-put normalized :state
@@ -1026,8 +1076,17 @@ This does not affect provider message history."
     (let ((body (if (plist-member normalized :body)
                     (plist-get normalized :body)
                   nil)))
+      (message "[Benedict--normalize-tool-ui] Body before stringify: %S" (type-of body))
       (setq body (benedict-chat--tool-ui--stringify-body body fallback-body))
+      (message "[Benedict--normalize-tool-ui] Body after stringify: %S" (type-of body))
       (setq normalized (plist-put normalized :body body)))
+    ;; Validate and normalize actions if present
+    (when (plist-member normalized :actions)
+      (let ((actions (plist-get normalized :actions)))
+        (message "[Benedict--normalize-tool-ui] Normalizing actions: %S" (type-of actions))
+        (setq normalized (plist-put normalized :actions
+                                    (benedict-chat--normalize-actions actions)))))
+    (message "[Benedict--normalize-tool-ui] DONE: normalized=%S" (type-of normalized))
     normalized))
 
 (defun benedict-chat--tool-ui-body-string (ui)
@@ -1038,9 +1097,32 @@ This does not affect provider message history."
 (defun benedict-chat--refresh-tool-block (item)
   "Refresh ITEM header and content after UI or metadata changes."
   (let ((ui (plist-get item :ui)))
-    (benedict-chat--write-message-item-content item (benedict-chat--tool-ui-body-string ui))
-    (benedict-chat--update-tool-header item)
-    (benedict-chat--update-tool-visibility item)))
+    (message "[Benedict] Refreshing tool block (ui=%S)" (type-of ui))
+    (condition-case content-err
+        (let ((body-str (benedict-chat--tool-ui-body-string ui)))
+          (message "[Benedict] Tool UI body string resolved: %S" (type-of body-str))
+          (condition-case write-err
+              (benedict-chat--write-message-item-content item body-str)
+            (error
+             (message "[Benedict] ERROR writing message content: %S" write-err)
+             (message "[Benedict] Backtrace: %s" (backtrace-to-string (current-backtrace)))
+             (error "Failed to write message content: %s" (error-message-string write-err)))))
+      (error
+       (message "[Benedict] ERROR building tool UI body: %S" content-err)
+       (message "[Benedict] Backtrace: %s" (backtrace-to-string (current-backtrace)))
+       (error "Failed to build tool UI body: %s" (error-message-string content-err))))
+    (message "[Benedict] Updating tool header")
+    (condition-case header-err
+        (benedict-chat--update-tool-header item)
+      (error
+       (message "[Benedict] ERROR updating tool header: %S" header-err)
+       (message "[Benedict] Backtrace: %s" (backtrace-to-string (current-backtrace)))))
+    (message "[Benedict] Updating tool visibility")
+    (condition-case vis-err
+        (benedict-chat--update-tool-visibility item)
+      (error
+       (message "[Benedict] ERROR updating tool visibility: %S" vis-err)
+       (message "[Benedict] Backtrace: %s" (backtrace-to-string (current-backtrace)))))))
 
 (defun benedict-chat--prepare-thinking-block (item)
   "Install folding controls and overlays for thinking ITEM."
@@ -1221,15 +1303,27 @@ This does not affect provider message history."
 (defun benedict-chat--update-tool-block (item metadata ui fallback)
   "Update ITEM with METADATA and UI; FALLBACK is used for missing body text."
   (let* ((call (plist-get item :tool-call))
-         (normalized (benedict-chat--normalize-tool-ui
-                      call
-                      (plist-get metadata :status)
-                      ui
-                      fallback)))
-    (plist-put item :metadata metadata)
-    (plist-put item :ui normalized)
-    (plist-put item :content (benedict-chat--tool-ui-body-string normalized))
-    (benedict-chat--refresh-tool-block item)))
+         (status (plist-get metadata :status)))
+    (message "[Benedict] Updating tool block: status=%s, ui=%S, fallback=%S" 
+             status (type-of ui) (type-of fallback))
+    (condition-case norm-err
+        (let ((normalized (benedict-chat--normalize-tool-ui
+                           call
+                           status
+                           ui
+                           fallback)))
+          (message "[Benedict] Normalized UI: %S" (type-of normalized))
+          (plist-put item :metadata metadata)
+          (plist-put item :ui normalized)
+          (let ((body-str (benedict-chat--tool-ui-body-string normalized)))
+            (message "[Benedict] Tool body string: %S" (type-of body-str))
+            (plist-put item :content body-str))
+          (message "[Benedict] Calling refresh-tool-block")
+          (benedict-chat--refresh-tool-block item))
+      (error
+       (message "[Benedict] ERROR normalizing tool UI: %S" norm-err)
+       (message "[Benedict] Backtrace: %s" (backtrace-to-string (current-backtrace)))
+       (error "Failed to update tool block: %s" (error-message-string norm-err))))))
 
 (defun benedict-chat--normalize-tool-id (tool-id)
   "Return TOOL-ID coerced into a symbol."
@@ -1285,21 +1379,41 @@ This does not affect provider message history."
          (arguments (or (plist-get call :arguments) nil))
          (status 'success)
          (output nil))
+    (message "[Benedict] Invoking tool: %s with args: %S" tool-id arguments)
     (condition-case err
-        (setq output (benedict-tool-invoke tool-id arguments))
+        (progn
+          (message "[Benedict] Tool invocation started for %s" tool-id)
+          (setq output (benedict-tool-invoke tool-id arguments))
+          (message "[Benedict] Tool %s returned successfully: %S" tool-id (type-of output)))
       (error
        (setq status 'failure)
+       (message "[Benedict] Tool %s failed with error: %S (type: %s)" 
+                tool-id err (type-of err))
+       (message "[Benedict] Error details: %s" (error-message-string err))
+       (message "[Benedict] Full backtrace: %s" (backtrace-to-string (current-backtrace)))
        (setq output (format "Tool error: %s" (error-message-string err)))))
+    (message "[Benedict] Normalizing tool output for %s" tool-id)
     (let* ((normalized-output (benedict-chat--normalize-tool-output output))
            (text (plist-get normalized-output :text))
            (ui (plist-get normalized-output :ui))
            (result-metadata (benedict-chat--tool-call-metadata tool-id call status metadata)))
+      (message "[Benedict] Normalized output: text=%s, ui=%S" (type-of text) (type-of ui))
       (when item
-        (benedict-chat--update-tool-block
-         item result-metadata ui
-         (benedict-chat--tool-result-content call text)))
-      (benedict-chat--history-store
-       (benedict-chat--tool-result-history-entry tool-id call text result-metadata)))))
+        (message "[Benedict] Updating tool block for %s" tool-id)
+        (condition-case block-err
+            (benedict-chat--update-tool-block
+             item result-metadata ui
+             (benedict-chat--tool-result-content call text))
+          (error
+           (message "[Benedict] ERROR updating tool block: %S" block-err)
+           (message "[Benedict] Backtrace: %s" (backtrace-to-string (current-backtrace))))))
+      (message "[Benedict] Storing tool result for %s" tool-id)
+      (condition-case hist-err
+          (benedict-chat--history-store
+           (benedict-chat--tool-result-history-entry tool-id call text result-metadata))
+        (error
+         (message "[Benedict] ERROR storing tool result: %S" hist-err)
+         (message "[Benedict] Backtrace: %s" (backtrace-to-string (current-backtrace))))))))
 
 (defun benedict-chat--process-tool-calls (message tool-calls metadata)
   "Render TOOL-CALLS for MESSAGE and execute each tool using METADATA."
