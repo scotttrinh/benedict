@@ -546,12 +546,17 @@ ARGS must be a plist passed directly to the tool implementation."
         (signal 'benedict-error (format "Failed to create file %s" path)))
       ;; Return success result
       (let ((relative-path (file-relative-name expanded root))
-            (line-count (length (split-string content "\n" t))))
+            (line-count (length (split-string content "\n" t)))
+            ;; Action to open the created file
+            (open-file-action (list :label "Open file"
+                                    :handler (lambda ()
+                                               (find-file expanded)))))
         (list :path path
               :content (format "Created file %s with %d lines" relative-path line-count)
               :ui (list :header (format "Created file — %s" relative-path)
                         :state 'success
-                        :body (format "File created with %d lines of content" line-count)))))))
+                        :body (format "File created with %d lines of content" line-count)
+                        :actions (list open-file-action)))))))
 
 (benedict-tools-register
   :id 'create-file
