@@ -14,6 +14,7 @@
 (require 'url-parse)
 (require 'json)
 (require 'benedict-provider)
+(require 'benedict-http)
 
 (defgroup benedict-provider-openrouter nil
   "Settings for the Benedict OpenRouter provider."
@@ -87,26 +88,9 @@ Set to nil to skip matching on :user."
   :group 'benedict-provider-openrouter)
 
 (defcustom benedict-provider-openrouter-enable-streaming t
-  "When non-nil, enable streaming via curl for OpenRouter requests.
-Streaming requires a working curl executable and is used only when the
-request handler provides an :on-delta callback (unless :stream nil is
-explicitly set on the request)."
+  "When non-nil, enable streaming via curl for OpenRouter requests."
   :type 'boolean
   :group 'benedict-provider-openrouter)
-
-(defcustom benedict-provider-openrouter-curl-program "curl"
-  "Executable used to issue streaming requests.
-Must support --no-buffer/--fail-with-body (curl 7.60+)."
-  :type 'file
-  :group 'benedict-provider-openrouter)
-
-(defcustom benedict-provider-openrouter-streaming-extra-args nil
-  "Additional arguments appended to the streaming curl command."
-  :type '(repeat string)
-  :group 'benedict-provider-openrouter)
-
-(defconst benedict-provider-openrouter--stream-log-limit 32768
-  "Maximum number of bytes to retain from streaming stdout for diagnostics.")
 
 (defconst benedict-provider-openrouter--retryable-status-codes
   '(408 409 425 429 500 502 503 504)
@@ -188,7 +172,9 @@ Must support --no-buffer/--fail-with-body (curl 7.60+)."
 ON-SUCCESS/ON-ERROR/ON-DELTA/ON-COMPLETE mirror `benedict-provider-dispatch'.
 When streaming is enabled, callbacks receive incremental deltas via curl."
   (let* ((credential (benedict-provider-openrouter--resolve-credential))
-         (streaming (benedict-provider-openrouter--streaming-request-p request on-delta))
+         (streaming (and benedict-provider-openrouter-enable-streaming
+                         (or (plist-get request :stream)
+                             on-delta)))
          (payload (benedict-provider-openrouter--encode-payload request streaming))
          (request-id (or (plist-get request :request-id)
                          (benedict-provider-openrouter--make-request-id)))
@@ -200,6 +186,21 @@ When streaming is enabled, callbacks receive incremental deltas via curl."
                 benedict-provider-openrouter-default-model)
      :start-time start-time
      :status (if streaming :streaming :http))
+    (when streaming
+      (benedict-provider-openrouter--state-update
+       request-id
+       :status :streaming
+       :message-chunks nil
+       :reasoning-counter 0
+       :reasoning-entries nil
+       :reasoning-order nil
+       :role 'assistant
+       :final-message nil
+       :final-message-text nil
+       :usage nil
+       :raw-last nil
+       :remote-id nil
+       :tool-call-partials nil))
     (let ((context (list :request request
                          :payload payload
                          :credential credential
@@ -214,16 +215,15 @@ When streaming is enabled, callbacks receive incremental deltas via curl."
                          :max-attempts (max 1 (+ 1 (max 0 benedict-provider-openrouter-max-retries)))
                          :start-time start-time
                          :provider 'openrouter)))
-      (if streaming
-          (benedict-provider-openrouter--start-stream context)
-        (benedict-provider-openrouter--perform-request context))
+      (benedict-provider-openrouter--perform-request context)
       context)))
 
 (defun benedict-provider-openrouter--perform-request (context)
   "Execute the HTTP request described by CONTEXT."
   (let* ((token (plist-get (plist-get context :credential) :token))
          (headers (benedict-provider-openrouter--build-headers token))
-         (payload (plist-get context :payload)))
+         (payload (plist-get context :payload))
+         (streaming (plist-get context :streaming)))
     (benedict-provider-log-debug
      'openrouter :request
      :request-id (plist-get context :request-id)
@@ -233,213 +233,27 @@ When streaming is enabled, callbacks receive incremental deltas via curl."
      :body payload
      :body-bytes (and payload (string-bytes payload))
      :credential-source (plist-get (plist-get context :credential) :source))
-    (let ((url-request-method "POST")
-          (url-request-extra-headers headers)
-          (url-request-data payload))
-      (url-retrieve benedict-provider-openrouter-endpoint
-                    #'benedict-provider-openrouter--handle-response
-                    (list context)
-                    t t))))
-
-(defun benedict-provider-openrouter--handle-response (status context)
-  "Process STATUS from url-retrieve with CONTEXT."
-  (let ((buffer (current-buffer)))
-    (unwind-protect
-        (progn
-          (if (plist-get status :error)
-              (benedict-provider-openrouter--handle-network-error status context)
-            (goto-char (point-min))
-            (let ((http-status (if (boundp 'url-http-response-status)
-                                   url-http-response-status
-                                 0)))
-              (if (re-search-forward "\n\n" nil t)
-                  (let* ((header-end (match-end 0))
-                         (headers (buffer-substring-no-properties (point-min) header-end))
-                         (body (buffer-substring-no-properties header-end (point-max))))
-                    (benedict-provider-openrouter--log-http-response
-                     context http-status headers body)
-                    (benedict-provider-openrouter--process-http-response
-                     context http-status body))
-                (let ((headers (buffer-substring-no-properties (point-min) (point-max))))
-                  (benedict-provider-openrouter--log-http-response
-                   context http-status headers "")
-                  (benedict-provider-openrouter--process-http-response
-                   context http-status ""))))))
-      (when (buffer-live-p buffer)
-        (kill-buffer buffer)))))
-
-(defun benedict-provider-openrouter--streaming-available-p ()
-  "Return non-nil when streaming prerequisites are satisfied."
-  (and benedict-provider-openrouter-enable-streaming
-       (executable-find benedict-provider-openrouter-curl-program)))
-
-(defun benedict-provider-openrouter--streaming-request-p (request on-delta)
-  "Return non-nil when REQUEST should use streaming with ON-DELTA callback."
-  (let ((explicit (plist-member request :stream)))
-    (cond
-     (explicit
-      (and (plist-get request :stream)
-           (benedict-provider-openrouter--streaming-available-p)))
-     (t
-      (and on-delta
-           (benedict-provider-openrouter--streaming-available-p))))))
-
-(defun benedict-provider-openrouter--start-stream (context)
-  "Launch the streaming curl process for CONTEXT."
-  (if (not (benedict-provider-openrouter--streaming-available-p))
-      (progn
-        (setf (plist-get context :streaming) nil)
-        (setf (plist-get context :mode) 'http)
-        (benedict-provider-openrouter--perform-request context)
-        context)
-    (let ((token (plist-get (plist-get context :credential) :token))
-          (payload (plist-get context :payload)))
-      (benedict-provider-openrouter--state-update
-       (plist-get context :request-id)
-       :status :streaming
-       :message-chunks nil
-       :reasoning-counter 0
-       :reasoning-entries nil
-       :reasoning-order nil
-       :role 'assistant
-       :final-message nil
-       :final-message-text nil
-       :usage nil
-       :raw-last nil
-       :remote-id nil
-       :tool-call-partials nil)
-      (setf (plist-get context :partial) ""
-            (plist-get context :stdout-log) ""
-            (plist-get context :stream-complete) nil
-            (plist-get context :mode) 'stream)
-      (let* ((command (benedict-provider-openrouter--make-curl-command
-                       token payload))
-             (stderr-buffer (generate-new-buffer
-                             (format " *benedict-openrouter-%s-stderr*"
-                                     (plist-get context :request-id)))))
-        (benedict-provider-log-debug
-         'openrouter :stream-start
-         :request-id (plist-get context :request-id)
-         :endpoint benedict-provider-openrouter-endpoint)
-        (condition-case err
-            (let ((process
-                   (make-process
-                    :name (format "benedict-openrouter-%s"
-                                  (plist-get context :request-id))
-                    :buffer nil
-                    :command command
-                    :stderr stderr-buffer
-                    :coding 'utf-8
-                    :noquery t
-                    :connection-type 'pipe
-                    :filter #'benedict-provider-openrouter--curl-filter
-                    :sentinel #'benedict-provider-openrouter--curl-sentinel)))
-              (process-put process 'benedict-provider-openrouter-context context)
-              (setf (plist-get context :process) process
-                    (plist-get context :stderr-buffer) stderr-buffer)
-              context)
-          (error
-           (benedict-provider-log
-            'openrouter 'error :stream-start-failed
+    
+    (let ((process 
+           (benedict-http-request
+            benedict-provider-openrouter-endpoint
+            :method "POST"
+            :headers headers
+            :body payload
+            :stream streaming
             :request-id (plist-get context :request-id)
-            :message (error-message-string err))
-           (when (buffer-live-p stderr-buffer)
-             (kill-buffer stderr-buffer))
-           (setf (plist-get context :streaming) nil)
-           (setf (plist-get context :mode) 'http)
-           (benedict-provider-openrouter--perform-request context)
-           context))))))
+            :provider 'openrouter
+            :on-success (lambda (_status _headers body)
+                          (benedict-provider-openrouter--handle-response body context))
+            :on-error (lambda (err)
+                        (benedict-provider-openrouter--handle-error err context))
+            :on-delta (lambda (_type data)
+                        (benedict-provider-openrouter--handle-sse-payload context data nil))
+            :on-complete (lambda (&rest _args)
+                           (benedict-provider-openrouter--stream-handle-done context)))))
+      (setf (plist-get context :process) process)
+      context)))
 
-(defun benedict-provider-openrouter--make-curl-command (token payload)
-  "Return a curl command list using TOKEN and PAYLOAD."
-  (let ((headers (copy-sequence (benedict-provider-openrouter--build-headers token))))
-    (push (cons "Accept" "text/event-stream") headers)
-    (append
-     (list benedict-provider-openrouter-curl-program
-           "--silent" "--show-error" "--no-buffer" "--fail-with-body"
-           "-X" "POST")
-     (cl-mapcan (lambda (header)
-                  (list "-H"
-                        (format "%s: %s" (car header) (cdr header))))
-                headers)
-     benedict-provider-openrouter-streaming-extra-args
-     (list "--data-binary" payload benedict-provider-openrouter-endpoint))))
-
-(defun benedict-provider-openrouter--curl-filter (process chunk)
-  "Process streaming CHUNK for PROCESS."
-  (let ((context (process-get process 'benedict-provider-openrouter-context)))
-    (when context
-      (benedict-provider-openrouter--append-stream-log context chunk)
-      (benedict-provider-log-trace
-       'openrouter :stream-chunk
-       :request-id (plist-get context :request-id)
-       :bytes (length chunk)
-       :chunk (if (> (length chunk) 512)
-                  (concat (substring chunk 0 512) "…")
-                chunk))
-      (benedict-provider-openrouter--stream-handle-data
-       context (string-replace "\r" "" chunk)))))
-
-(defun benedict-provider-openrouter--curl-sentinel (process event)
-  "Handle PROCESS sentinel EVENT."
-  (let ((context (process-get process 'benedict-provider-openrouter-context)))
-    (when context
-      (benedict-provider-openrouter--stream-handle-sentinel context event))))
-
-(defun benedict-provider-openrouter--append-stream-log (context chunk)
-  "Append CHUNK to CONTEXT stdout log capped at
-`benedict-provider-openrouter--stream-log-limit'."
-  (let* ((log (or (plist-get context :stdout-log) ""))
-         (combined (concat log chunk))
-         (limit benedict-provider-openrouter--stream-log-limit))
-    (setf (plist-get context :stdout-log)
-          (if (> (length combined) limit)
-              (substring combined (- (length combined) limit))
-            combined))))
-
-(defun benedict-provider-openrouter--stream-handle-data (context chunk)
-  "Process streaming data CHUNK for CONTEXT."
-  (let ((buffer (concat (or (plist-get context :partial) "") chunk))
-        (continue t))
-    (while continue
-      (let ((pos (string-match "\n\n" buffer)))
-        (if (null pos)
-            (setq continue nil)
-          (let ((event (substring buffer 0 pos)))
-            (setq buffer (substring buffer (+ pos 2)))
-            (unless (string-empty-p event)
-              (benedict-provider-openrouter--process-sse-block context event))))))
-    (setf (plist-get context :partial) buffer)))
-
-(defun benedict-provider-openrouter--process-sse-block (context block)
-  "Parse SSE BLOCK and dispatch for CONTEXT."
-  (let ((lines (split-string block "\n"))
-        (data-lines nil)
-        (event-type nil))
-    (dolist (line lines)
-      (cond
-       ((string-prefix-p "data:" line)
-        (push (string-trim-left (substring line 5)) data-lines))
-       ((string-prefix-p "event:" line)
-        (setq event-type (string-trim (substring line 6))))
-       ((string-prefix-p ":" line)
-        ;; Comment - ignore
-        nil)
-       ((string-empty-p line)
-        nil)
-       (t
-        (push (string-trim line) data-lines))))
-    (let ((payload (string-join (nreverse (delq nil data-lines)) "\n")))
-      (when (> (length payload) 0)
-        (benedict-provider-log-trace
-         'openrouter :stream-sse-block
-         :request-id (plist-get context :request-id)
-         :event event-type
-         :bytes (length payload)
-         :payload (if (> (length payload) 512)
-                      (concat (substring payload 0 512) "…")
-                    payload))
-        (benedict-provider-openrouter--handle-sse-payload context payload event-type)))))
 
 (defun benedict-provider-openrouter--handle-sse-payload (context payload _event)
   "Handle SSE PAYLOAD for CONTEXT.
@@ -475,6 +289,20 @@ which some providers (like xAI/Grok) seem to emit within a single SSE block."
             :request-id (plist-get context :request-id)
             :payload payload
             :error err)))))))
+
+(defun benedict-provider-openrouter--stream-handle-error (context error-block _ignored)
+  "Handle streaming ERROR-BLOCK for CONTEXT."
+  (let ((message (or (plist-get error-block :message) "Unknown streaming error"))
+        (code (plist-get error-block :code))
+        (type (plist-get error-block :type)))
+    (benedict-provider-log
+     'openrouter 'error :stream-error
+     :request-id (plist-get context :request-id)
+     :code code
+     :type type
+     :message message)
+    (benedict-provider-openrouter--emit-error
+     context (list :type 'api :code code :message message :body error-block :retryable nil))))
 
 (defun benedict-provider-openrouter--stream-handle-json (context event)
   "Handle parsed streaming EVENT for CONTEXT."
@@ -816,63 +644,6 @@ Returns non-nil when a delta was dispatched."
     (setf (plist-get context :stream-complete) t)
     (benedict-provider-openrouter--finalize-stream context)))
 
-(defun benedict-provider-openrouter--stream-handle-sentinel (context event)
-  "Process process sentinel EVENT for CONTEXT."
-  (cond
-   ((plist-get context :stream-complete)
-    (benedict-provider-openrouter--stream-cleanup context))
-   ((and (stringp event)
-         (string-match-p "finished" event))
-    (benedict-provider-openrouter--stream-handle-done context))
-   (t
-    (let ((stderr (benedict-provider-openrouter--stream-read-stderr context)))
-      (benedict-provider-openrouter--stream-handle-error
-       context nil (or stderr (string-trim event)))))))
-
-(defun benedict-provider-openrouter--stream-read-stderr (context)
-  "Return stderr contents for CONTEXT."
-  (let ((buffer (plist-get context :stderr-buffer)))
-    (when (buffer-live-p buffer)
-      (with-current-buffer buffer
-        (prog1 (string-trim (buffer-string))
-          (erase-buffer))))))
-
-(defun benedict-provider-openrouter--stream-handle-error (context error-block message)
-  "Emit an error for CONTEXT.
-ERROR-BLOCK is the parsed JSON block when available.  MESSAGE is a fallback string."
-  (setf (plist-get context :stream-complete) t)
-  (let* ((request-id (plist-get context :request-id))
-         (state (benedict-provider-openrouter--state-get request-id))
-         (end-time (current-time))
-         (start-time (or (plist-get state :start-time)
-                         (plist-get context :start-time)))
-         (latency (and start-time
-                       (float-time (time-subtract end-time start-time))))
-         (payload (list :type 'stream
-                        :provider 'openrouter
-                        :message (or message
-                                     (plist-get error-block :message)
-                                     "Streaming request failed")
-                        :code (plist-get error-block :code)
-                        :status (plist-get error-block :status)
-                        :retryable nil
-                        :body (plist-get context :stdout-log))))
-    (benedict-provider-openrouter--state-update
-     request-id
-     :status :error
-     :error payload
-     :end-time end-time
-     :latency latency)
-    (benedict-provider-log
-     'openrouter 'error :stream-error
-     :request-id request-id
-     :remote-id (plist-get state :remote-id)
-     :message (plist-get payload :message)
-     :code (plist-get payload :code))
-    (benedict-provider-openrouter--stream-cleanup context)
-    (benedict-provider-openrouter--state-clear request-id)
-    (when (functionp (plist-get context :on-error))
-      (funcall (plist-get context :on-error) payload))))
 
 (defun benedict-provider-openrouter--finalize-stream (context)
   "Finalize streaming CONTEXT and deliver completion callback."
@@ -937,6 +708,9 @@ ERROR-BLOCK is the parsed JSON block when available.  MESSAGE is a fallback stri
   "Tear down streaming resources for CONTEXT."
   (when-let ((process (plist-get context :process)))
     (when (process-live-p process)
+      (let ((stderr (process-get process 'benedict-http-stderr)))
+        (when (buffer-live-p stderr)
+          (kill-buffer stderr)))
       (set-process-sentinel process nil)
       (delete-process process)))
   (when-let ((stderr (plist-get context :stderr-buffer)))
@@ -949,42 +723,38 @@ ERROR-BLOCK is the parsed JSON block when available.  MESSAGE is a fallback stri
     (setf (plist-get handle :stream-complete) t)
     (benedict-provider-openrouter--stream-cleanup handle)))
 
-(defun benedict-provider-openrouter--log-http-response (context status headers body)
-  "Emit a structured log for STATUS/HEADERS/BODY tied to CONTEXT."
-  (benedict-provider-log-debug
-   'openrouter :response
-   :request-id (plist-get context :request-id)
-   :attempt (plist-get context :attempt)
-   :status status
-   :elapsed (float-time (time-subtract (current-time)
-                                       (plist-get context :start-time)))
-   :headers headers
-   :body body
-   :body-bytes (and body (string-bytes body))))
+(defun benedict-provider-openrouter--handle-response (body context)
+  "Handle successful HTTP response BODY for CONTEXT."
+  (benedict-provider-openrouter--process-http-response context 200 body))
 
-(defun benedict-provider-openrouter--handle-network-error (status context)
-  "Handle network STATUS (pre-HTTP) using CONTEXT."
-  (let* ((error-data (plist-get status :error))
-         (message (if error-data (format "%s" error-data) "Network error"))
-         (request-id (plist-get context :request-id))
-         (attempt (plist-get context :attempt)))
-    (if (benedict-provider-openrouter--maybe-retry context nil message)
-        (benedict-provider-log
-         'openrouter 'warn :network-error
-         :request-id request-id
-         :attempt attempt
-         :message message
-         :error error-data
-         :retry t)
-      (benedict-provider-log
-       'openrouter 'error :network-error
-       :request-id request-id
-       :attempt attempt
-       :message message
-       :error error-data
-       :retry nil)
-      (benedict-provider-openrouter--emit-error
-       context (list :type 'network :message message :retryable nil)))))
+(defun benedict-provider-openrouter--handle-error (error context)
+  "Handle HTTP/Process ERROR for CONTEXT."
+  (let ((type (plist-get error :type))
+        (code (plist-get error :code))
+        (body (plist-get error :body))
+        (stderr (plist-get error :stderr))
+        (message (plist-get error :message)))
+    (setf (plist-get context :stream-complete) t)
+    (if (and (eq type 'http) (eq code 22))
+        (benedict-provider-openrouter--process-http-response context 0 body)
+      (let* ((request-id (plist-get context :request-id))
+             (attempt (plist-get context :attempt))
+             (err-msg (or message stderr "Unknown error")))
+        (if (benedict-provider-openrouter--maybe-retry context nil err-msg)
+            (benedict-provider-log
+             'openrouter 'warn :network-error
+             :request-id request-id
+             :attempt attempt
+             :message err-msg
+             :retry t)
+          (benedict-provider-log
+           'openrouter 'error :network-error
+           :request-id request-id
+           :attempt attempt
+           :message err-msg
+           :retry nil)
+          (benedict-provider-openrouter--emit-error
+           context (list :type 'network :message err-msg :retryable nil)))))))
 
 (defun benedict-provider-openrouter--process-http-response (context status-code body)
   "Parse BODY returned with STATUS-CODE using CONTEXT."
@@ -1017,7 +787,7 @@ ERROR-BLOCK is the parsed JSON block when available.  MESSAGE is a fallback stri
           context (list :type 'decode :status status-code :message "Failed to parse response"
                         :body body :retryable nil :error err)))))))
 
-(defun benedict-provider-openrouter--handle-success (context status-code parsed body)
+(defun benedict-provider-openrouter--handle-success (context status-code parsed _body)
   "Handle PARSED success payload (STATUS-CODE, BODY) using CONTEXT."
   (let* ((request-id (plist-get context :request-id))
          (state (benedict-provider-openrouter--state-get request-id))
@@ -1458,7 +1228,7 @@ When STREAM is non-nil, include the \"stream\": true flag in the payload."
 
 (defun benedict-provider-openrouter--decode-message (message)
   "Convert MESSAGE alist to Benedict's internal plist."
-  (let ((role (or (benedict-provider-openrouter--aget "role" message)
+  (let* ((role (or (benedict-provider-openrouter--aget "role" message)
                   "assistant"))
         (content (or (benedict-provider-openrouter--aget "content" message)
                      ""))

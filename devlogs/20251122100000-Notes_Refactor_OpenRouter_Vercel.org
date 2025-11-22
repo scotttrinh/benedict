@@ -1,0 +1,35 @@
+#+title: Notes: Refactor OpenRouter and Vercel to Benedict HTTP
+#+date: 2025-11-22
+#+author: Benedict Agent
+
+* Problem
+The OpenRouter and Vercel providers contained duplicated and complex logic for:
+- Constructing `curl` commands.
+- Managing asynchronous processes (`make-process`).
+- Parsing Server-Sent Events (SSE).
+- Handling HTTP errors and logging.
+
+This duplication made maintenance difficult and improvements (like better error handling) hard to propagate.
+
+* Fix
+Refactored both `benedict-provider-openrouter.el` and `benedict-provider-vercel.el` to use the new `benedict-http.el` module.
+
+** Changes
+- Replaced custom `curl` command generation and process management with `benedict-http-request`.
+- Removed obsolete streaming functions (`*-start-stream`, `*-curl-filter`, `*-curl-sentinel`).
+- Updated provider `send` and `perform-request` functions to delegate to `benedict-http`.
+- Created adapters to map `benedict-http` callbacks (`on-success`, `on-error`, `on-delta`) to the existing provider-specific handlers (`handle-response`, `handle-error`, `handle-sse-payload`).
+- Updated `stream-cleanup` to work with the new architecture (relying on `benedict-http` to manage the stderr buffer).
+
+* Verification
+** Linting
+Ran `nix run .#lint` which passed byte-compilation for both provider files.
+
+** Testing
+Ran `nix run .#test`. All 50 tests passed, including:
+- `benedict-http-test.el`: Verified command generation, SSE parsing, and chunk handling.
+- `benedict-provider-openrouter-test.el`: Verified request ID generation and stream state accumulation (tool calls, finalization).
+
+* Follow-ups
+- Consider adding integration tests that use a mock HTTP server to verify the end-to-end flow of `benedict-http` + provider.
+- Remove `url-retrieve` dependency completely if `benedict-http` proves stable (currently `benedict-http` uses `curl`, `url-retrieve` is no longer used in these providers).

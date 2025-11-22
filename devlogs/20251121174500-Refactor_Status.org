@@ -1,0 +1,132 @@
+#+title: Refactor Status: OpenRouter to Benedict HTTP
+#+date: 2025-11-21
+#+author: Benedict Agent
+
+* Current Status
+- [X] `benedict-http.el` implemented and tested.
+- [-] `benedict-provider-openrouter.el` refactoring in progress.
+  - `require` added.
+  - Old manual curl logic deleted (or attempted).
+  - Main dispatch logic needs update.
+
+* Target Implementation
+
+Here is how the core dispatch functions should look using `benedict-http`.
+
+** `benedict-provider-openrouter--send`
+
+This function simplifies significantly as it no longer bifurcates between `start-stream` and `perform-request`.
+
+#+begin_src elisp
+(cl-defun benedict-provider-openrouter--send
+    (_provider request &key on-success on-error on-delta on-complete)
+  "Dispatch REQUEST to OpenRouter via `benedict-http-request`."
+  (let* ((credential (benedict-provider-openrouter--resolve-credential))
+         ;; Determine streaming based on config + request + callbacks
+         (streaming (and benedict-provider-openrouter-enable-streaming
+                         (or (plist-get request :stream)
+                             on-delta)))
+         (payload (benedict-provider-openrouter--encode-payload request streaming))
+         (request-id (or (plist-get request :request-id)
+                         (benedict-provider-openrouter--make-request-id)))
+         (start-time (current-time)))
+
+    ;; 1. Initialize Request State
+    (benedict-provider-openrouter--state-create
+     :id request-id
+     :provider 'openrouter
+     :model (or (plist-get request :model)
+                benedict-provider-openrouter-default-model)
+     :start-time start-time
+     :status (if streaming :streaming :http))
+
+    ;; 2. Create Context
+    (let ((context (list :request request
+                         :payload payload
+                         :credential credential
+                         :request-id request-id
+                         :on-success on-success
+                         :on-error on-error
+                         :on-delta on-delta
+                         :on-complete on-complete
+                         :streaming streaming
+                         :attempt 1
+                         :max-attempts (max 1 (+ 1 (max 0 benedict-provider-openrouter-max-retries)))
+                         :start-time start-time
+                         :provider 'openrouter)))
+      
+      ;; 3. Execute
+      (benedict-provider-openrouter--perform-request context))))
+#+end_src
+
+** `benedict-provider-openrouter--perform-request`
+
+This function delegates to `benedict-http-request` and maps the callbacks.
+
+#+begin_src elisp
+(defun benedict-provider-openrouter--perform-request (context)
+  "Execute the HTTP request described by CONTEXT using `benedict-http`."
+  (let* ((token (plist-get (plist-get context :credential) :token))
+         (headers (benedict-provider-openrouter--build-headers token))
+         (payload (plist-get context :payload))
+         (streaming (plist-get context :streaming))
+         (request-id (plist-get context :request-id)))
+    
+    ;; Update state for streaming visibility immediately
+    (when streaming
+      (benedict-provider-openrouter--state-update
+       request-id
+       :status :streaming
+       :message-chunks nil
+       ;; ... reset other state fields if needed ...
+       :tool-call-partials nil))
+
+    ;; Issue Request
+    (let ((process
+           (benedict-http-request
+            benedict-provider-openrouter-endpoint
+            :method "POST"
+            :headers headers
+            :body payload
+            :stream streaming
+            :request-id request-id
+            :provider 'openrouter
+            
+            ;; Adapter: Success (Non-streaming)
+            ;; benedict-http passes (status headers body)
+            :on-success (lambda (_status _headers body)
+                          (benedict-provider-openrouter--handle-response body context))
+            
+            ;; Adapter: Error (Network/HTTP/Process)
+            ;; benedict-http passes error plist
+            :on-error (lambda (error)
+                        (benedict-provider-openrouter--handle-error error context))
+            
+            ;; Adapter: Streaming Delta
+            ;; benedict-http passes (type data)
+            :on-delta (lambda (type data)
+                        (benedict-provider-openrouter--handle-sse-payload context data type))
+            
+            ;; Adapter: Streaming Complete
+            :on-complete (lambda ()
+                           (benedict-provider-openrouter--stream-handle-done context)))))
+      
+      ;; Store process for cancellation
+      (setf (plist-get context :process) process)
+      context)))
+#+end_src
+
+* Required Handler Updates
+
+To support the adapters above, we need to update (or add) these handler signatures:
+
+1. ~benedict-provider-openrouter--handle-response (body context)~:
+   - Previously took ~(status context)~ from `url-retrieve`.
+   - Needs to accept just the body string (since we check status 200 in the adapter or rely on `benedict-http`'s success callback only firing on success).
+
+2. ~benedict-provider-openrouter--handle-error (error context)~:
+   - Needs to handle the error plist from `benedict-http` (keys: `:type`, `:code`, `:body`, `:stderr`).
+   - Should replace `handle-network-error` logic.
+
+3. ~benedict-provider-openrouter--handle-sse-payload~:
+   - Existing signature ~(context payload event)~ works if we swap arguments in the lambda adapter.

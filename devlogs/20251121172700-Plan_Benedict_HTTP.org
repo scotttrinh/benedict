@@ -1,0 +1,58 @@
+#+title: Plan: Benedict HTTP Module
+#+date: 2025-11-21
+#+author: Benedict Agent
+
+* Context
+We need to improve error handling and reliability for HTTP requests, particularly for streaming (SSE). Currently, `benedict-provider-openrouter.el` and `benedict-provider-vercel.el` duplicate logic for:
+- Building `curl` commands.
+- Managing asynchronous processes (`make-process`).
+- Parsing Server-Sent Events (SSE).
+- Handling errors and logging.
+
+We will introduce a new module `benedict-http.el` to centralize this logic.
+
+* Goals
+- Create `benedict-http.el` as a robust wrapper around `curl`.
+- Treat SSE as a first-class citizen.
+- Instrument requests thoroughly (logging, error propagation).
+- Refactor existing providers to use `benedict-http`.
+
+* Architecture
+** `benedict-http.el`
+This module will provide a high-level API for making HTTP requests via `curl`.
+
+*** Public API
+- `benedict-http-request (url &key method headers body stream on-success on-error on-delta ...)`
+  - returns a request object (struct/plist) that can be cancelled.
+
+*** Internal Features
+- **Command Construction**: Securely build `curl` command lists.
+- **Process Management**: Wrapper around `make-process`.
+- **SSE Parsing**: robust parser for `data:`, `event:`, etc., handling chunked arrival.
+- **Error Handling**:
+  - Capture stderr.
+  - Check exit codes.
+  - Parse JSON error bodies from 4xx/5xx responses.
+- **Logging**: integration with `benedict-log` (or similar logging mechanism used in providers).
+
+* Tasks
+** Phase 1: Implementation of `benedict-http`
+- [X] Define `benedict-http` group and custom variables (e.g. curl path).
+- [X] Implement `benedict-http--make-curl-command`.
+- [X] Implement `benedict-http--process-filter` for SSE and buffering.
+- [X] Implement `benedict-http--process-sentinel` for cleanup and error reporting.
+- [X] Implement `benedict-http-request`.
+
+** Phase 2: Testing
+- [X] Add unit tests for SSE parsing (using `ert`).
+- [X] Add unit tests for command generation.
+- [ ] Add integration tests (mocking `make-process` or using a local echo server if possible, or just unit tests with mocks).
+
+** Phase 3: Refactoring
+- [X] Refactor `benedict-provider-openrouter.el` to use `benedict-http`.
+- [X] Refactor `benedict-provider-vercel.el` to use `benedict-http`.
+- [X] Verify no regression in streaming behavior (verified via unit tests).
+
+* Open Questions
+- Should we deprecate `url-retrieve` entirely in favor of `curl`?
+  - /Assumption/: For this task, we focus on the `curl` path. `url-retrieve` might remain as a fallback in the providers if `curl` is missing, or we might eventually move it into `benedict-http` as a backend option. For now, `benedict-http` = `curl`.

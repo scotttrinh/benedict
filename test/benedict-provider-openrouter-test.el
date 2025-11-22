@@ -114,38 +114,6 @@
       (should (eq (plist-get call :name) 'project-search))
       (should (equal (plist-get call :arguments) (list :query "test"))))))
 
-(ert-deftest benedict-provider-openrouter-ndjson-stream ()
-  "Streamed chunks with NDJSON (multiple JSON objects in one block) are handled correctly."
-  (let* ((context (list :request-id "ndjson-test" :partial nil :stdout-log ""))
-         ;; Chunk 1 ends with a newline, so concatenation with chunk 2 creates a newline-delimited block
-         (chunk1 "data: {\"content\": \"1\"}\n\ndata: {\"content\": \"\\n\"}\n")
-         (chunk2 "data: {\"content\": \"2\"}\n\n")
-         (received nil))
-    
-    ;; Mock json handler to accumulate results
-    (cl-letf (((symbol-function 'benedict-provider-openrouter--stream-handle-json)
-               (lambda (_ctx json)
-                 (push json received))))
-      
-      ;; Chunk 1: ends without \n\n after second data line, so second line waits in partial
-      (benedict-provider-openrouter--stream-handle-data context chunk1)
-      
-      ;; Should process "1"
-      (should (= (length received) 1))
-      (should (string= (plist-get (car received) :content) "1"))
-      
-      ;; "2" (and "\n") is still in partial/waiting
-      (should (equal (plist-get context :partial) "data: {\"content\": \"\\n\"}\n"))
-      
-      ;; Chunk 2: completes the block
-      (benedict-provider-openrouter--stream-handle-data context chunk2)
-      
-      ;; Should process "\n" and "2"
-      (should (= (length received) 3))
-      (let ((items (nreverse received)))
-        (should (string= (plist-get (nth 0 items) :content) "1"))
-        (should (string= (plist-get (nth 1 items) :content) "\n"))
-        (should (string= (plist-get (nth 2 items) :content) "2"))))))
 
 (provide 'benedict-provider-openrouter-test)
 ;;; benedict-provider-openrouter-test.el ends here
