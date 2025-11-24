@@ -174,7 +174,7 @@
                ;; Check placeholder rendering
                (goto-char (point-min))
                ;; New UI format includes status icon and name
-               (should (search-forward "project-search" nil t))))
+               (should (search-forward "Project search" nil t))))
          
          (fset 'benedict--prompt-for-approval original-approval)
          (fset 'benedict-search-project-sync original-search)
