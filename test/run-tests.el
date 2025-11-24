@@ -10,6 +10,7 @@
 
 (require 'package)
 (require 'seq)
+(require 'lgr)
 
 (defconst benedict-test-root
   (expand-file-name ".." (file-name-directory (or load-file-name buffer-file-name)))
@@ -38,6 +39,18 @@
 
 (add-to-list 'load-path benedict-test-root)
 
+;; Logging: surface Benedict messages during batch test runs.
+(setq benedict-logging-threshold lgr-level-info
+      benedict-logging-configure-function #'benedict-logging-configure-default)
+(require 'benedict-logging)
+(benedict-logging-setup)
+(let ((test-logger (lgr-get-logger "run-tests")))
+  (lgr-set-threshold test-logger lgr-level-info)
+  (lgr-reset-appenders test-logger)
+  (let ((appender (lgr-appender)))
+    (lgr-set-threshold appender lgr-level-info)
+    (lgr-add-appender test-logger appender)))
+
 (require 'ert)
 (require 'propcheck)
 
@@ -49,7 +62,10 @@
 
 (let ((selector (if command-line-args-left
                     (pop command-line-args-left)
-                  t)))
+                  t))
+      (lgr (lgr-get-logger "run-tests")))
+  (lgr-info lgr "Running tests"
+             :selector selector)
   (ert-run-tests-batch-and-exit selector))
 
 ;;; run-tests.el ends here
