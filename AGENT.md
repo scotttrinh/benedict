@@ -98,10 +98,15 @@ The `flake.nix` file defines a reproducible testing environment with Emacs and a
 
 #### Running Tests
 
-- **With Nix** (recommended, fully reproducible):
+- **With Nix (always use this):**
   ```sh
   nix run .#test
   ```
+  - You can filter with an ERT selector:
+    ```sh
+    nix run .#test -- benedict-chat-stream-insertion
+    ```
+  - **Do not** call `ert-run-tests-batch(-and-exit)` inside individual test files; the runner in `test/run-tests.el` loads all `*-test.el` files and handles exit status.
 
 - **Without Nix** (manual in a dev shell):
   ```sh

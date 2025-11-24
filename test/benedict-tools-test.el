@@ -52,5 +52,3 @@
                    (content (plist-get result :content)))
               (should (string= content "line 3\nline 4\n")))))
       (delete-directory test-dir t))))
-
-(ert-run-tests-batch-and-exit)
