@@ -4,18 +4,18 @@
 (require 'ert-async)
 (require 'benedict-chat)
 (require 'benedict-provider-fake)
+(require 'benedict-test-helpers)
 
 (ert-deftest-async benedict-chat-integration-flow (done)
   "Test full chat flow from user prompt to assistant response."
-  (let ((benedict-provider 'fake)
-        (benedict-chat-buffer-name "*Benedict Test Chat*"))
+  (benedict-test-with-bindings done
+      ((benedict-provider 'fake)
+       (benedict-chat-buffer-name "*Benedict Test Chat*")
+       (benedict-provider-fake-latency-seconds 0.01))
     (with-current-buffer (get-buffer-create benedict-chat-buffer-name)
       (benedict-chat-mode)
       (benedict-chat--init-buffer)
-      
-      ;; Configure fake provider to respond quickly
-      (let ((benedict-provider-fake-latency-seconds 0.01)
-            (target-buffer (current-buffer))
+      (let ((target-buffer (current-buffer))
             (chat-buffer-name benedict-chat-buffer-name))
         (benedict-chat-send-prompt "hello integration")
         

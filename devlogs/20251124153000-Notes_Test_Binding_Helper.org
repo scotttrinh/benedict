@@ -1,0 +1,24 @@
+#+title: Notes: Test Binding Helper for Async ERT
+#+date: 2025-11-24 15:30:00
+
+* Context
+- Async chat tool-call test was brittle: `let`-bound globals (e.g., `benedict-provider`) unwound before `run-at-time` fired, so follow-up dispatches reverted to the default provider.
+- We fixed runtime drift by pinning the provider, but wanted a reusable, test-only way to inject bindings without touching implementation code.
+
+* Changes
+- Added `benedict-test-with-bindings` (test/benedict-test-helpers.el):
+  - Binds vars and symbol-functions for the duration of an async test, restores them via a wrapped `done`.
+  - Supports both `(var value)` and `((symbol-function fn) new-fn)` entries.
+- Exposed test helpers by adding `test/` to `load-path` in `test/run-tests.el`.
+- Updated `benedict-chat-tool-call-flow` to use the helper for provider, fake script, approval stub, and project-search stub.
+- Tweaked tool header rendering to prepend the canonical tool id when a custom header is present so assertions can reliably find `project-search`.
+
+* Alternatives Considered
+- Rely on buffer-local provider pinning alone: works but doesn’t generalize to other globals and still leaves tests reliant on runtime behavior.
+- Carry provider forward in dispatch request instead of buffer override: equivalent outcome but still requires each test to manage globals manually.
+- Per-test `let` with `unwind-protect`: fixes one-off cases but repeats boilerplate and is easy to forget in async callbacks.
+
+* Gotchas / Notes
+- For `(symbol-function fn)` bindings, pass the bare symbol (no inner quote) so the helper can call `symbol-function`/`fset` correctly.
+- Cleanup runs when `done` is invoked; if a test times out without calling `done`, bindings would persist—add a fallback timer if we hit that scenario.
+- Adding `test/` to `load-path` keeps helpers discoverable without changing production code paths.

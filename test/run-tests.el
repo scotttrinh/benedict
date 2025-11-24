@@ -57,6 +57,9 @@
 (defconst benedict-test-directory
   (expand-file-name "test" benedict-test-root))
 
+;; Make test helpers available to test files via `require'.
+(add-to-list 'load-path benedict-test-directory)
+
 (dolist (file (directory-files benedict-test-directory t "-test\\.el\\'"))
   (load file nil nil t))
 

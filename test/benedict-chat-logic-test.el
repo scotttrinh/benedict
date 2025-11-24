@@ -4,6 +4,7 @@
 (require 'ert-async)
 (require 'benedict-chat)
 (require 'benedict-provider-fake)
+(require 'benedict-test-helpers)
 
 (defvar benedict-provider 'fake)
 
@@ -35,10 +36,11 @@
 
 (ert-deftest-async benedict-chat-compose-sends-context (done)
   "Compose buffers include context slices in outgoing messages."
-  (let ((benedict-provider 'fake)
-        (benedict-provider-fake-latency-seconds 0.01)
-        (benedict-provider-fake-script (list (list :type 'success :delay 0.01)))
-        (benedict-chat-buffer-name " *Benedict Compose Flow*"))
+  (benedict-test-with-bindings done
+      ((benedict-provider 'fake)
+       (benedict-provider-fake-latency-seconds 0.01)
+       (benedict-provider-fake-script (list (list :type 'success :delay 0.01)))
+       (benedict-chat-buffer-name " *Benedict Compose Flow*"))
     (let ((source (generate-new-buffer " *Benedict Compose Source*")))
       (with-current-buffer source
         (insert "Compose region text.")
@@ -92,13 +94,14 @@
 
 (ert-deftest-async benedict-chat-compose-model-override-clears (done)
   "Compose model overrides apply to dispatch and clear after send."
-  (let ((benedict-provider 'fake)
-        (benedict-chat-buffer-name " *Benedict Compose Override*")
-        (benedict-chat-profiles '((override :label "Override"
-                                            :provider fake
-                                            :model "profile/model")))
-        (benedict-provider-fake-latency-seconds 0.01)
-        (benedict-provider-fake-script (list (list :type 'success :delay 0.01))))
+  (benedict-test-with-bindings done
+      ((benedict-provider 'fake)
+       (benedict-chat-buffer-name " *Benedict Compose Override*")
+       (benedict-chat-profiles '((override :label "Override"
+                                           :provider fake
+                                           :model "profile/model")))
+       (benedict-provider-fake-latency-seconds 0.01)
+       (benedict-provider-fake-script (list (list :type 'success :delay 0.01))))
     (let ((chat (generate-new-buffer benedict-chat-buffer-name)))
       (with-current-buffer chat
         (benedict-chat-mode)
@@ -128,59 +131,60 @@
                 (should (equal (plist-get request :model) "compose/model"))
                 (should-not benedict-chat--compose-model-override)))
           (when (buffer-live-p chat)
-            (kill-buffer chat)))
-  (funcall done)))))
+            (kill-buffer chat))))
+      (funcall done))))
 
 (ert-deftest-async benedict-chat-tool-call-flow (done)
   "Tool calls trigger approval, execution, and history update."
-  (let* ((benedict-provider 'fake)
-         (benedict-provider-fake-latency-seconds 0.01)
-         (benedict-provider-fake-script
-          (list (list :type 'success
-                      :content ""
-                      :tool-calls (list (list :id "call-123"
-                                              :name 'project-search
-                                              :arguments '(:query "needle"))))))
-         (buffer (generate-new-buffer " *Benedict Chat Tool Logic*"))
-         (original-approval (symbol-function 'benedict--prompt-for-approval))
-         (original-search (symbol-function 'benedict-search-project-sync))
-         (fake-result '(:query "needle"
-                        :root "/tmp/project"
-                        :limit 5
-                        :matches ((:file "README.org")))))
-    (fset 'benedict--prompt-for-approval (lambda (&rest _args) t))
-    (fset 'benedict-search-project-sync (lambda (&rest _args) fake-result))
-    
-    (with-current-buffer buffer
-      (benedict-chat-mode)
-      (benedict-chat--init-buffer)
-      (benedict-chat--send-text "Please run project search."))
+  (benedict-test-with-bindings done
+      ((benedict-provider 'fake)
+       (benedict-provider-fake-latency-seconds 0.01)
+       (benedict-provider-fake-script
+        (list (list :type 'success
+                    :content ""
+                    :tool-calls (list (list :id "call-123"
+                                            :name 'project-search
+                                            :arguments '(:query "needle"))))))
+       ((symbol-function benedict--prompt-for-approval) (lambda (&rest _args) t))
+       ((symbol-function benedict-search-project-sync)
+        (lambda (&rest _args)
+          '(:query "needle"
+            :root "/tmp/project"
+            :limit 5
+            :matches ((:file "README.org"))))))
+    (let ((buffer (generate-new-buffer " *Benedict Chat Tool Logic*")))
+      (with-current-buffer buffer
+        (benedict-chat-mode)
+        (benedict-chat--init-buffer)
+        (benedict-chat--send-text "Please run project search."))
       
-    (run-at-time
-     0.4 nil
-     (lambda ()
-       (unwind-protect
-           (with-current-buffer buffer
-             ;; Check history
-             (let* ((tool-message
-                     (cl-find-if (lambda (message)
-                                   (eq (plist-get message :role) 'tool))
-                                 benedict-chat--messages)))
-               (should tool-message)
-               (should (equal (plist-get tool-message :tool-call-id) "call-123"))
-               ;; We check that history recorded the result, ignoring exact string formatting
-               (should (string-match-p "matches" (plist-get tool-message :content)))
-               
-               ;; Check placeholder rendering
-               (goto-char (point-min))
-               ;; New UI format includes status icon and name
-               (should (search-forward "Project search" nil t))))
-         
-         (fset 'benedict--prompt-for-approval original-approval)
-         (fset 'benedict-search-project-sync original-search)
-         (when (buffer-live-p buffer)
-           (kill-buffer buffer)))
-         (funcall done)))))
+      (run-at-time
+       0.4 nil
+       (lambda ()
+         (let (err)
+           (unwind-protect
+               (condition-case e
+                   (with-current-buffer buffer
+                     ;; Check history
+                     (let* ((tool-message
+                             (cl-find-if (lambda (message)
+                                           (eq (plist-get message :role) 'tool))
+                                         benedict-chat--messages)))
+                       (should tool-message)
+                       (should (equal (plist-get tool-message :tool-call-id) "call-123"))
+                       ;; We check that history recorded the result, ignoring exact string formatting
+                       (should (string-match-p "matches" (plist-get tool-message :content)))
+
+                       ;; Check placeholder rendering
+                       (goto-char (point-min))
+                       (let ((case-fold-search t))
+                         (should (re-search-forward "Project search" nil t)))))
+                 (error (setq err e)))
+             (when (buffer-live-p buffer)
+               (kill-buffer buffer)))
+           (if err
+               (funcall done (error-message-string err))
+             (funcall done))))))))
 
 (ert-deftest benedict-chat-resolves-provider-override ()
   "Provider override takes precedence in resolution chain."
@@ -223,8 +227,9 @@
 
 (ert-deftest-async benedict-chat-choose-provider-updates-state (done)
   "Choosing a provider updates buffer state and telemetry."
-  (let ((benedict-provider 'fake)
-        (benedict-chat-buffer-name " *Benedict Provider Choice*"))
+  (benedict-test-with-bindings done
+      ((benedict-provider 'fake)
+       (benedict-chat-buffer-name " *Benedict Provider Choice*"))
     (let ((chat (generate-new-buffer benedict-chat-buffer-name)))
       (with-current-buffer chat
         (benedict-chat-mode)
