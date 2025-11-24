@@ -240,10 +240,12 @@ Returns a handle plist with :request, :entry, :provider, and :timers."
          (final-thinking (benedict-provider-fake--finalize-thinking thinking-details))
          (request-id (or (plist-get request :request-id)
                          (benedict-provider-fake--next-request-id)))
-         (timers nil))
+         (timers nil)
+         (lgr (lgr-get-logger "benedict.fake")))
     
-    (let ((lgr (lgr-get-logger "benedict.fake")))
-      (lgr-debug lgr "Fake request: model=%s (request-id=%s)" model request-id))
+    (lgr-debug lgr "Fake request"
+               :model model
+               :request-id request-id)
     
     ;; Helper to schedule callbacks and track timers
     (cl-labels
@@ -279,8 +281,9 @@ Returns a handle plist with :request, :entry, :provider, and :timers."
                       (chunk-idx chunk-count))
                   (register last-chunk-time
                             (lambda ()
-                              (let ((lgr (lgr-get-logger "benedict.fake")))
-                                (lgr-trace lgr "Delta: chunk %d (request-id=%s)" chunk-idx request-id))
+                              (lgr-trace lgr "Delta chunk"
+                                         :chunk-index chunk-idx
+                                         :request-id request-id)
                               (when (functionp on-delta)
                                 (funcall on-delta
                                          :message-id request-id
@@ -295,8 +298,8 @@ Returns a handle plist with :request, :entry, :provider, and :timers."
                   (let* ((chunk-text (or chunk "")))
                     (register last-thinking-time
                               (lambda ()
-                                (let ((lgr (lgr-get-logger "benedict.fake")))
-                                  (lgr-trace lgr "Thinking delta (request-id=%s)" request-id))
+                                (lgr-trace lgr "Thinking delta"
+                                           :request-id request-id)
                                 (when (functionp on-delta)
                                   (funcall on-delta
                                            :message-id request-id
@@ -312,8 +315,9 @@ Returns a handle plist with :request, :entry, :provider, and :timers."
                         (lambda ()
                           (let ((payload (benedict-provider-fake--success-payload
                                           request entry start-time delay final-thinking)))
-                            (let ((lgr (lgr-get-logger "benedict.fake")))
-                              (lgr-info lgr "Completion (request-id=%s)" request-id))
+                            (lgr-info lgr "Completion"
+                                      :request-id request-id
+                                      :latency (plist-get payload :latency))
                             (if (functionp on-complete)
                                 (funcall on-complete payload)
                               (when (functionp on-success)

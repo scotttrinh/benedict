@@ -73,11 +73,14 @@ Returns the process object."
                         :provider provider
                         :partial ""
                         :stdout-log ""
-                        :stderr-log "")))
+                        :stderr-log ""))
+         (lgr (lgr-get-logger "benedict.http")))
     
-    (let ((lgr (lgr-get-logger "benedict.http")))
-      (lgr-debug lgr "HTTP start: %s %s (stream=%s, request-id=%s)"
-                 method url stream request-id))
+    (lgr-debug lgr "HTTP start"
+               :method method
+               :url url
+               :stream stream
+               :request-id request-id)
 
     (let ((command (benedict-http--make-command url method headers body stream))
           (stderr-buffer (generate-new-buffer (format " *benedict-http-stderr-%s*" request-id))))
@@ -98,8 +101,9 @@ Returns the process object."
             (process-put process 'benedict-http-command command)
             process)
         (error
-         (let ((lgr (lgr-get-logger "benedict.http")))
-           (lgr-error lgr "HTTP start failed: %s (request-id=%s)" (error-message-string err) request-id))
+         (lgr-error lgr "HTTP start failed"
+                    :request-id request-id
+                    :error (error-message-string err))
          (when (buffer-live-p stderr-buffer)
            (kill-buffer stderr-buffer))
          (when on-error
@@ -184,8 +188,10 @@ Returns the process object."
           (on-delta (plist-get context :on-delta)))
       (when (and on-delta (> (length payload) 0))
         (let ((lgr (lgr-get-logger "benedict.http")))
-          (lgr-trace lgr "Stream event: %s (payload-len=%d, request-id=%s)"
-                     event-type (length payload) (plist-get context :request-id)))
+          (lgr-trace lgr "Stream event"
+                     :event-type event-type
+                     :payload-length (length payload)
+                     :request-id (plist-get context :request-id)))
         (funcall on-delta event-type payload)))))
 
 (defun benedict-http--process-sentinel (process _event)
@@ -202,7 +208,9 @@ Returns the process object."
           (kill-buffer stderr-buf))
         
         (let ((lgr (lgr-get-logger "benedict.http")))
-          (lgr-debug lgr "HTTP exit: exit-code=%d (request-id=%s)" exit-code (plist-get context :request-id)))
+          (lgr-debug lgr "HTTP exit"
+                     :exit-code exit-code
+                     :request-id (plist-get context :request-id)))
 
         (if (zerop exit-code)
             (benedict-http--finish-success context)
@@ -229,21 +237,24 @@ Returns the process object."
   "Handle error completion."
   (let ((on-error (plist-get context :on-error))
         (provider (plist-get context :provider))
-        (request-id (plist-get context :request-id)))
+        (request-id (plist-get context :request-id))
+        (lgr (lgr-get-logger "benedict.http")))
     
     ;; Check if it's an HTTP error (curl code 22)
     (if (eq code 22)
         (let ((body (or (plist-get context :partial) "")))
-           (let ((lgr (lgr-get-logger "benedict.http")))
-             (lgr-warn lgr "HTTP error response: code=%d (request-id=%s)" code request-id))
-           (when on-error
-             ;; Try to parse body if JSON? 
-             ;; For now just pass raw body and let caller handle it.
-             (funcall on-error (list :type 'http :code code :body body :stderr stderr))))
+          (lgr-warn lgr "HTTP error response"
+                    :code code
+                    :request-id request-id)
+          (when on-error
+            ;; Try to parse body if JSON? 
+            ;; For now just pass raw body and let caller handle it.
+            (funcall on-error (list :type 'http :code code :body body :stderr stderr))))
       
       ;; Other network/process error
-      (let ((lgr (lgr-get-logger "benedict.http")))
-        (lgr-error lgr "Curl error: code=%d (request-id=%s)" code request-id))
+      (lgr-error lgr "Curl error"
+                 :code code
+                 :request-id request-id)
       (when on-error
         (funcall on-error (list :type 'process :code code :stderr stderr))))))
 
