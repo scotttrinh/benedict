@@ -8,9 +8,13 @@
       url = "github:Wilfred/propcheck";
       flake = false;
     };
+    flywire = {
+      url = "github:scotttrinh/flywire";
+      flake = false;
+    };
   };
 
-  outputs = { self, nixpkgs, flake-utils, propcheck }:
+  outputs = { self, nixpkgs, flake-utils, propcheck, flywire }:
     flake-utils.lib.eachDefaultSystem (system:
       let
         pkgs = nixpkgs.legacyPackages.${system};
@@ -24,6 +28,16 @@
           echo "(define-package \"propcheck\" \"0.1\" \"Property based testing\" '((dash \"2.12\")))" > $out/share/emacs/site-lisp/elpa/propcheck-0.1/propcheck-pkg.el
         '';
 
+        # Build flywire package from GitHub source
+        flywirePkg = pkgs.runCommand "flywire-0.1" {
+          src = flywire;
+        } ''
+          mkdir -p $out/share/emacs/site-lisp/elpa/flywire-0.1
+          cp $src/*.el $out/share/emacs/site-lisp/elpa/flywire-0.1/
+          echo "(define-package \"flywire\" \"0.1\" \"Emacs driver for agents\" '())" \
+            > $out/share/emacs/site-lisp/elpa/flywire-0.1/flywire-pkg.el
+        '';
+
         # Custom Emacs with all test dependencies pre-installed
         myEmacs = (pkgs.emacsPackagesFor pkgs.emacs).emacsWithPackages (epkgs: with epkgs; [
           ert-async
@@ -32,7 +46,7 @@
           lgr
           package-lint
           markdown-mode
-        ] ++ [ propcheckPkg ]);
+        ] ++ [ propcheckPkg flywirePkg ]);
 
       in
       {

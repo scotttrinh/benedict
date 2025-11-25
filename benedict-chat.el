@@ -15,6 +15,7 @@
 (require 'benedict)
 (require 'benedict-context)
 (require 'benedict-tools)
+(require 'benedict-flywire)
 (require 'benedict-chat-mode)
 (require 'benedict-chat-render)
 (require 'benedict-chat-stream)
@@ -208,6 +209,12 @@ Set to nil to disable token limits."
   :type '(choice (const :tag "Disabled" nil) integer)
   :group 'benedict)
 
+(defcustom benedict-chat-use-agent-frame nil
+  "When non-nil, use a dedicated agent frame for tool execution.
+The agent frame provides isolation for flywire-backed tools."
+  :type 'boolean
+  :group 'benedict)
+
 (defconst benedict-chat--block-divider-line
   (concat (make-string 60 ?-) "\n")
   "Divider line inserted before and after block sections.")
@@ -281,6 +288,12 @@ When non-nil, this symbol takes precedence over profile :provider and global ben
 
 (defvar-local benedict-chat-profile nil
   "Active profile symbol for the current chat, controls prompt preamble.")
+
+(defvar-local benedict-chat--flywire-session nil
+  "Active flywire session for agent tool execution, or nil if inactive.")
+
+(defvar-local benedict-chat--flywire-event-unsubscribe nil
+  "Function to unsubscribe from flywire session events.")
 
 (defconst benedict-chat--compose-separator "----\n"
   "Separator line between compose header and body.")
@@ -368,6 +381,53 @@ Prompts the user to authorize extensions when limits are reached."
         (when (benedict-chat--check-loop-constraints)
           (setq benedict-chat--loop-turn-count (1+ benedict-chat--loop-turn-count))
           (benedict-chat--start-dispatch (benedict-chat--build-request)))))))
+
+;; -------------------------------------------------------------------
+;; Flywire Session Management
+
+(defun benedict-chat--flywire-handle-event (event)
+  "Handle EVENT from the flywire session.
+This function is called for each event emitted by the active session."
+  (let ((type (plist-get event :type)))
+    (pcase type
+      (:minibuffer-open
+       (let ((prompt (plist-get event :prompt)))
+         (when prompt
+           (message "Benedict agent: %s" (string-trim prompt)))))
+      (:idle
+       nil))))
+
+(defun benedict-chat--flywire-ensure-session ()
+  "Ensure a flywire session exists for the current chat buffer.
+Creates a new session if needed and `benedict-chat-use-agent-frame' is non-nil.
+Returns the session or nil if agent frame is disabled."
+  (when benedict-chat-use-agent-frame
+    (unless benedict-chat--flywire-session
+      (let ((session (benedict-flywire-session-create)))
+        (setq benedict-chat--flywire-session session)
+        (setq benedict-chat--flywire-event-unsubscribe
+              (benedict-flywire-session-on-event
+               session
+               #'benedict-chat--flywire-handle-event))
+        (benedict-flywire-session-enable-events session)))
+    benedict-chat--flywire-session))
+
+(defun benedict-chat--flywire-teardown-session ()
+  "Tear down the flywire session for the current chat buffer."
+  (when benedict-chat--flywire-event-unsubscribe
+    (funcall benedict-chat--flywire-event-unsubscribe)
+    (setq benedict-chat--flywire-event-unsubscribe nil))
+  (when benedict-chat--flywire-session
+    (benedict-flywire-session-teardown benedict-chat--flywire-session)
+    (setq benedict-chat--flywire-session nil)))
+
+(defun benedict-chat-flywire-session ()
+  "Return the active flywire session for the current chat, or nil."
+  benedict-chat--flywire-session)
+
+(defun benedict-chat-flywire-active-p ()
+  "Return non-nil if a flywire session is active for this chat."
+  (and benedict-chat--flywire-session t))
 
 ;; -------------------------------------------------------------------
 ;; Profiles and project helpers
@@ -860,6 +920,11 @@ When CLICKABLE is non-nil, attach button properties that run
                     'local-map benedict-chat--model-button-map)
       label)))
 
+(defun benedict-chat--status-agent-indicator ()
+  "Return an indicator if a flywire agent session is active."
+  (when (benedict-chat-flywire-active-p)
+    (propertize "🤖" 'help-echo "Agent frame active")))
+
 (defun benedict-chat--status-string (&optional rich)
   "Return the formatted status string for the current buffer.
 When RICH is non-nil, include header-friendly hints."
@@ -874,6 +939,7 @@ When RICH is non-nil, include header-friendly hints."
          (provider (benedict-chat--status-provider-label rich))
          (usage-str (benedict-chat--status-usage-string usage))
          (elapsed-str (when elapsed (format "%.0fs" elapsed)))
+         (agent-indicator (benedict-chat--status-agent-indicator))
          (hint (and rich active "ESC to cancel")))
     (string-join
      (delq nil
@@ -881,6 +947,7 @@ When RICH is non-nil, include header-friendly hints."
                  provider
                  elapsed-str
                  usage-str
+                 agent-indicator
                  hint))
      " · ")))
 
@@ -2749,12 +2816,15 @@ When INCLUDE-ERRORS is nil, skip entries flagged with :error metadata."
   (setq-local benedict-chat--loop-start-time nil)
   (setq-local benedict-chat--loop-turn-count 0)
   (setq-local benedict-chat--loop-canceled nil)
+  (setq-local benedict-chat--flywire-session nil)
+  (setq-local benedict-chat--flywire-event-unsubscribe nil)
   (setq-local benedict-chat-profile (or benedict-chat-profile
                                         (benedict-chat--default-profile)))
   (setq-local header-line-format '(:eval (benedict-chat--header-line-status)))
   (visual-line-mode 1)
   (benedict-chat--telemetry-reset)
   (add-hook 'kill-buffer-hook #'benedict-chat--status-stop-timer nil t)
+  (add-hook 'kill-buffer-hook #'benedict-chat--flywire-teardown-session nil t)
   (add-hook 'kill-buffer-hook
             (lambda ()
               (when (buffer-live-p benedict-chat--compose-buffer)

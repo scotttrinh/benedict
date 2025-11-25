@@ -18,6 +18,22 @@
         "type": "github"
       }
     },
+    "flywire": {
+      "flake": false,
+      "locked": {
+        "lastModified": 1764086528,
+        "narHash": "sha256-LzWTN31jFPMBDAcHnAgAws6MmKcbMmJk6wWGgCgqAds=",
+        "owner": "scotttrinh",
+        "repo": "flywire",
+        "rev": "6c18734c742cfaa276f288e9737ae685cab89e35",
+        "type": "github"
+      },
+      "original": {
+        "owner": "scotttrinh",
+        "repo": "flywire",
+        "type": "github"
+      }
+    },
     "nixpkgs": {
       "locked": {
         "lastModified": 1763421233,
@@ -53,6 +69,7 @@
     "root": {
       "inputs": {
         "flake-utils": "flake-utils",
+        "flywire": "flywire",
         "nixpkgs": "nixpkgs",
         "propcheck": "propcheck"
       }

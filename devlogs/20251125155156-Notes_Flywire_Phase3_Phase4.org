@@ -1,0 +1,111 @@
+#+TITLE: Notes: Flywire Integration Phases 3 & 4
+#+AUTHOR: Benedict
+#+DATE: <2025-11-25 Mon>
+
+* Summary
+
+Implemented Phase 3 (Safety Policy) and Phase 4 (Chat Integration) from the
+Flywire Integration plan ([[file:20251125131220-Plan_Flywire_Integration.org]]).
+
+* Phase 3: Safety Policy
+
+** Implementation
+
+Added to =benedict-flywire.el=:
+
+- =benedict-flywire-allowed-commands= customization variable with a strict
+  allowlist of safe commands (navigation, basic editing, file operations, etc.)
+
+- =benedict-flywire-command-allowed-p= predicate that checks if a command is
+  allowed, with support for per-session custom policies
+
+- =benedict-flywire-session-set-policy= to set/clear custom policies per session
+
+- =benedict-flywire--session-policies= hash table for per-session policy storage
+
+- Updated =benedict-flywire-session-create= to accept =:safety-policy= keyword
+  argument (breaking change: now uses keyword args instead of positional)
+
+- Session teardown now cleans up policy hash entries
+
+** Tests Added
+
+5 new tests in =test/benedict-flywire-test.el=:
+
+- =benedict-flywire-policy-allowed-default= — verifies default allowlist works
+- =benedict-flywire-policy-denied-default= — verifies disallowed commands blocked
+- =benedict-flywire-policy-session-custom= — custom per-session policy
+- =benedict-flywire-policy-session-set= — set/clear policy after creation
+- =benedict-flywire-policy-teardown-cleanup= — policy cleaned up on teardown
+
+** Breaking Change
+
+=benedict-flywire-session-create= signature changed from:
+
+#+begin_src elisp
+(benedict-flywire-session-create &optional headless)
+#+end_src
+
+To:
+
+#+begin_src elisp
+(benedict-flywire-session-create &key headless safety-policy)
+#+end_src
+
+All existing tests updated to use =:headless t= instead of just =t=.
+
+* Phase 4: Chat Integration
+
+** Implementation
+
+Added to =benedict-chat.el=:
+
+- =benedict-chat-use-agent-frame= customization (default nil) to enable agent
+  frame feature
+
+- =benedict-chat--flywire-session= buffer-local variable for session storage
+
+- =benedict-chat--flywire-event-unsubscribe= for cleanup
+
+- =benedict-chat--flywire-handle-event= to handle events from flywire session
+  (currently displays minibuffer prompts via =message=)
+
+- =benedict-chat--flywire-ensure-session= to lazily create session when needed
+
+- =benedict-chat--flywire-teardown-session= to clean up on buffer kill
+
+- =benedict-chat-flywire-session= and =benedict-chat-flywire-active-p= public
+  accessors
+
+- =benedict-chat--status-agent-indicator= adds robot emoji to status when
+  agent session is active
+
+- Updated =benedict-chat--init-buffer= to initialize flywire variables and
+  register teardown hook
+
+** Usage
+
+To enable agent frame:
+
+#+begin_src elisp
+(setq benedict-chat-use-agent-frame t)
+#+end_src
+
+When enabled:
+- A flywire session is created when the chat enters an agent loop
+- Events from the agent frame are forwarded to the chat buffer
+- Robot emoji (🤖) appears in the header line when session is active
+- Session is torn down when the chat buffer is killed
+
+* Verification
+
+- All 113 tests pass (including 24 flywire tests, 5 of which are new)
+- Lint errors reduced (docstring width issue fixed)
+- Remaining lint errors are pre-existing and unrelated to these changes
+
+* Follow-ups
+
+- [ ] Consider making =benedict-chat-use-agent-frame= default to =t= once stable
+- [ ] Add more sophisticated event handling (idle snapshots, etc.)
+- [ ] Consider adding =M-x benedict-chat-toggle-agent-frame= command
+- [ ] Document the feature in README.org

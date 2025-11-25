@@ -650,5 +650,83 @@ If PATH is provided, search only within that directory."
  :approval 'auto
  :doc "Find files matching a glob pattern.")
 
+;;; Line-based file update tool
+
+(cl-defun benedict--tool-update-file (&key path start-line end-line content)
+  "Replace lines START-LINE to END-LINE in PATH with CONTENT.
+START-LINE and END-LINE are 1-based (inclusive).
+If END-LINE is nil, replaces only START-LINE."
+  (let* ((root (or (benedict--search-project-root)
+                   (signal 'benedict-error "Project root unavailable")))
+         (target (benedict--resolve-target-file path root))
+         (relative (file-relative-name target root))
+         (start (if (and start-line (> start-line 0)) start-line 1))
+         (end (or end-line start)))
+    (when (< end start)
+      (signal 'benedict-error "end-line cannot be less than start-line"))
+    (with-current-buffer (find-file-noselect target)
+      (goto-char (point-min))
+      (forward-line (1- start))
+      (let ((beg (point)))
+        (forward-line (1+ (- end start)))
+        (delete-region beg (point))
+        (goto-char beg)
+        (insert (or content ""))
+        (unless (or (null content)
+                    (string-empty-p content)
+                    (string-suffix-p "\n" content))
+          (insert "\n"))
+        (save-buffer)
+        (let ((line-count (length (split-string (or content "") "\n" t))))
+          (list :path relative
+                :content (format "Updated lines %d-%d in %s" start end relative)
+                :start-line start
+                :end-line end
+                :lines-written line-count
+                :ui (list :header (format "Updated file — %s" relative)
+                          :state 'success
+                          :body (format "Replaced lines %d-%d with %d lines"
+                                        start end line-count))))))))
+
+(benedict-tools-register
+ :id 'update-file
+ :fn #'benedict--tool-update-file
+ :schema '(:path string :start-line integer :end-line integer :content string)
+ :approval 'confirm
+ :doc "Replace a range of lines in a file with new content.")
+
+;;; Elisp execution tool
+
+(cl-defun benedict--tool-exec-elisp (&key code)
+  "Execute elisp CODE and return the result.
+This is a high-risk tool that evaluates arbitrary elisp code."
+  (unless (and (stringp code) (not (string-empty-p (string-trim code))))
+    (signal 'benedict-error "exec-elisp requires a non-empty :code"))
+  (condition-case err
+      (let* ((form (read code))
+             (result (eval form t))
+             (result-str (prin1-to-string result)))
+        (list :success t
+              :result result-str
+              :content result-str
+              :ui (list :header "Elisp execution"
+                        :state 'success
+                        :body (format "```elisp\n%s\n```\n=> %s" code result-str))))
+    (error
+     (let ((err-str (format "%S" err)))
+       (list :success nil
+             :error err-str
+             :content err-str
+             :ui (list :header "Elisp execution"
+                       :state 'error
+                       :body (format "```elisp\n%s\n```\nError: %s" code err-str)))))))
+
+(benedict-tools-register
+ :id 'exec-elisp
+ :fn #'benedict--tool-exec-elisp
+ :schema '(:code string)
+ :approval 'always
+ :doc "Execute arbitrary elisp code and return the result.")
+
 (provide 'benedict-tools)
 ;;; benedict-tools.el ends here
