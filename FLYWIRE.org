@@ -1,0 +1,516 @@
+* Agentic integration guide for flywire
+
+This guide explains how to build an agentic Emacs driver *on top of* flywire.
+The goal is that you can hand this file to an agent that owns a separate
+codebase (the "agent frontend") and it can:
+
+- Depend on flywire as a library.
+- Create sessions and environments.
+- Implement a **dedicated-frame** driver that keeps agent activity off the
+  user’s main frame.
+- Implement a **headless** driver for tests/CI.
+- Wire events, snapshots, safety policy, and actions into its own control loop.
+
+Flywire intentionally does **not** ship these higher-level environments; they
+live in your agent package. This guide shows how to assemble them.
+
+Throughout, we assume you are comfortable writing Elisp in a separate package
+that `(require 'flywire)` and adds its own symbols under a distinct prefix
+(e.g., `my-agent-*`).
+
+** Core concepts recap (as seen by an agent)
+
+- A **session** (`flywire-session`) is a handle for one agent driver instance.
+  You create one per agent run or per conversation.
+- A **session env** (`flywire-session-env`) decides *where* the session runs:
+  which frame, which windows, how events are wired, and how snapshots are taken.
+- **Actions** are string-named tools (`"type_text"`, `"run_command"`, etc.)
+  executed against the current buffer/window, optionally using context from
+  snapshots (e.g., window ids).
+- **Snapshots** are plists describing editor state; profiles control how much
+  data you get and hooks let you extend them.
+- **Events** are plists emitted by async execution and env wiring
+  (`:step-start`, `:step-end`, `:minibuffer-open`, `:idle`, …).
+
+Your agent package:
+
+- Defines one or more environments.
+- Creates sessions using those envs.
+- Feeds JSON-like steps to `flywire-session-exec` / `flywire-session-start-async`.
+- Consumes structured results and events to drive its loop.
+
+** Anatomy of a session environment
+
+`flywire-session-env` is a struct defined in `flywire-session.el`:
+
+#+begin_src elisp
+(cl-defstruct flywire-session-env
+  name
+  (run #'funcall)
+  (snapshot #'flywire-snapshot-get-snapshot)
+  (enable-events #'ignore)
+  (teardown #'ignore))
+#+end_src
+
+You never mutate this struct directly; instead, you create an instance and pass
+it when constructing a session:
+
+#+begin_src elisp
+(let* ((env (my-agent-env-create))
+       (session (flywire-session-create :env env :snapshot-profile 'default)))
+  ...)
+#+end_src
+
+Semantics for each slot:
+
+- `run`:
+  - A function `(lambda (thunk))` that executes THUNK in the environment’s
+    context (frame, window layout, bindings, etc.).
+  - Flywire calls this for *all* sync and async execution, as well as
+    environment setup/teardown.
+- `snapshot`:
+  - `(lambda (&optional profile))` that returns a snapshot plist.
+  - Typically wraps `flywire-snapshot-get-snapshot` inside your frame/window.
+- `enable-events`:
+  - `(lambda (session opts))` used when you call
+    `(flywire-session-enable-events session ...)`.
+  - Responsible for installing minibuffer/idle hooks, timers, etc. scoped to
+    your env.
+- `teardown`:
+  - `(lambda (session))` called by your code when the session is finished.
+  - Used to delete frames, cancel timers, and clean up resources.
+
+The default env (`flywire-session-env-default`) simply runs in the current
+frame and wires global minibuffer/idle events. For agentic use, you generally
+define your own env instead of relying on the default.
+
+** Dedicated-frame environment (agent frame)
+
+*** Goals
+
+- Run all agent actions in a dedicated frame so the user can keep working in
+  their own frame.
+- Optionally stay invisible (no input focus changes) while still rendering
+  windows/buffers for debugging.
+- Scope minibuffer and idle events to that frame.
+- Provide clean teardown when the session ends.
+
+*** Frame lifecycle
+
+Your agent package owns the frame. A simple creator:
+
+#+begin_src elisp
+(defun my-agent--make-frame ()
+  "Create or reuse the dedicated agent frame."
+  (or (car (filtered-frame-list
+            (lambda (f)
+              (equal (frame-parameter f 'my-agent-frame) t))))
+      (let ((frame (make-frame '((name . "Agent")
+                                 (minibuffer . t)
+                                 (visibility . nil))))) ; start hidden if you like
+        (modify-frame-parameters frame '((my-agent-frame . t)))
+        frame)))
+#+end_src
+
+Notes:
+
+- We mark the frame with a parameter (`my-agent-frame`) so we can find it later.
+- We set `visibility` to `nil` to avoid stealing focus; your UI can expose a
+  command to toggle visibility/focus later if you want.
+
+*** Root window/buffer management
+
+You can let the agent frame use whatever window layout the agent produces, or
+you can create a "root" buffer:
+
+#+begin_src elisp
+(defun my-agent--ensure-root-buffer (frame)
+  "Return the buffer used as the root of the agent frame."
+  (with-selected-frame frame
+    (let ((buf (get-buffer-create "*my-agent*")))
+      (with-current-buffer buf
+        (unless (eq major-mode 'text-mode)
+          (text-mode)))
+      buf)))
+#+end_src
+
+You can choose to always select this buffer before executing actions, or just
+use it as a starting point for navigation.
+
+*** Dedicated-frame env implementation
+
+Here is a concrete env creator your agent package can use:
+
+#+begin_src elisp
+(require 'flywire)
+
+(defun my-agent-env-create ()
+  "Create a flywire-session-env that runs in a dedicated agent frame."
+  (let* ((frame (my-agent--make-frame))
+         (root-buffer (my-agent--ensure-root-buffer frame)))
+    (make-flywire-session-env
+     :name "my-agent-dedicated-frame"
+     :run (lambda (thunk)
+            ;; Do NOT steal focus unless explicitly requested.
+            (with-selected-frame frame
+              ;; Ensure we have a selected window in the agent frame.
+              (when (window-live-p (frame-selected-window frame))
+                (select-window (frame-selected-window frame)))
+              (unless (eq (current-buffer) root-buffer)
+                (switch-to-buffer root-buffer))
+              (funcall thunk)))
+     :snapshot (lambda (&optional profile)
+                 (with-selected-frame frame
+                   (flywire-snapshot-get-snapshot profile)))
+     :enable-events (lambda (session opts)
+                      (my-agent--enable-events-for-frame session frame opts))
+     :teardown (lambda (_session)
+                 (when (frame-live-p frame)
+                   (delete-frame frame 'force))))))
+#+end_src
+
+Key decisions:
+
+- `run` always executes THUNK with `frame` selected, ensuring all actions target
+  this frame’s window tree.
+- We avoid `select-frame-set-input-focus` to prevent user disruption. If you
+  want the agent frame to visually update, you just need a live frame; focus
+  and visibility can be controlled separately.
+- `snapshot` runs `flywire-snapshot-get-snapshot` in that frame so its window
+  configuration and minibuffer state reflect the agent environment.
+
+*** Event wiring for a specific frame
+
+The default event wiring uses global hooks; for a dedicated frame, you want
+minibuffer/idle events that only apply when the agent frame is active.
+
+One approach is:
+
+- Use `minibuffer-setup-hook` but check `selected-frame`.
+- Use `run-with-idle-timer` and inside the timer check whether the frame is
+  still live and whether you want an idle snapshot.
+
+Example:
+
+#+begin_src elisp
+(defvar my-agent--event-state (make-hash-table :test 'eq))
+
+(defun my-agent--enable-events-for-frame (session frame opts)
+  "Install minibuffer/idle events for SESSION limited to FRAME.
+OPTS can include :idle-delay and :events filtering."
+  (unless (gethash session my-agent--event-state)
+    (let* ((idle-delay (or (plist-get opts :idle-delay) 0.5))
+           (snapshot-profile (or (plist-get (flywire-session-options session)
+                                           :snapshot-profile)
+                                 'minimal))
+           (run-fn (lambda (thunk)
+                     (with-selected-frame frame (funcall thunk))))
+           (snapshot-fn (lambda ()
+                          (with-selected-frame frame
+                            (flywire-snapshot-get-snapshot snapshot-profile))))
+           (minibuffer-hook
+            (lambda ()
+              (when (eq (selected-frame) frame)
+                (funcall run-fn
+                         (lambda ()
+                           (flywire-session--emit-event-maybe
+                            session opts
+                            (list :type :minibuffer-open
+                                  :session session
+                                  :snapshot (funcall snapshot-fn))))))))
+           (idle-handler
+            (lambda ()
+              (when (frame-live-p frame)
+                (funcall run-fn
+                         (lambda ()
+                           (flywire-session--emit-event-maybe
+                            session opts
+                            (list :type :idle
+                                  :session session
+                                  :snapshot (funcall snapshot-fn))))))))
+           (idle-timer (run-with-idle-timer idle-delay t idle-handler)))
+      (add-hook 'minibuffer-setup-hook minibuffer-hook)
+      (puthash session
+               (list :minibuffer-hook minibuffer-hook
+                     :idle-timer idle-timer
+                     :frame frame)
+               my-agent--event-state))))
+
+(defun my-agent-env-teardown-events (session)
+  "Remove event wiring for SESSION."
+  (when-let ((state (gethash session my-agent--event-state)))
+    (when-let ((hook (plist-get state :minibuffer-hook)))
+      (remove-hook 'minibuffer-setup-hook hook))
+    (when-let ((timer (plist-get state :idle-timer)))
+      (cancel-timer timer))
+    (remhash session my-agent--event-state)))
+#+end_src
+
+Important:
+
+- This uses `flywire-session--emit-event-maybe`, which is an internal helper.
+  For a strictly external package, you might instead rely on the events emitted
+  by `flywire-session-start-async` and only use your env’s `enable-events` to
+  add *extra* events (e.g., additional `:snapshot` pulses). If you want to stay
+  within public APIs, you can instead:
+  - Use `flywire-session-on-event` to listen to core events.
+  - Emit your own custom events via your own dispatcher.
+- Make sure you call your event-teardown from your env’s `teardown`, or from
+  an explicit `my-agent-session-teardown` function.
+
+*** Creating and using a dedicated-frame session
+
+From your agent package:
+
+#+begin_src elisp
+(defun my-agent-create-session ()
+  "Create a flywire session bound to the dedicated agent frame."
+  (let ((env (my-agent-env-create)))
+    (flywire-session-create
+     :env env
+     :snapshot-profile 'default
+     ;; Optional per-session safety policy:
+     :safety-policy #'my-agent-command-allowed-p
+     ;; Optional event filter, e.g. '(:step-end :minibuffer-open :idle)
+     :events :all)))
+
+(defun my-agent-run-sync (steps)
+  "Run STEPS synchronously in a fresh dedicated-frame session.
+STEPS is an alist list suitable for flywire (string keys, etc.)."
+  (let* ((session (my-agent-create-session))
+         (result (flywire-session-exec session steps '(:snapshot-after t))))
+    ;; You might call teardown here if your env expects it.
+    (let ((env (flywire-session-env session)))
+      (funcall (flywire-session-env-teardown env) session))
+    result))
+#+end_src
+
+Async usage:
+
+#+begin_src elisp
+(defun my-agent-run-async (steps &optional on-event)
+  "Run STEPS asynchronously; call ON-EVENT for each event."
+  (let* ((session (my-agent-create-session)))
+    (when on-event
+      (flywire-session-on-event session on-event))
+    (flywire-session-enable-events session '(:idle-delay 0.5))
+    (flywire-session-start-async session steps)))
+#+end_src
+
+Your agent loop (in another process or in-buffer) decides what STEPS to send,
+how to handle events (including `:exec-complete`, `:step-end`, `:minibuffer-open`,
+`:idle`), and when to call `flywire-session-cancel`.
+
+** Headless environment (tests/CI)
+
+*** Goals
+
+- Provide a predictable, non-GUI environment for integration and end-to-end
+  tests.
+- Avoid frame-specific behavior; run actions in controlled buffers.
+- Make it easy for property tests to create/dispose sessions.
+
+*** Simple headless env
+
+Minimal version:
+
+#+begin_src elisp
+(defun my-agent-headless-env-create ()
+  "Create a headless flywire-session-env for tests."
+  (make-flywire-session-env
+   :name "my-agent-headless"
+   :run (lambda (thunk)
+          ;; In tests, we often want a temp buffer to avoid touching user buffers.
+          (with-temp-buffer
+            (switch-to-buffer (current-buffer))
+            (funcall thunk)))
+   :snapshot (lambda (&optional profile)
+               (flywire-snapshot-get-snapshot profile))
+   :enable-events #'ignore
+   :teardown #'ignore))
+#+end_src
+
+This is sufficient if your tests:
+
+- Create a session with `:env (my-agent-headless-env-create)`.
+- Call `flywire-session-exec` with a small step list (e.g., inserting text,
+  running non-interactive commands).
+- Assert on the snapshot or buffer contents after execution.
+
+If you want richer behavior (e.g., simulated window configurations), you can
+create a dedicated frame but never show it, or manage multiple windows inside a
+single frame using standard Emacs split/window APIs.
+
+*** Test helper macros
+
+Following the patterns in `test/` for flywire, your agent package can provide
+convenience macros:
+
+#+begin_src elisp
+(defmacro my-agent-test-with-session (env &rest body)
+  "Create a session with ENV and run BODY."
+  (declare (indent 1))
+  `(let* ((session (flywire-session-create :env ,env
+                                           :snapshot-profile 'minimal))
+          (result nil))
+     (unwind-protect
+         (setq result (progn ,@body))
+       (let ((e (flywire-session-env session)))
+         (funcall (flywire-session-env-teardown e) session))
+       result)))
+#+end_src
+
+Usage in tests:
+
+#+begin_src elisp
+(ert-deftest my-agent-sync-edit-test ()
+  (my-agent-test-with-session (my-agent-headless-env-create)
+    (let ((res (flywire-session-exec
+                session
+                '(((action . "type_text") (text . "hello"))
+                  ((action . "press_key") (key . "RET")))
+                '(:snapshot-after t))))
+      (should (eq (plist-get res :status) :ok))
+      (should (string-match "hello" (plist-get (plist-get res :snapshot)
+                                               :content))))))
+#+end_src
+
+** Step format, actions, and context
+
+Flywire expects each step as an alist, usually coming from JSON:
+
+#+begin_src json
+[
+  {"action": "run_command", "name": "find-file"},
+  {"action": "type_text", "text": "/tmp/demo.txt"},
+  {"action": "press_key", "key": "RET"},
+  {"action": "goto_location", "line": 10},
+  {"action": "type_text", "text": "inserted by agent\n"}
+]
+#+end_src
+
+Elisp representation:
+
+#+begin_src elisp
+'(((action . "run_command") (name . "find-file"))
+  ((action . "type_text") (text . "/tmp/demo.txt"))
+  ((action . "press_key") (key . "RET"))
+  ((action . "goto_location") (line . 10))
+  ((action . "type_text") (text . "inserted by agent\n")))
+#+end_src
+
+Supported built-in tools include:
+
+- `"type_text"`: insert text; uses string `text`.
+- `"press_key"`: simulate key chord; uses string `key` (e.g., `"RET"`, `"C-g"`).
+- `"run_command"`: call interactive command; uses `name` (symbol-name).
+- `"cancel"`: simulate `C-g`.
+- `"goto_location"`: move point via `point`, `line`, or `column`.
+
+Context fields:
+
+- `buffer`: buffer name or file; instructs flywire to run the step in that
+  buffer (via `with-current-buffer` inside the env).
+- `window-id`: a token obtained from a snapshot’s `:window-configuration`
+  entries. You can:
+  - Inspect a snapshot.
+  - Find the window showing a given buffer or file.
+  - Use its id in future steps to precisely target that window.
+
+Example using `window-id`:
+
+#+begin_src elisp
+;; After an initial snapshot:
+(let* ((snap (flywire-snapshot-get-snapshot 'default))
+       (windows (plist-get snap :window-configuration))
+       (code-window (seq-find (lambda (w)
+                                (string-match-p "\\.el\\'" (plist-get w :buffer-name)))
+                              windows))
+       (win-id (plist-get code-window :id)))
+  (flywire-session-exec
+   session
+   `(((action . "goto_location") (window-id . ,win-id) (line . 50))
+     ((action . "type_text") (text . ";; TODO inserted by agent\n")))))
+#+end_src
+
+** Safety policy for agent sessions
+
+Flywire exposes `flywire-policy-allow-command-p` as a global predicate and lets
+you override it per session via the `:safety-policy` option.
+
+For agentic use:
+
+- Implement a predicate in your package that decides whether a command is
+  allowed in a given environment (dedicated frame or headless).
+- Pass it when creating the session.
+
+Example:
+
+#+begin_src elisp
+(defun my-agent-command-allowed-p (command)
+  "Return non-nil if COMMAND is allowed in agent sessions."
+  (memq command '(find-file
+                  save-buffer
+                  next-line
+                  previous-line
+                  forward-char
+                  backward-char
+                  self-insert-command)))
+
+(flywire-session-create
+ :env (my-agent-env-create)
+ :safety-policy #'my-agent-command-allowed-p)
+#+end_src
+
+When `run_command` is executed, flywire will consult this policy and deny
+disallowed commands; your agent can then inspect step results/events for policy
+denials and react accordingly.
+
+** Putting it together: a minimal agent loop sketch
+
+Here is a high-level sketch of how an agent/frontend package might integrate
+flywire in an async loop. The details (RPC transport, model calls, etc.) are up
+to your project; flywire just drives Emacs.
+
+#+begin_src elisp
+(defun my-agent-start (initial-prompt)
+  "Start an agent conversation driving Emacs."
+  (let* ((session (my-agent-create-session))
+         (event-log '())
+         (handle nil))
+    (cl-labels
+        ((on-event (event)
+           (push event event-log)
+           (pcase (plist-get event :type)
+             (:exec-complete
+              ;; Ask the model what to do next based on result and latest snapshot.
+              (my-agent-request-next-steps session event-log))
+             (:minibuffer-open
+              ;; Optionally inspect prompt and decide how to respond.
+              (my-agent-handle-prompt session event))
+             (:idle
+              ;; Maybe capture periodic snapshots or heartbeat.
+              nil))))
+      (flywire-session-on-event session #'on-event)
+      (flywire-session-enable-events session)
+      ;; Kick off with the initial steps derived from INITIAL-PROMPT.
+      (setq handle
+            (flywire-session-start-async
+             session
+             (my-agent-initial-steps initial-prompt)))
+      handle)))
+#+end_src
+
+Your agent package:
+
+- Encodes model decisions into step lists.
+- Interprets structured results and events.
+- Decides when to cancel (`flywire-session-cancel`) or teardown the env/frame.
+
+This guide should give an external agent package enough context to:
+
+- Depend on flywire.
+- Implement its own dedicated-frame and headless environments.
+- Build a working agentic loop that safely drives Emacs without modifying the
+  flywire core. 
+

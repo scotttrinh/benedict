@@ -150,6 +150,22 @@ Acceptance:
 - Performance: throttle rendering; chunk aggregation; avoid blocking redisplay
 - Safety: approvals everywhere; tight scopes; no automatic writes without previews
 
+* Future — Subagents & Delegation
+Tasks:
+- Design a subagent model (roles, tool access, autonomy limits) that layers cleanly on top of the existing agent loop and profiles work.
+- Define orchestration and scheduling rules: when and how the main agent can delegate to subagents, and how results are merged back into a single chat narrative.
+- Integrate safety and approvals so that subagent actions are visible, attributable, and bounded by per-profile and global budgets.
+Acceptance:
+- A prototype profile (e.g., “Refactor”) can spin up one or more subagents for search/propose-edit tasks, with their activity clearly surfaced in the UI and logs, and all work still respecting existing autonomy constraints.
+
+* Future — Environment Telemetry & Bootstrapping
+Tasks:
+- Define a minimal, privacy-conscious “environment payload” for the initial request (project root metadata, limited-depth file lists, active buffers, todo overview, provider/model capabilities).
+- Add lightweight, per-message telemetry (context window headroom, active profile, autonomy limits, approximate spend, and coarse-grained todo state such as current todo and recently completed items) that the agent can use for planning and truncation decisions.
+- Expose configuration so users can tune or disable environment telemetry per project, and document what information is sent to providers.
+Acceptance:
+- The agent can describe, in plain language, what environment information (including high-level todo state) it currently sees and how it is using it to plan, and users can adjust or opt out of these details without breaking core functionality.
+
 * Milestones & Dates (Tentative)
 - M1 (v0.1.0): 2–3 weeks — skeleton + echo + basic chat
 - M2 (v0.2.0): +2–3 weeks — non-streaming provider + context

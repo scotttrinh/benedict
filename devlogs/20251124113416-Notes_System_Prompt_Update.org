@@ -1,0 +1,17 @@
+#+title: Notes: System Prompt Update
+#+date: [2025-11-24 Mon 11:34]
+
+* Problem
+The user requested that Benedict's system prompt be updated to match the high-quality system prompt used by the agent itself (Sourcegraph Amp).
+
+* Fix
+Updated `benedict-chat-base-system-prompt` in `benedict-chat.el`.
+
+The new prompt includes detailed sections on:
+- **Agency**: Encouraging initiative while respecting safety (e.g., planning vs executing).
+- **Toolset**: Explicitly listing available tools (`read-file`, `create-file`, `propose-edit`, `project-search`, `find-files`) and their usage patterns.
+- **Conventions**: Instructions on code style, library usage, and security.
+- **Communication**: strict guidelines for conciseness, formatting, and professional tone (no fluff).
+
+* Verification
+- Checked `benedict-chat.el` for Elisp syntax errors (balanced quotes and parens).
