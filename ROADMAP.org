@@ -102,10 +102,13 @@ Tasks:
 - Thread histories: storage interface with file-per-thread, human-readable format (JSONL/sexp); per-project quick switch; file watchers and after-save hooks for incremental reindex; SQLite deferred to a later release
 - Placement: project-local .benedict/ (gitignored) with global fallback under XDG data dir; user-configurable
 - Versioning/migrations: per-thread schema version tags; migrate on load/save; refuse to write “newer-than-supported” files
+- History management UX: branch-at-any-message affordance; named vs ephemeral branches; simple visual history/graph per project; “redo from here” that creates a branch instead of mutating history
+- Time-travel and checkpoints: named checkpoints (e.g., “pre-bug-xyz”), safe snapshots around risky operations, and an easy “go back to before this detour” workflow
+- Compaction policies: layered history (raw transcript → summaries), per-thread auto-compaction options, reversible “unzip/rezip” of compacted segments backed by preserved full transcripts, and pinning to prevent compaction of important turns
 - Snippet library for prompts; message pinning; attachments (files/regions)
 - Faces/themes tweaks; customization group tidy; command palette via transient
 Acceptance:
-- Threads persist across sessions; switching projects restores context; UX feels consistent
+- Threads persist across sessions; switching projects restores context; history UI makes branching and checkpointing discoverable and safe; UX feels consistent
 
 * Phase 8 — Extensibility API
 Tasks:
@@ -165,6 +168,14 @@ Tasks:
 - Expose configuration so users can tune or disable environment telemetry per project, and document what information is sent to providers.
 Acceptance:
 - The agent can describe, in plain language, what environment information (including high-level todo state) it currently sees and how it is using it to plan, and users can adjust or opt out of these details without breaking core functionality.
+
+* Future — Multi-Model Experiments & Branch Merging
+Tasks:
+- Provide a “run on multiple models” action for a single prompt, with side-by-side or diff-based comparison and an option to pick/merge results.
+- Allow per-branch preferred models (e.g., performance-focused vs. documentation-focused) while keeping a clear mainline for the project.
+- Design merge flows that use summaries and artifacts (files/diffs/commits) as the primary surface, rather than raw transcript concatenation.
+Acceptance:
+- Users can easily spin up multi-model experiments, compare outcomes without being overwhelmed, and selectively merge results back into their main working thread.
 
 * Milestones & Dates (Tentative)
 - M1 (v0.1.0): 2–3 weeks — skeleton + echo + basic chat
