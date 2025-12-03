@@ -250,6 +250,7 @@ This isolates tests, improves speed, and makes assertions deterministic. Functio
 - If a block installs an overlay, **always** update it whenever you mutate the block's text. Forgetting to move the overlay leads to `args-out-of-range` errors once Emacs tries to adjust it during timers.
 - When regenerating content (e.g., final reasoning replaces streamed chunks), delete text between the stored markers rather than rewriting the entire block; this keeps downstream markers (buttons, block dividers) valid.
 - New streaming UI must survive timers firing after the buffer is killed. Audit every `run-at-time` callback to guard with `(buffer-live-p buffer)` before touching markers.
+- When rewriting folded headers (tool/plan toggles), temporarily make the header-start marker non-sticky so it stays anchored at the line start; otherwise it can drift into the header text and duplicating headers on subsequent toggles.
 
 ## How To Manually Test Right Now
 

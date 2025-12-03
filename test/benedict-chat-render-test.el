@@ -1,6 +1,7 @@
 ;;; test/benedict-chat-render-test.el --- Tests for benedict-chat-render  -*- lexical-binding: t; -*-
 
 (require 'ert)
+(require 'cl-lib)
 (require 'benedict-chat-render)
 
 (ert-deftest benedict-chat-render-insert-message ()
@@ -66,6 +67,31 @@
       (let ((start (plist-get item :content-start))
             (end (plist-get item :content-end)))
         (should (equal (buffer-substring-no-properties start end) "NewContent"))))))
+
+(ert-deftest benedict-chat-render-tool-toggle-does-not-duplicate-header ()
+  "Toggling tool visibility should not clone the header line."
+  (with-temp-buffer
+    (let* ((item (list :metadata (list :status 'success)
+                       :tool-call (list :name 'fold-me)
+                       :content "Body"
+                       :tool-folded t))
+           (label (benedict-chat--tool-name-string (plist-get (plist-get item :tool-call) :name))))
+      (benedict-chat--render-tool-item item)
+      ;; Toggle open then closed
+      (goto-char (plist-get item :header-start))
+      (benedict-chat-tool-toggle)
+      (benedict-chat-tool-toggle)
+      ;; Header markers should still wrap the header text
+      (let ((start (plist-get item :header-start))
+            (end (plist-get item :header-end)))
+        (should (< (marker-position start) (marker-position end))))
+      ;; Only one header line with the tool label should exist
+      (let ((count 0))
+        (save-excursion
+          (goto-char (point-min))
+          (while (search-forward label nil t)
+            (cl-incf count)))
+        (should (= 1 count))))))
 
 (provide 'test/benedict-chat-render-test)
 ;;; benedict-chat-render-test.el ends here

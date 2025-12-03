@@ -254,23 +254,25 @@ insert-after markers to work without swallowing subsequent blocks."
          (let ((inhibit-read-only t)
                (text (benedict-chat--format-tool-header item))
                (start-type (marker-insertion-type start)))
-           ;; Delete header text and its sentinel newline
-           (delete-region start (1+ end))
-           (goto-char start)
-           ;; Re-insert header with same structure as render
-           (insert (propertize text
+            ;; Keep start anchored at the beginning while we rewrite.
+            (set-marker-insertion-type start nil)
+            ;; Delete header text and its sentinel newline
+            (delete-region start (1+ end))
+            (goto-char start)
+            ;; Re-insert header with same structure as render
+            (insert (propertize text
                                'face 'benedict-chat-tool-header
                                'benedict-region-kind 'header
                                'benedict-chat-item item
                                'keymap benedict-chat-tool-toggle-map
                                'mouse-face 'highlight))
-           ;; Re-render action buttons on same line
-           (benedict-chat--render-tool-actions item)
-           ;; Sentinel newline
-           (insert (propertize "\n" 'benedict-region-kind 'header))
-           ;; Restore start marker insertion type and update header-end
-           (set-marker-insertion-type start start-type)
-           (plist-put item :header-end (copy-marker (1- (point)) t)))))))
+            ;; Re-render action buttons on same line
+            (benedict-chat--render-tool-actions item)
+            ;; Sentinel newline
+            (insert (propertize "\n" 'benedict-region-kind 'header))
+            ;; Restore start marker insertion type and update header-end
+            (set-marker-insertion-type start start-type)
+            (plist-put item :header-end (copy-marker (1- (point)) t)))))))
 
 (defun benedict-chat--update-tool-visibility (item)
   "Update body visibility for ITEM."
