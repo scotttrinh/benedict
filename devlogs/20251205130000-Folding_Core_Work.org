@@ -26,3 +26,8 @@
   - Steps 1–3 are covered; we are mid-way through Step 4/5 (streaming integration and isearch/kill behavior) with folding now centralized on =benedict-chat-fold=.
 - Harness follow-up:
   - Ensure propcheck/flywire autoloads are available in the nix test derivation to avoid noisy autoload warnings during target runs.
+
+* 2025-12-05 follow-up
+- Isearch handling tightened: added a targeted opener that only reveals the fold under the current match (works for overlay-backed thinking and text-property-backed tool bodies) and restores others. Thinking spec rear stickiness was relaxed to keep the overlay anchored when we rewrite ranges.
+- Test failure + fix: =benedict-chat-fold-isearch-opens-only-current-fold= was failing because the text-property fold stayed visible after jumping to the tool match. Root cause was that we only removed invisibility when first opening the range; subsequent openings were skipped if an entry already existed. Fix: always remove the invisibility properties for the text range, even when the entry is cached, and tighten range detection by walking outward instead of relying on property-change boundaries. Added logging in the test to capture fold state during isearch while debugging.
+- Progress: plan steps 1–3 remain done; Step 4 (integration) is largely wired; Step 5 (isearch/kill) is now in place for chat. Remaining work is presets/cyclers and buffer state handling (steps 6–7).
