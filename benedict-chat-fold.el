@@ -9,6 +9,10 @@
 ;;; Code:
 
 (require 'benedict-fold-core)
+(require 'isearch)
+
+(defvar-local benedict-chat-fold--saved-invisibility nil
+  "Saved `buffer-invisibility-spec' used during isearch.")
 
 (defconst benedict-chat-fold-thinking-spec
   (benedict-fold-core-define-spec 'benedict-chat-thinking
@@ -26,10 +30,37 @@
     :backend benedict-fold-core-text-property-backend)
   "Fold spec for tool call detail bodies (text-property-backed).")
 
+(defun benedict-chat-fold--filter-buffer-substring (beg end delete)
+  "Return substring from BEG to END without text properties.
+If DELETE is non-nil, delete the region after extracting it."
+  (let ((text (if delete
+                  (delete-and-extract-region beg end)
+                (buffer-substring beg end))))
+    (set-text-properties 0 (length text) nil text)
+    text))
+
+(defun benedict-chat-fold--isearch-open ()
+  "Temporarily reveal hidden text while isearch runs."
+  (setq benedict-chat-fold--saved-invisibility buffer-invisibility-spec)
+  (setq buffer-invisibility-spec nil))
+
+(defun benedict-chat-fold--isearch-close ()
+  "Restore buffer invisibility after isearch ends."
+  (when (local-variable-p 'benedict-chat-fold--saved-invisibility)
+    (setq buffer-invisibility-spec benedict-chat-fold--saved-invisibility)
+    (setq benedict-chat-fold--saved-invisibility nil)))
+
 (defun benedict-chat-fold-init-buffer (&optional backend)
   "Initialize folding defaults for the current chat buffer.
 Optional BACKEND overrides the default overlay backend."
-  (benedict-fold-core-set-backend (or backend benedict-fold-core-overlay-backend)))
+  (benedict-fold-core-set-backend (or backend benedict-fold-core-overlay-backend))
+  (benedict-fold-core-ensure-invisibility-entry benedict-chat-fold-thinking-spec)
+  (benedict-fold-core-ensure-invisibility-entry benedict-chat-fold-tool-spec)
+  (setq-local filter-buffer-substring-function
+              #'benedict-chat-fold--filter-buffer-substring)
+  (setq-local search-invisible 'open)
+  (add-hook 'isearch-mode-hook #'benedict-chat-fold--isearch-open nil t)
+  (add-hook 'isearch-mode-end-hook #'benedict-chat-fold--isearch-close nil t))
 
 (defun benedict-chat-fold--region (item)
   "Return (START . END) markers for ITEM content."
@@ -72,7 +103,8 @@ Returns the fold object or nil if boundaries are missing."
 (defun benedict-chat-fold-set-tool-folded (item folded)
   "Set ITEM tool body fold to FOLDED."
   (plist-put item :tool-folded folded)
-  (let ((range (benedict-chat-fold--region item)))
+  (let ((range (benedict-chat-fold--region item))
+        (alias (benedict-fold-core-spec-alias benedict-chat-fold-tool-spec)))
     (when-let ((fold (benedict-chat-fold-ensure-tool item)))
       (benedict-fold-core-set-folded fold folded))
     (when range
@@ -85,8 +117,8 @@ Returns the fold object or nil if boundaries are missing."
           (set-marker (cdr range) end))
         (let ((inhibit-read-only t))
           (if folded
-              (add-text-properties start end '(invisible benedict-tool-details))
-            (remove-text-properties start end '(invisible benedict-tool-details))))))))
+              (add-text-properties start end `(invisible ,alias))
+            (remove-text-properties start end `(invisible ,alias))))))))
 
 (defun benedict-chat-fold-update-thinking (item)
   "Refresh boundaries for ITEM thinking fold."

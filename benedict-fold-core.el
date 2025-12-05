@@ -82,6 +82,10 @@ Intended for tests."
     (unless (member entry buffer-invisibility-spec)
       (add-to-invisibility-spec entry))))
 
+(defun benedict-fold-core-ensure-invisibility-entry (spec)
+  "Ensure SPEC's alias entry exists in `buffer-invisibility-spec'."
+  (benedict-fold-core--ensure-alias spec))
+
 ;; -------------------------------------------------------------------
 ;; Overlay backend
 
@@ -89,6 +93,8 @@ Intended for tests."
   (let* ((fold-start (copy-marker start))
          (fold-end (copy-marker end))
          (overlay (make-overlay fold-start fold-end nil t t)))
+    (set-marker-insertion-type fold-start (not (benedict-fold-core-spec-front-sticky spec)))
+    (set-marker-insertion-type fold-end (benedict-fold-core-spec-rear-sticky spec))
     (overlay-put overlay 'evaporate t)
     (overlay-put overlay 'front-advance (benedict-fold-core-spec-front-sticky spec))
     (overlay-put overlay 'rear-advance (benedict-fold-core-spec-rear-sticky spec))
@@ -136,10 +142,14 @@ Intended for tests."
 
 (cl-defstruct benedict-fold-core--text-fold start end)
 
-(defun benedict-fold-core--text-prop-make (start end _spec)
-  (make-benedict-fold-core--text-fold
-   :start (copy-marker start)
-   :end (copy-marker end)))
+(defun benedict-fold-core--text-prop-make (start end spec)
+  (let ((start-marker (copy-marker start))
+        (end-marker (copy-marker end)))
+    (set-marker-insertion-type start-marker (not (benedict-fold-core-spec-front-sticky spec)))
+    (set-marker-insertion-type end-marker (benedict-fold-core-spec-rear-sticky spec))
+    (make-benedict-fold-core--text-fold
+     :start start-marker
+     :end end-marker)))
 
 (defun benedict-fold-core--text-prop--range (fold)
   (let ((start (benedict-fold-core--text-fold-start fold))

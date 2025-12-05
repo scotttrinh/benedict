@@ -226,7 +226,7 @@ insert-after markers to work without swallowing subsequent blocks."
      
      ;; Body
     (let ((content-start (point-marker)))
-      (set-marker-insertion-type content-start t)
+      (set-marker-insertion-type content-start nil)
        (insert (propertize (or (plist-get item :content) "")
                            'benedict-region-kind 'tool-ui))
        ;; Sentinel newline
@@ -288,13 +288,16 @@ Does NOT append a newline, as the region is expected to be followed by a sentine
     (when (and start end (marker-position start) (marker-position end))
       (with-current-buffer (marker-buffer start)
         (let ((inhibit-read-only t)
-              (start-type (marker-insertion-type start)))
+              (start-type (marker-insertion-type start))
+              (start-pos (min (marker-position start) (marker-position end)))
+              (end-pos (max (marker-position start) (marker-position end))))
           (save-excursion
             ;; Lock start marker so it stays before the inserted content
             (set-marker-insertion-type start nil)
-            (goto-char start)
-            (delete-region start end)
+            (goto-char start-pos)
+            (delete-region start-pos end-pos)
             (insert (propertize (or content "") 'benedict-region-kind 'tool-ui))
+            (set-marker end (point))
             ;; Restore start marker type (usually t)
             (set-marker-insertion-type start start-type)))))))
 

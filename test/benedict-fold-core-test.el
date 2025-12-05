@@ -42,6 +42,58 @@
         (benedict-fold-core-release fold)
         (should-not (get-text-property (point-min) 'invisible))))))
 
+(ert-deftest benedict-fold-core-overlay-fold-survives-boundary-insert ()
+  (benedict-fold-core-clear-specs)
+  (let ((spec (benedict-fold-core-define-spec :overlay-boundary
+               :alias 'benedict-overlay-boundary
+               :front-sticky t
+               :rear-sticky t)))
+    (with-temp-buffer
+      (insert "fold-me")
+      (let* ((benedict-fold-core-backend benedict-fold-core-overlay-backend)
+             (fold (benedict-fold-core-fold-region (point-min) (point-max) spec)))
+        (goto-char (point-min))
+        (insert "A")
+        (goto-char (point-max))
+        (insert "Z")
+        (benedict-fold-core-resize fold (point-min) (point-max))
+        (benedict-fold-core-set-folded fold t)
+        (should (eq (get-char-property (point-min) 'invisible)
+                    'benedict-overlay-boundary))
+        (should (eq (get-char-property (1- (point-max)) 'invisible)
+                    'benedict-overlay-boundary))
+        (benedict-fold-core-set-folded fold nil)
+        (should-not (get-char-property (point-min) 'invisible))
+        (benedict-fold-core-set-folded fold t)
+        (should (eq (get-char-property (point-min) 'invisible)
+                    'benedict-overlay-boundary))))))
+
+(ert-deftest benedict-fold-core-text-property-sticky-boundaries ()
+  (benedict-fold-core-clear-specs)
+  (let ((spec (benedict-fold-core-define-spec :text-boundary
+               :alias 'benedict-text-boundary
+               :front-sticky t
+               :rear-sticky t
+               :backend benedict-fold-core-text-property-backend)))
+    (with-temp-buffer
+      (insert "hidden")
+      (let* ((benedict-fold-core-backend benedict-fold-core-text-property-backend)
+             (fold (benedict-fold-core-fold-region (point-min) (point-max) spec)))
+        (goto-char (point-min))
+        (insert "L")
+        (goto-char (point-max))
+        (insert "R")
+        (benedict-fold-core-set-folded fold t)
+        (should (eq (get-text-property (point-min) 'invisible)
+                    'benedict-text-boundary))
+        (should (eq (get-text-property (1- (point-max)) 'invisible)
+                    'benedict-text-boundary))
+        (benedict-fold-core-set-folded fold nil)
+        (should-not (get-text-property (point-min) 'invisible))
+        (benedict-fold-core-set-folded fold t)
+        (should (eq (get-text-property (point-min) 'invisible)
+                    'benedict-text-boundary))))))
+
 (ert-deftest benedict-fold-core-save-visibility-restores ()
   (with-temp-buffer
     (setq buffer-invisibility-spec nil)
