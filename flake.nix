@@ -4,80 +4,57 @@
   inputs = {
     nixpkgs.url = "github:nixos/nixpkgs/nixos-unstable";
     flake-utils.url = "github:numtide/flake-utils";
-    propcheck = {
-      url = "github:Wilfred/propcheck";
-      flake = false;
-    };
-    flywire = {
-      url = "github:scotttrinh/flywire";
-      flake = false;
-    };
   };
 
-  outputs = { self, nixpkgs, flake-utils, propcheck, flywire }:
+  outputs = { self, nixpkgs, flake-utils }:
     flake-utils.lib.eachDefaultSystem (system:
       let
         pkgs = nixpkgs.legacyPackages.${system};
 
-        # Build propcheck package from GitHub source
-        propcheckPkg = pkgs.runCommand "propcheck-0.1" {
-          src = propcheck;
-        } ''
-          mkdir -p $out/share/emacs/site-lisp/elpa/propcheck-0.1
-          cp $src/propcheck.el $out/share/emacs/site-lisp/elpa/propcheck-0.1/
-          echo "(define-package \"propcheck\" \"0.1\" \"Property based testing\" '((dash \"2.12\")))" > $out/share/emacs/site-lisp/elpa/propcheck-0.1/propcheck-pkg.el
+        emacs = pkgs.emacs;
+        eask = pkgs.eask-cli;
+
+        envExports = ''
+          export EASK_EMACS=${emacs}/bin/emacs
+          export EASK_NONINTERACTIVE=1
         '';
 
-        # Build flywire package from GitHub source
-        flywirePkg = pkgs.runCommand "flywire-0.1" {
-          src = flywire;
-        } ''
-          mkdir -p $out/share/emacs/site-lisp/elpa/flywire-0.1
-          cp $src/*.el $out/share/emacs/site-lisp/elpa/flywire-0.1/
-          echo "(define-package \"flywire\" \"0.1\" \"Emacs driver for agents\" '())" \
-            > $out/share/emacs/site-lisp/elpa/flywire-0.1/flywire-pkg.el
-        '';
-
-        # Custom Emacs with all test dependencies pre-installed
-        myEmacs = (pkgs.emacsPackagesFor pkgs.emacs).emacsWithPackages (epkgs: with epkgs; [
-          ert-async
-          dash
-          s
-          lgr
-          package-lint
-          markdown-mode
-        ] ++ [ propcheckPkg flywirePkg ]);
+        runWithEask = name: script:
+          pkgs.writeShellScript name ''
+            set -euo pipefail
+            ${envExports}
+            ${script}
+          '';
 
       in
       {
-        # Expose propcheck package for reference
-        packages.propcheck = propcheckPkg;
-
-        # Development shell with Emacs and dependencies
         devShells.default = pkgs.mkShell {
           buildInputs = [
-            myEmacs
+            emacs
+            eask
             pkgs.git
           ];
+          shellHook = ''
+            export EASK_EMACS=${emacs}/bin/emacs
+            export EASK_NONINTERACTIVE=1
+          '';
         };
 
-        # Test app: run all tests
         apps.test = {
           type = "app";
-          program = toString (pkgs.writeShellScript "run-tests" ''
-            exec ${myEmacs}/bin/emacs -Q --batch -l test/run-tests.el "$@"
+          program = toString (runWithEask "run-tests" ''
+            exec ${eask}/bin/eask test ert-runner "$@"
           '');
         };
 
-        # Lint app: check code quality (scaffolding for future)
         apps.lint = {
           type = "app";
-          program = toString (pkgs.writeShellScript "run-lint" ''
-            exec ${myEmacs}/bin/emacs -Q --batch -l test/run-lint.el
+          program = toString (runWithEask "run-lint" ''
+            exec ${eask}/bin/eask lint checkdoc
+            exec ${eask}/bin/eask lint package
           '');
         };
 
-        # Default app is test
         defaultApp = self.apps.${system}.test;
       }
     );

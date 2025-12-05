@@ -18,22 +18,6 @@
         "type": "github"
       }
     },
-    "flywire": {
-      "flake": false,
-      "locked": {
-        "lastModified": 1764086528,
-        "narHash": "sha256-LzWTN31jFPMBDAcHnAgAws6MmKcbMmJk6wWGgCgqAds=",
-        "owner": "scotttrinh",
-        "repo": "flywire",
-        "rev": "6c18734c742cfaa276f288e9737ae685cab89e35",
-        "type": "github"
-      },
-      "original": {
-        "owner": "scotttrinh",
-        "repo": "flywire",
-        "type": "github"
-      }
-    },
     "nixpkgs": {
       "locked": {
         "lastModified": 1763421233,
@@ -50,28 +34,10 @@
         "type": "github"
       }
     },
-    "propcheck": {
-      "flake": false,
-      "locked": {
-        "lastModified": 1746425187,
-        "narHash": "sha256-J/WIkoj+XDoVqVLqSWVGDTHijEPvj2MWmjhqzRpG7yY=",
-        "owner": "Wilfred",
-        "repo": "propcheck",
-        "rev": "21075792c03a186bc89029871c6db119e6e13cf0",
-        "type": "github"
-      },
-      "original": {
-        "owner": "Wilfred",
-        "repo": "propcheck",
-        "type": "github"
-      }
-    },
     "root": {
       "inputs": {
         "flake-utils": "flake-utils",
-        "flywire": "flywire",
-        "nixpkgs": "nixpkgs",
-        "propcheck": "propcheck"
+        "nixpkgs": "nixpkgs"
       }
     },
     "systems": {
