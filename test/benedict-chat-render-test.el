@@ -93,5 +93,24 @@
             (cl-incf count)))
         (should (= 1 count))))))
 
+(ert-deftest benedict-chat-render-tool-folds-body ()
+  "Tool body starts folded and toggles visibility."
+  (with-temp-buffer
+    (let ((item (list :metadata (list :status 'success)
+                      :tool-call (list :name 'fold-me)
+                      :content "HiddenBody"
+                      :tool-folded t)))
+      (benedict-chat--render-tool-item item)
+      (goto-char (plist-get item :header-start))
+      (should (eq (get-text-property (plist-get item :content-start) 'invisible)
+                  'benedict-tool-details))
+      (goto-char (plist-get item :header-start))
+      (benedict-chat-tool-toggle)
+      (should-not (get-text-property (plist-get item :content-start) 'invisible))
+      (goto-char (plist-get item :header-start))
+      (benedict-chat-tool-toggle)
+      (should (eq (get-text-property (plist-get item :content-start) 'invisible)
+                  'benedict-tool-details)))))
+
 (provide 'test/benedict-chat-render-test)
 ;;; benedict-chat-render-test.el ends here

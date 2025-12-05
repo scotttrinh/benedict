@@ -16,6 +16,8 @@
 (require 'benedict-context)
 (require 'benedict-tools)
 (require 'benedict-flywire)
+(require 'benedict-fold-core)
+(require 'benedict-chat-fold)
 (require 'benedict-chat-mode)
 (require 'benedict-chat-render)
 (require 'benedict-chat-stream)
@@ -1160,82 +1162,36 @@ Also validates and normalizes :actions if present."
   "Return the body text for UI."
   (or (plist-get ui :body) ""))
 
-(declare-function backtrace-to-string "backtrace" (&optional frames))
-(declare-function current-backtrace "backtrace" ())
-
 (defun benedict-chat--refresh-tool-block (item)
   "Refresh ITEM header and content after UI or metadata changes."
   (let ((ui (plist-get item :ui)))
-    (message "[Benedict] Refreshing tool block (ui=%S)" (type-of ui))
     (condition-case content-err
         (let ((body-str (benedict-chat--tool-ui-body-string ui)))
-          (message "[Benedict] Tool UI body string resolved: %S" (type-of body-str))
           (condition-case write-err
               (benedict-chat--write-message-item-content item body-str)
             (error
-             (message "[Benedict] ERROR writing message content: %S" write-err)
-             (message "[Benedict] Backtrace: %s" (backtrace-to-string (current-backtrace)))
              (error "Failed to write message content: %s" (error-message-string write-err)))))
       (error
-       (message "[Benedict] ERROR building tool UI body: %S" content-err)
-       (message "[Benedict] Backtrace: %s" (backtrace-to-string (current-backtrace)))
        (error "Failed to build tool UI body: %s" (error-message-string content-err))))
-    (message "[Benedict] Updating tool header")
-    (condition-case header-err
+    (condition-case nil
         (benedict-chat--update-tool-header item)
-      (error
-       (message "[Benedict] ERROR updating tool header: %S" header-err)
-       (message "[Benedict] Backtrace: %s" (backtrace-to-string (current-backtrace)))))
-    (message "[Benedict] Updating tool visibility")
-    (condition-case vis-err
+      (error))
+    (condition-case nil
         (benedict-chat--update-tool-visibility item)
-      (error
-       (message "[Benedict] ERROR updating tool visibility: %S" vis-err)
-       (message "[Benedict] Backtrace: %s" (backtrace-to-string (current-backtrace)))))))
+      (error))))
 
 (defun benedict-chat--prepare-thinking-block (item)
   "Install folding controls and overlays for thinking ITEM."
   (unless (plist-member item :thinking-folded)
     (plist-put item :thinking-folded t))
-  (benedict-chat--ensure-thinking-overlay item)
+  (benedict-chat-fold-ensure-thinking item)
   (benedict-chat--ensure-thinking-toggle item)
   (benedict-chat--apply-thinking-fold item))
 
-(defun benedict-chat--ensure-thinking-invisibility ()
-  "Ensure the buffer invisibility spec knows about thinking folds."
-  (unless (listp buffer-invisibility-spec)
-    (setq buffer-invisibility-spec
-          (if buffer-invisibility-spec
-              (list buffer-invisibility-spec)
-            nil)))
-  (unless (assoc 'benedict-chat-thinking buffer-invisibility-spec)
-    (add-to-invisibility-spec 'benedict-chat-thinking)))
-
-(defun benedict-chat--ensure-thinking-overlay (item)
-  "Create or refresh the overlay hiding ITEM's content."
-  (let* ((start-marker (plist-get item :content-start))
-         (end-marker (plist-get item :content-end))
-         (start (and start-marker (marker-position start-marker)))
-         (end (and end-marker (marker-position end-marker))))
-    (when (and start end)
-      (let ((overlay-start (min start end))
-            (overlay-end (max start end))
-            (overlay (plist-get item :thinking-overlay)))
-        (unless (overlayp overlay)
-          (setq overlay (make-overlay overlay-start overlay-end))
-          (overlay-put overlay 'evaporate t)
-          (overlay-put overlay 'benedict-chat-thinking-overlay t)
-          (plist-put item :thinking-overlay overlay))
-        (move-overlay overlay overlay-start overlay-end)
-        (benedict-chat--ensure-thinking-invisibility)))))
-
 (defun benedict-chat--apply-thinking-fold (item)
   "Apply ITEM's folding state to its overlay and toggle."
-  (let* ((overlay (plist-get item :thinking-overlay))
-         (folded (plist-get item :thinking-folded)))
-    (when (overlayp overlay)
-      (overlay-put overlay 'invisible (and folded 'benedict-chat-thinking)))
-    (benedict-chat--refresh-thinking-toggle item)))
+  (benedict-chat-fold-set-thinking-folded item (plist-get item :thinking-folded))
+  (benedict-chat--refresh-thinking-toggle item))
 
 (defun benedict-chat--thinking-toggle-label (item)
   "Return the label used for ITEM's toggle button."
@@ -1304,25 +1260,12 @@ Also validates and normalizes :actions if present."
 
 (defun benedict-chat--set-thinking-folded (item folded)
   "Set ITEM's folding state to FOLDED."
-  (plist-put item :thinking-folded folded)
-  (benedict-chat--ensure-thinking-overlay item)
+  (benedict-chat-fold-set-thinking-folded item folded)
   (benedict-chat--apply-thinking-fold item))
 
 (defun benedict-chat--update-thinking-overlay (item)
   "Refresh ITEM overlay boundaries after content changes."
-  (let ((overlay (plist-get item :thinking-overlay)))
-    (when (overlayp overlay)
-      (let ((start-marker (plist-get item :content-start))
-            (end-marker (plist-get item :content-end)))
-        (when (and start-marker end-marker
-                   (marker-position start-marker)
-                   (marker-position end-marker))
-          (let ((start (marker-position start-marker))
-                (end (marker-position end-marker)))
-            (move-overlay overlay
-                          (min start end)
-                          (max start end)))
-          (benedict-chat--apply-thinking-fold item))))))
+  (benedict-chat-fold-update-thinking item))
 
 ;; -------------------------------------------------------------------
 ;; Tool call helpers
@@ -2830,9 +2773,7 @@ When INCLUDE-ERRORS is nil, skip entries flagged with :error metadata."
               (when (buffer-live-p benedict-chat--compose-buffer)
                 (kill-buffer benedict-chat--compose-buffer)))
             nil t)
-  (benedict-chat--ensure-thinking-invisibility)
-  (unless (assoc 'benedict-tool-details buffer-invisibility-spec)
-    (add-to-invisibility-spec 'benedict-tool-details))
+  (benedict-chat-fold-init-buffer)
   (let ((inhibit-read-only t))
     (erase-buffer)
     (insert (propertize

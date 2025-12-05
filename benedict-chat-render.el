@@ -10,6 +10,7 @@
 ;;; Code:
 
 (require 'subr-x)
+(require 'benedict-chat-fold)
 
 (defgroup benedict-chat-faces nil
   "Faces for Benedict Chat."
@@ -199,9 +200,9 @@ insert-after markers to work without swallowing subsequent blocks."
    "Render tool ITEM at point.
  Uses the 'Sentinel Pattern': regions exclude the trailing newline to allow
  insert-after markers to work without swallowing subsequent blocks."
-   (let ((start (point-marker))
-         (inhibit-read-only t))
-     ;; start marker stays type nil during insertion, will be set to t at end
+  (let ((start (point-marker))
+        (inhibit-read-only t))
+    ;; start marker stays type nil during insertion, will be set to t at end
      
      ;; Header
      (let ((header-start (point-marker))
@@ -224,13 +225,13 @@ insert-after markers to work without swallowing subsequent blocks."
        (plist-put item :header-end (copy-marker (1- (point)) t)))
      
      ;; Body
-     (let ((content-start (point-marker)))
+    (let ((content-start (point-marker)))
+      (set-marker-insertion-type content-start t)
        (insert (propertize (or (plist-get item :content) "")
                            'benedict-region-kind 'tool-ui))
        ;; Sentinel newline
        (insert (propertize "\n" 'benedict-region-kind 'tool-ui))
        
-       (set-marker-insertion-type content-start t)
        (plist-put item :content-start content-start)
        
        ;; Content end excludes sentinel
@@ -243,6 +244,7 @@ insert-after markers to work without swallowing subsequent blocks."
      (plist-put item :end (copy-marker (1- (point)) t))
      
      ;; Initial visibility
+     (benedict-chat-fold-ensure-tool item)
      (benedict-chat--update-tool-visibility item)))
 
 (defun benedict-chat--update-tool-header (item)
@@ -276,15 +278,7 @@ insert-after markers to work without swallowing subsequent blocks."
 
 (defun benedict-chat--update-tool-visibility (item)
   "Update body visibility for ITEM."
-  (let ((start (plist-get item :content-start))
-        (end (plist-get item :content-end))
-        (folded (plist-get item :tool-folded)))
-    (when (and start end (marker-position start))
-      (with-current-buffer (marker-buffer start)
-        (let ((inhibit-read-only t))
-          (if folded
-              (add-text-properties start end '(invisible benedict-tool-details))
-            (remove-text-properties start end '(invisible benedict-tool-details))))))))
+  (benedict-chat-fold-set-tool-folded item (plist-get item :tool-folded)))
 
 (defun benedict-chat--write-message-item-content (item content)
   "Replace ITEM's content region with CONTENT.

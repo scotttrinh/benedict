@@ -1,0 +1,26 @@
+#+TITLE: Folding Core work note
+#+DATE: 2025-12-05
+
+* Summary
+- Added =benedict-fold-core.el= with overlay and text-property backends plus API (fold-region, set-folded, resize, save-visibility, next/prev change). Added initial tests in =test/benedict-fold-core-test.el=.
+- Introduced chat folding adapter =benedict-chat-fold.el= that declares thinking (overlay) and tool body (text-property) specs, ensures folds on items, and syncs =:thinking-folded= / =:tool-folded= with the core.
+- Integrated chat adapter: thinking fold wiring in =benedict-chat.el=, tool fold wiring in =benedict-chat-render.el=, and added a new test for folded tool bodies.
+- Debugged the tool body fold test in the nix harness: visibility props disappeared after toggling because the test was toggling from point that drifted; restoring point to the header before toggling fixed it. Also normalized marker order and added read-only guards in the fold setter.
+
+* Issue encountered
+- Repeated failures in =benedict-chat-render-tool-folds-body= under =nix run .#test -- benedict-chat-render-tool-folds-body=: invisibility prop became nil after re-fold. Logging showed content markers reversing (start > end) when the fold was resized and point was off the header. Fixes:
+  - Normalize start/end ordering when applying text properties in =benedict-chat-fold-set-tool-folded=.
+  - Reposition point to the header before each toggle in the test.
+  - Ensure content markers use the correct insertion type and guard text-property mutations with =inhibit-read-only=.
+
+* Next steps
+- Add adapter coverage:
+  - Tests for thinking folds via the adapter (ensure overlay backend hiding, marker updates after streaming/resizing).
+  - Property-ish check: fold/unfold survives text insertion at boundaries for both backends.
+  - Verify =benedict-fold-core-save-visibility= restores buffer-invisibility-spec around mutations in chat.
+- Integration tasks:
+  - Use the adapter in remaining thinking/tool toggle call sites; centralize buffer init/teardown (buffer-invisibility-spec ownership).
+  - Wire presets/cyclers (show entry/children/subtree/all) atop the core API and bind in chat mode.
+  - Add isearch-open behavior and filter-buffer-substring stripping of fold properties in chat mode.
+- Harness follow-up:
+  - Ensure propcheck/flywire autoloads are available in the nix test derivation to avoid noisy autoload warnings during target runs.
