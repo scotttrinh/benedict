@@ -59,6 +59,11 @@ If DELETE is non-nil, delete the region after extracting it."
   (or (benedict-chat-fold--isearch-normalize-alias
        (get-text-property pos 'invisible))
       (cl-loop for ov in (overlays-at pos)
+               do (when-let ((start (overlay-get ov 'benedict-chat-content-start))
+                             (end (overlay-get ov 'benedict-chat-content-end))
+                             (s-pos (marker-position start))
+                             (e-pos (marker-position end)))
+                    (move-overlay ov s-pos e-pos))
                for spec = (overlay-get ov 'benedict-fold-core-spec)
                for alias = (and spec (benedict-fold-core-spec-alias spec))
                when (benedict-chat-fold--isearch-fold-alias-p alias)
@@ -129,6 +134,13 @@ If DELETE is non-nil, delete the region after extracting it."
                                     (overlay-get ov 'benedict-fold-core-spec))
                                    alias)))
                         (overlays-at pos)))
+             (_realigned (mapc (lambda (ov)
+                                 (when-let ((start (overlay-get ov 'benedict-chat-content-start))
+                                            (end (overlay-get ov 'benedict-chat-content-end))
+                                            (s-pos (marker-position start))
+                                            (e-pos (marker-position end)))
+                                   (move-overlay ov s-pos e-pos)))
+                               overlays))
              (existing (cl-find-if (lambda (entry)
                                      (and (eq (plist-get entry :kind) 'overlay)
                                           (benedict-chat-fold--isearch-entry-contains-p entry pos)))
@@ -197,6 +209,16 @@ Optional BACKEND overrides the default overlay backend."
     (when (and start end (marker-position start) (marker-position end))
       (cons start end))))
 
+(defun benedict-chat-fold--apply-marker-stickiness (item spec)
+  "Make ITEM's content markers match SPEC's stickiness."
+  (when-let* ((range (benedict-chat-fold--region item))
+              (start (car range))
+              (end (cdr range)))
+    (set-marker-insertion-type start
+                               (not (benedict-fold-core-spec-front-sticky spec)))
+    (set-marker-insertion-type end
+                               (benedict-fold-core-spec-rear-sticky spec))))
+
 (defun benedict-chat-fold--ensure (item key spec)
   "Ensure ITEM has a fold stored at KEY using SPEC.
 Returns the fold object or nil if boundaries are missing."
@@ -209,10 +231,18 @@ Returns the fold object or nil if boundaries are missing."
       (if (and fold (benedict-fold-core-fold-p fold))
           (progn
             (benedict-fold-core-resize fold start end)
-            fold)
+            (setq fold fold))
         (let ((created (benedict-fold-core-fold-region start end spec)))
           (plist-put item key created)
-          created)))))
+          (setq fold created)))
+      (when (and fold
+                 (eq (benedict-fold-core-spec-backend spec)
+                     benedict-fold-core-overlay-backend))
+        (let ((handle (benedict-fold-core-fold-handle fold)))
+          (when (overlayp handle)
+            (overlay-put handle 'benedict-chat-content-start (car range))
+            (overlay-put handle 'benedict-chat-content-end (cdr range)))))
+      fold)))
 
 (defun benedict-chat-fold-ensure-thinking (item)
   "Ensure ITEM has a thinking fold."
@@ -225,32 +255,40 @@ Returns the fold object or nil if boundaries are missing."
 (defun benedict-chat-fold-set-thinking-folded (item folded)
   "Set ITEM thinking fold to FOLDED."
   (plist-put item :thinking-folded folded)
+  (benedict-chat-fold--apply-marker-stickiness item benedict-chat-fold-thinking-spec)
   (when-let ((fold (benedict-chat-fold-ensure-thinking item)))
     (benedict-fold-core-set-folded fold folded)))
 
 (defun benedict-chat-fold-set-tool-folded (item folded)
   "Set ITEM tool body fold to FOLDED."
   (plist-put item :tool-folded folded)
-  (let ((range (benedict-chat-fold--region item))
-        (alias (benedict-fold-core-spec-alias benedict-chat-fold-tool-spec)))
+  (when-let ((range (benedict-chat-fold--region item)))
+    (let* ((raw-start (marker-position (car range)))
+           (raw-end (marker-position (cdr range))))
+      (when (> raw-start raw-end)
+        (set-marker (car range) raw-end)
+        (set-marker (cdr range) raw-start))))
+  (let ((alias (benedict-fold-core-spec-alias benedict-chat-fold-tool-spec)))
+    (benedict-fold-core-ensure-invisibility-entry benedict-chat-fold-tool-spec)
     (when-let ((fold (benedict-chat-fold-ensure-tool item)))
       (benedict-fold-core-set-folded fold folded))
-    (when range
-      (let* ((raw-start (marker-position (car range)))
-             (raw-end (marker-position (cdr range)))
-             (start (min raw-start raw-end))
-             (end (max raw-start raw-end)))
-        (when (> raw-start raw-end)
-          (set-marker (car range) start)
-          (set-marker (cdr range) end))
-        (let ((inhibit-read-only t))
-          (if folded
-              (add-text-properties start end `(invisible ,alias))
-            (remove-text-properties start end `(invisible ,alias))))))))
+    (when-let* ((range (benedict-chat-fold--region item))
+                (start (marker-position (car range)))
+                (end (marker-position (cdr range))))
+      (let ((inhibit-read-only t))
+        (if folded
+            (add-text-properties start end `(invisible ,alias))
+          (remove-text-properties start end `(invisible ,alias)))))))
 
 (defun benedict-chat-fold-update-thinking (item)
   "Refresh boundaries for ITEM thinking fold."
   (when-let ((fold (plist-get item :thinking-fold)))
+    (when-let* ((range (benedict-chat-fold--region item))
+                (start (marker-position (car range)))
+                (end (marker-position (cdr range))))
+      (when (and start end (>= (point) start) (> (point) end))
+        (set-marker (cdr range) (point))))
+    (benedict-chat-fold--apply-marker-stickiness item benedict-chat-fold-thinking-spec)
     (benedict-chat-fold-ensure-thinking item)
     (benedict-fold-core-set-folded fold (plist-get item :thinking-folded))))
 

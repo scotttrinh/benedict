@@ -31,3 +31,10 @@
 - Isearch handling tightened: added a targeted opener that only reveals the fold under the current match (works for overlay-backed thinking and text-property-backed tool bodies) and restores others. Thinking spec rear stickiness was relaxed to keep the overlay anchored when we rewrite ranges.
 - Test failure + fix: =benedict-chat-fold-isearch-opens-only-current-fold= was failing because the text-property fold stayed visible after jumping to the tool match. Root cause was that we only removed invisibility when first opening the range; subsequent openings were skipped if an entry already existed. Fix: always remove the invisibility properties for the text range, even when the entry is cached, and tighten range detection by walking outward instead of relying on property-change boundaries. Added logging in the test to capture fold state during isearch while debugging.
 - Progress: plan steps 1–3 remain done; Step 4 (integration) is largely wired; Step 5 (isearch/kill) is now in place for chat. Remaining work is presets/cyclers and buffer state handling (steps 6–7).
+- Manual test note: tool folding toggle indicators flip correctly, but the tool text stays visible instead of hiding; need to add more coverage and dig into why the text-property-backed fold isn't honoring invisibility on toggle.
+  - Investigation angles:
+    - Verify we reapply the invisibility alias when toggling text-property folds (property still on spec? buffer-invisibility-spec entry present?).
+    - Confirm marker ordering/range detection in =benedict-chat-fold-set-tool-folded= when point is off-header and during rewrites (resize, content replacement).
+    - Trace whether redisplay is skipping because existing props are identical; maybe we need a prop change or force-invisibility refresh.
+    - Check that the toggle uses the text-property path (not overlay) and that no overlay is shadowing the invisibility glyphs.
+    - Add tests that toggle from non-header points, after edits/rewrites, and across isearch/kill paths to catch visibility regressions.

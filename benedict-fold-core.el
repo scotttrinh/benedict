@@ -31,6 +31,18 @@ NAME is the registry key; ALIAS is the invisibility token used by Emacs."
 (defvar-local benedict-fold-core-backend nil
   "Buffer-local backend used for folding operations.")
 
+(defvar-local benedict-fold-core--required-invisibility-specs nil
+  "Fold specs whose invisibility aliases must stay registered in this buffer.")
+
+(defvar benedict-fold-core--buffer-invisibility-watcher-installed nil
+  "Non-nil when the invisibility watcher has been registered.")
+
+(defvar benedict-fold-core--repairing-invisibility nil
+  "Guard against recursive repairs from the invisibility watcher.")
+
+(defvar-local benedict-fold-core--pending-invisibility-repair nil
+  "Non-nil when buffer invisibility needs repair on the next command.")
+
 (defconst benedict-fold-core--overlay-backend-name 'overlay)
 (defconst benedict-fold-core--text-property-backend-name 'text-property)
 
@@ -70,6 +82,48 @@ Intended for tests."
         (cons alias ellipsis)
       alias)))
 
+(defun benedict-fold-core--ensure-invisibility-watcher ()
+  "Install the buffer invisibility watcher once."
+  (unless benedict-fold-core--buffer-invisibility-watcher-installed
+    (add-variable-watcher 'buffer-invisibility-spec
+                          #'benedict-fold-core--buffer-invisibility-watcher)
+    (setq benedict-fold-core--buffer-invisibility-watcher-installed t)))
+
+(defun benedict-fold-core--remember-invisibility-spec (spec)
+  "Track SPEC so its alias can be repaired if the buffer spec is clobbered."
+  (benedict-fold-core--ensure-invisibility-watcher)
+  (cl-pushnew spec benedict-fold-core--required-invisibility-specs
+              :test (lambda (a b)
+                      (eq (benedict-fold-core-spec-name a)
+                          (benedict-fold-core-spec-name b))))
+  (add-hook 'post-command-hook
+            #'benedict-fold-core--maybe-repair-invisibility
+            nil t))
+
+(defun benedict-fold-core--alias-present-p (spec)
+  "Return non-nil when SPEC's alias entry exists in `buffer-invisibility-spec'."
+  (let ((entry (benedict-fold-core--alias-entry spec)))
+    (or (member entry buffer-invisibility-spec)
+        (assoc (benedict-fold-core-spec-alias spec) buffer-invisibility-spec))))
+
+(defun benedict-fold-core--repair-invisibility ()
+  "Ensure tracked invisibility aliases exist in the current buffer."
+  (when (and benedict-fold-core--required-invisibility-specs
+             (not benedict-fold-core--repairing-invisibility))
+    (let ((benedict-fold-core--repairing-invisibility t))
+      (dolist (spec benedict-fold-core--required-invisibility-specs)
+        (benedict-fold-core--ensure-alias spec)))))
+
+(defun benedict-fold-core--maybe-repair-invisibility ()
+  "Repair invisibility entries when pending or missing."
+  (when benedict-fold-core--required-invisibility-specs
+    (when (or benedict-fold-core--pending-invisibility-repair
+              (cl-some (lambda (spec)
+                         (not (benedict-fold-core--alias-present-p spec)))
+                       benedict-fold-core--required-invisibility-specs))
+      (setq benedict-fold-core--pending-invisibility-repair nil)
+      (benedict-fold-core--repair-invisibility))))
+
 (defun benedict-fold-core--ensure-alias (spec)
   "Add SPEC's alias to `buffer-invisibility-spec' if missing."
   (benedict-fold-core--normalize-invisibility-spec)
@@ -84,7 +138,23 @@ Intended for tests."
 
 (defun benedict-fold-core-ensure-invisibility-entry (spec)
   "Ensure SPEC's alias entry exists in `buffer-invisibility-spec'."
+  (benedict-fold-core--remember-invisibility-spec spec)
   (benedict-fold-core--ensure-alias spec))
+
+(defun benedict-fold-core--buffer-invisibility-watcher (symbol _newval operation where)
+  "Repair invisibility aliases for buffers using fold specs when SYMBOL changes.
+Only reacts to SET operations in buffers that have tracked fold specs."
+  (when (and (eq symbol 'buffer-invisibility-spec)
+             (memq operation '(set let))
+             (bufferp where)
+             (not benedict-fold-core--repairing-invisibility))
+    (with-current-buffer where
+      (setq benedict-fold-core--pending-invisibility-repair t))))
+
+(defun benedict-fold-core-repair-invisibility ()
+  "Restore required invisibility entries for the current buffer."
+  (interactive)
+  (benedict-fold-core--repair-invisibility))
 
 ;; -------------------------------------------------------------------
 ;; Overlay backend
@@ -162,15 +232,18 @@ Intended for tests."
               (start (car range))
               (end (cdr range)))
     (benedict-fold-core--ensure-alias spec)
-    (if folded
-        (add-text-properties start end
-                             `(invisible ,(benedict-fold-core-spec-alias spec)
-                               front-sticky ,(benedict-fold-core-spec-front-sticky spec)
-                               rear-nonsticky ,(not (benedict-fold-core-spec-rear-sticky spec))))
-      (remove-text-properties start end
-                              `(invisible ,(benedict-fold-core-spec-alias spec)
-                                front-sticky ,(benedict-fold-core-spec-front-sticky spec)
-                                rear-nonsticky ,(not (benedict-fold-core-spec-rear-sticky spec))))))
+    (let ((inhibit-read-only t))
+      (if folded
+          (add-text-properties
+           start end
+           (list 'invisible (benedict-fold-core-spec-alias spec)
+                 'front-sticky (benedict-fold-core-spec-front-sticky spec)
+                 'rear-nonsticky (not (benedict-fold-core-spec-rear-sticky spec))))
+        (remove-text-properties
+         start end
+         (list 'invisible (benedict-fold-core-spec-alias spec)
+               'front-sticky (benedict-fold-core-spec-front-sticky spec)
+               'rear-nonsticky (not (benedict-fold-core-spec-rear-sticky spec)))))))
   fold)
 
 (defun benedict-fold-core--text-prop-folded-p (fold)
@@ -182,7 +255,8 @@ Intended for tests."
   (when-let* ((range (benedict-fold-core--text-prop--range fold))
               (start (car range))
               (end (cdr range)))
-    (remove-text-properties start end '(invisible nil front-sticky nil rear-nonsticky nil))))
+    (let ((inhibit-read-only t))
+      (remove-text-properties start end '(invisible nil front-sticky nil rear-nonsticky nil)))))
 
 (defun benedict-fold-core--text-prop-move (fold start end)
   (set-marker (benedict-fold-core--text-fold-start fold) start)
@@ -231,6 +305,7 @@ When FOLDED is non-nil, hide the region immediately (defaults to t)."
                 :handle handle
                 :start (copy-marker start)
                 :end (copy-marker end))))
+    (benedict-fold-core-ensure-invisibility-entry spec)
     (benedict-fold-core-set-folded fold (if (null folded) t folded))
     fold))
 
@@ -239,6 +314,8 @@ When FOLDED is non-nil, hide the region immediately (defaults to t)."
   (when (and fold (benedict-fold-core-fold-p fold))
     (let* ((backend (benedict-fold-core-fold-backend fold))
            (spec (benedict-fold-core-fold-spec fold)))
+      (benedict-fold-core--remember-invisibility-spec spec)
+      (benedict-fold-core--repair-invisibility)
       (funcall (benedict-fold-core-backend-set-folded backend)
                (benedict-fold-core-fold-handle fold)
                folded

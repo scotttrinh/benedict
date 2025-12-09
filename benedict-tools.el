@@ -135,8 +135,8 @@ via GLOBS, a list of strings passed as \"--glob\" arguments."
           ;; ripgrep exits 1 when no matches are found; treat it as success.
           (unless (member exit-code '(0 1))
             (signal 'benedict-error
-                    (format "Project search failed (rg exited %s) with args %S"
-                            exit-code command-args))))
+                    (format "Project search failed (rg exited %s) with args %S output %S"
+                            exit-code command-args (buffer-string)))))
         (goto-char (point-min))
         (let (matches stats-match-count)
           (while (not (eobp))

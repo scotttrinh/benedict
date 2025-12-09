@@ -2,8 +2,7 @@
 ;; Author: Benedict maintainers
 
 ;;; Commentary:
-;; Implements a non-streaming chat backend against the OpenRouter API using
-;; url-retrieve with retry/backoff and auth-source/env based credential lookup.
+;; Implements a chat backend against the OpenRouter API
 
 ;;; Code:
 

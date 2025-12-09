@@ -139,6 +139,7 @@
 (require 'benedict-provider-openrouter)
 (require 'benedict-provider-vercel)
 (require 'benedict-provider-fake)
+(require 'benedict-provider-ollama)
 
 (provide 'benedict)
 ;;; benedict.el ends here

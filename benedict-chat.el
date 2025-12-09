@@ -1334,7 +1334,6 @@ Also validates and normalizes :actions if present."
           (benedict-chat--refresh-tool-block item))
       (error
        (message "[Benedict] ERROR normalizing tool UI: %S" norm-err)
-       (message "[Benedict] Backtrace: %s" (backtrace-to-string (current-backtrace)))
        (error "Failed to update tool block: %s" (error-message-string norm-err))))))
 
 (defun benedict-chat--normalize-tool-id (tool-id)
@@ -1402,7 +1401,6 @@ Also validates and normalizes :actions if present."
        (message "[Benedict] Tool %s failed with error: %S (type: %s)" 
                 tool-id err (type-of err))
        (message "[Benedict] Error details: %s" (error-message-string err))
-       (message "[Benedict] Full backtrace: %s" (backtrace-to-string (current-backtrace)))
        (setq output (format "Tool error: %s" (error-message-string err)))))
     (message "[Benedict] Normalizing tool output for %s" tool-id)
     (let* ((normalized-output (benedict-chat--normalize-tool-output output))
@@ -1417,15 +1415,13 @@ Also validates and normalizes :actions if present."
              item result-metadata ui
              (benedict-chat--tool-result-content call text))
           (error
-           (message "[Benedict] ERROR updating tool block: %S" block-err)
-           (message "[Benedict] Backtrace: %s" (backtrace-to-string (current-backtrace))))))
+           (message "[Benedict] ERROR updating tool block: %S" block-err))))
       (message "[Benedict] Storing tool result for %s" tool-id)
       (condition-case hist-err
           (benedict-chat--history-store
            (benedict-chat--tool-result-history-entry tool-id call text result-metadata))
         (error
-         (message "[Benedict] ERROR storing tool result: %S" hist-err)
-         (message "[Benedict] Backtrace: %s" (backtrace-to-string (current-backtrace))))))))
+         (message "[Benedict] ERROR storing tool result: %S" hist-err))))))
 
 (defun benedict-chat--process-tool-calls (message tool-calls metadata)
   "Render TOOL-CALLS for MESSAGE and execute each tool using METADATA."
@@ -2734,6 +2730,7 @@ When INCLUDE-ERRORS is nil, skip entries flagged with :error metadata."
 (defun benedict-chat-cancel ()
   "Cancel the current autonomous loop or in-flight request."
   (interactive)
+  (benedict-chat--status-stop-timer)
   (setq benedict-chat--loop-canceled t)
   (when benedict-chat--pending-request
     (benedict-provider-abort benedict-chat--pending-request)

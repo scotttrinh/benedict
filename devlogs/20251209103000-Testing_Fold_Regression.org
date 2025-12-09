@@ -1,0 +1,24 @@
+#+TITLE: Testing fold regressions for tool visibility
+#+DATE: 2025-12-09
+
+* Goal
+- Close the test gaps that let the tool-body visibility regress (header disappeared, body stayed visible, read-only errors).
+- Make tests reflect real chat-buffer conditions: read-only, chat init hooks, header rewrites, and invisibility spec churn.
+
+* Current gaps
+- Most folding tests run in plain temp buffers (read-only nil), so =inhibit-read-only= bugs didn’t surface.
+- Header rewrites weren’t covered; content markers could drift into the header and expand the fold range.
+- The clobber/repair tests don’t exercise a real chat buffer with mode hooks and buffer locals.
+
+* Test additions (actionable)
+- **Read-only coverage**: Run folding ERT + propcheck cases with =buffer-read-only= t to mirror =benedict-chat-mode=.
+- **Full chat fixture**: Add a helper that initializes a chat buffer (via =benedict-chat--init-buffer= or =benedict-chat=), renders a tool item through the public render path, toggles from the header, and asserts:
+  - Header retains =benedict-region-kind= and no =invisible= property.
+  - Body gains/drops the tool =invisible= alias in sync with =:tool-folded=.
+- **Header rewrite regression**: ERT that toggles twice and checks markers: =:header-start= stays before =:content-start=; =:content-start/end= remain stable across header rewrites.
+- **Invisibility spec churn (real buffer)**: In a chat buffer, fold closed, clobber =buffer-invisibility-spec= to nil, call =benedict-fold-core-repair-invisibility=, then assert body is invisible and alias is present. Do this with =buffer-read-only= t.
+- **Isearch path**: In a read-only chat buffer with both thinking (overlay) and tool (text-property) folds, run the isearch open/close hooks and ensure they don’t leave the body exposed and that invisibility is restored.
+
+* Notes
+- Prefer the full chat fixture for new tests so we catch mode/local hooks.
+- Keep using the property-based clobber test, but wrap it in read-only and run the repair helper as part of the flow.

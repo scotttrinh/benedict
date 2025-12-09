@@ -249,18 +249,22 @@ insert-after markers to work without swallowing subsequent blocks."
 
 (defun benedict-chat--update-tool-header (item)
    "Refresh the header text for ITEM."
-   (let ((start (plist-get item :header-start))
-         (end (plist-get item :header-end)))
-     (when (and start end (marker-position start))
-       (with-current-buffer (marker-buffer start)
-         (let ((inhibit-read-only t)
+  (let ((start (plist-get item :header-start))
+        (end (plist-get item :header-end)))
+    (when (and start end (marker-position start))
+      (with-current-buffer (marker-buffer start)
+        (let* ((inhibit-read-only t)
                (text (benedict-chat--format-tool-header item))
-               (start-type (marker-insertion-type start)))
-            ;; Keep start anchored at the beginning while we rewrite.
-            (set-marker-insertion-type start nil)
-            ;; Delete header text and its sentinel newline
-            (delete-region start (1+ end))
-            (goto-char start)
+               (start-type (marker-insertion-type start))
+               (body-start (plist-get item :content-start))
+               (body-end (plist-get item :content-end))
+               (body-start-pos (and body-start (marker-position body-start)))
+               (body-end-pos (and body-end (marker-position body-end))))
+           ;; Keep start anchored at the beginning while we rewrite.
+           (set-marker-insertion-type start nil)
+           ;; Delete header text and its sentinel newline
+           (delete-region start (1+ end))
+           (goto-char start)
             ;; Re-insert header with same structure as render
             (insert (propertize text
                                'face 'benedict-chat-tool-header
@@ -274,7 +278,12 @@ insert-after markers to work without swallowing subsequent blocks."
             (insert (propertize "\n" 'benedict-region-kind 'header))
             ;; Restore start marker insertion type and update header-end
             (set-marker-insertion-type start start-type)
-            (plist-put item :header-end (copy-marker (1- (point)) t)))))))
+            (plist-put item :header-end (copy-marker (1- (point)) t))
+            ;; Restore body markers to their original positions
+            (when (and body-start-pos body-start)
+              (set-marker body-start body-start-pos))
+            (when (and body-end-pos body-end)
+              (set-marker body-end body-end-pos)))))))
 
 (defun benedict-chat--update-tool-visibility (item)
   "Update body visibility for ITEM."
