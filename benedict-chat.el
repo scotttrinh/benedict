@@ -9,6 +9,7 @@
 ;;; Code:
 
 (require 'cl-lib)
+(require 'json)
 (require 'subr-x)
 (require 'button)
 (require 'project)
@@ -1048,6 +1049,95 @@ This does not affect provider message history."
       (benedict-chat--tool-value-string arguments)
     "None"))
 
+(defconst benedict-chat--tool-error-arg-preview-limit 400
+  "Maximum length of the argument preview captured for tool errors.")
+
+(defconst benedict-chat--tool-error-data-preview-limit 400
+  "Maximum length of the error data preview captured for tool errors.")
+
+(defconst benedict-chat--tool-error-backtrace-limit 1600
+  "Maximum length of the backtrace string captured for tool errors.")
+
+(defun benedict-chat--truncate-string (text limit)
+  "Return TEXT truncated to LIMIT characters with an explicit marker."
+  (if (and text limit (> (length text) limit))
+      (concat (substring text 0 limit) "... [truncated]")
+    text))
+
+(defun benedict-chat--tool-error-stringify (value limit)
+  "Return VALUE printed safely and truncated to LIMIT characters."
+  (when value
+    (with-temp-buffer
+      (let ((print-circle t)
+            (print-level 6)
+            (print-length 20))
+        (condition-case err
+            (prin1 value (current-buffer))
+          (error
+           (insert (format "#<unprintable: %s>" (error-message-string err))))))
+      (benedict-chat--truncate-string (string-trim-right (buffer-string)) limit))))
+
+(defun benedict-chat--tool-error-backtrace ()
+  "Return a trimmed backtrace string for a tool error handler."
+  (condition-case _err
+      (let ((text (with-output-to-string (backtrace))))
+        (benedict-chat--truncate-string
+         (string-trim-right text)
+         benedict-chat--tool-error-backtrace-limit))
+    (error nil)))
+
+(defun benedict-chat--tool-error-details (tool-id call arguments err)
+  "Return a plist describing ERR for TOOL-ID CALL with ARGUMENTS."
+  (let* ((symbol (car-safe err))
+         (data (and (consp err) (cdr err)))
+         (message (error-message-string err)))
+    (delq nil
+          (list :type "tool_error"
+                :tool (benedict-chat--tool-name-string tool-id)
+                :call-id (when (plist-get call :id)
+                           (format "%s" (plist-get call :id)))
+                :message message
+                :symbol (when (symbolp symbol) (symbol-name symbol))
+                :data (benedict-chat--tool-error-stringify
+                       data benedict-chat--tool-error-data-preview-limit)
+                :arguments (benedict-chat--tool-error-stringify
+                            arguments benedict-chat--tool-error-arg-preview-limit)
+                :backtrace (benedict-chat--tool-error-backtrace)))))
+
+(defun benedict-chat--tool-error-json (details)
+  "Return DETAILS plist encoded as compact JSON."
+  (let (alist)
+    (while details
+      (let ((key (pop details))
+            (val (pop details)))
+        (when (and val (keywordp key))
+          (push (cons (substring (symbol-name key) 1) val) alist))))
+    (json-encode (nreverse alist))))
+
+(defun benedict-chat--tool-error-summary (tool-id details)
+  "Return a concise summary string for a tool failure."
+  (format "Tool %s failed: %s"
+          (benedict-chat--tool-name-string tool-id)
+          (or (plist-get details :message) "unknown error")))
+
+(defun benedict-chat--tool-error-ui-body (summary details)
+  "Return a human-friendly UI body for SUMMARY and DETAILS."
+  (let ((symbol (or (plist-get details :symbol) "unknown"))
+        (args (plist-get details :arguments))
+        (data (plist-get details :data))
+        (backtrace (plist-get details :backtrace))
+        (json (benedict-chat--tool-error-json details)))
+    (string-join
+     (delq nil
+           (list summary
+                 ""
+                 (format "Symbol: %s" symbol)
+                 (when args (format "Arguments: %s" args))
+                 (when data (format "Data: %s" data))
+                 (when backtrace (format "Backtrace:\n%s" backtrace))
+                 (format "JSON payload sent to model:\n%s" json)))
+     "\n")))
+
 (defun benedict-chat--tool-status-label (status)
   "Return STATUS normalized into a user-facing string."
   (if status
@@ -1360,6 +1450,9 @@ Also validates and normalizes :actions if present."
   (let* ((ui (and (listp value)
                   (plist-member value :ui)
                   (plist-get value :ui)))
+         (raw (if (and (listp value) (plist-member value :raw))
+                  (plist-get value :raw)
+                value))
          (text
           (cond
            ((and (listp value) (plist-member value :content))
@@ -1372,16 +1465,20 @@ Also validates and normalizes :actions if present."
            ((null value) "Tool returned no output.")
            (t (benedict-chat--tool-value-string value)))))
     (setq text (or text "Tool returned no output."))
-    (list :text text :ui ui :raw value)))
+    (list :text text :ui ui :raw raw)))
 
-(defun benedict-chat--tool-result-history-entry (tool-id call text metadata)
-  "Return history entry for TOOL-ID CALL result TEXT and METADATA."
-  (list :role 'tool
-        :name (benedict-chat--tool-name-string tool-id)
-        :tool-call-id (plist-get call :id)
-        :content text
-        :time (current-time)
-        :metadata metadata))
+(defun benedict-chat--tool-result-history-entry (tool-id call text metadata &optional raw)
+  "Return history entry for TOOL-ID CALL result TEXT and METADATA.
+RAW, when non-nil, is attached for debugging/forwarding."
+  (let ((entry (list :role 'tool
+                     :name (benedict-chat--tool-name-string tool-id)
+                     :tool-call-id (plist-get call :id)
+                     :content text
+                     :time (current-time)
+                     :metadata metadata)))
+    (when raw
+      (plist-put entry :raw raw))
+    entry))
 
 (defun benedict-chat--invoke-tool-call (call metadata item)
   "Execute CALL (plist) using METADATA and update ITEM."
@@ -1401,13 +1498,22 @@ Also validates and normalizes :actions if present."
        (message "[Benedict] Tool %s failed with error: %S (type: %s)" 
                 tool-id err (type-of err))
        (message "[Benedict] Error details: %s" (error-message-string err))
-       (setq output (format "Tool error: %s" (error-message-string err)))))
+       (let* ((details (benedict-chat--tool-error-details tool-id call arguments err))
+              (summary (benedict-chat--tool-error-summary tool-id details))
+              (json (benedict-chat--tool-error-json details))
+              (ui-body (benedict-chat--tool-error-ui-body summary details)))
+         (setq output (list :text (string-join (list summary json) "\n\n")
+                            :ui (list :body ui-body)
+                            :raw details)))))
     (message "[Benedict] Normalizing tool output for %s" tool-id)
     (let* ((normalized-output (benedict-chat--normalize-tool-output output))
            (text (plist-get normalized-output :text))
            (ui (plist-get normalized-output :ui))
+           (raw (plist-get normalized-output :raw))
            (result-metadata (benedict-chat--tool-call-metadata tool-id call status metadata)))
       (message "[Benedict] Normalized output: text=%s, ui=%S" (type-of text) (type-of ui))
+      (when (and (eq status 'failure) raw)
+        (plist-put result-metadata :error raw))
       (when item
         (message "[Benedict] Updating tool block for %s" tool-id)
         (condition-case block-err
@@ -1419,7 +1525,7 @@ Also validates and normalizes :actions if present."
       (message "[Benedict] Storing tool result for %s" tool-id)
       (condition-case hist-err
           (benedict-chat--history-store
-           (benedict-chat--tool-result-history-entry tool-id call text result-metadata))
+           (benedict-chat--tool-result-history-entry tool-id call text result-metadata raw))
         (error
          (message "[Benedict] ERROR storing tool result: %S" hist-err))))))
 

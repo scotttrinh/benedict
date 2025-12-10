@@ -1,0 +1,20 @@
+#+TITLE: Plan — Tool Error Handling
+#+DATE: [2025-12-09]
+#+AUTHOR: Benedict Agent
+
+* Context
+- Tool failures are currently collapsed to the string =Tool error: <message>=. We discard the error symbol, data, and backtrace, so downstream provider turns cannot self-correct from structured details.
+- Tool result metadata only includes =:status= and the tool id/call id; the tool history entry content is just text. The =:raw= slot in =benedict-chat--normalize-tool-output= ends up being the same terse string.
+- The provider payload builder therefore sends back only the short message to the model, limiting retry heuristics.
+
+* Plan
+- Encode richer failure payloads from =benedict-chat--invoke-tool-call=: capture =error-symbol=, =data=, and a trimmed backtrace, and preserve the original args when safe. Keep a user-facing message but store a structured plist for the model.
+- Plumb the structured failure into tool history entries and the provider-facing =:messages= (e.g., stringify JSON or add a tagged section) so the next LLM turn receives =tool_results= with detail it can reason about.
+- Update the tool UI to show a concise error summary by default with a toggle or folded detail for the long trace to avoid noisy buffers.
+- Add tests: a failing fake tool should yield a tool result that includes the error symbol/code, message, and a backtrace snippet; ensure the provider request builder surfaces the richer payload.
+
+* Progress
+- Tool errors now capture symbol/message/data/backtrace plus a safe argument preview; they are encoded as JSON alongside a concise summary for the model while metadata carries the structured plist.
+- Tool UI bodies render the summary, previews, backtrace snippet, and the JSON payload so humans can copy details without wading through raw traces in the header.
+- Tool history entries store the raw error payload and provider-bound content includes the JSON block, ensuring =build-request= feeds richer tool_results to the next turn.
+- Added async coverage to assert failing tools emit the structured payload and that provider requests include it for self-correction.

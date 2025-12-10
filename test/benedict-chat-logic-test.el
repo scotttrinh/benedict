@@ -186,6 +186,59 @@
                (funcall done (error-message-string err))
              (funcall done))))))))
 
+(ert-deftest-async benedict-chat-tool-error-includes-structured-payload (done)
+  "Tool failures capture structured details for the model and UI."
+  (benedict-test-with-bindings done
+      ((benedict-provider 'fake)
+       (benedict-provider-fake-latency-seconds 0.01)
+       (benedict-provider-fake-script
+        (list (list :type 'success
+                    :content ""
+                    :tool-calls (list (list :id "call-error"
+                                            :name 'demo-tool
+                                            :arguments '(:foo "bar"))))))
+       ((symbol-function benedict--prompt-for-approval) (lambda (&rest _args) t))
+       ((symbol-function benedict-chat--loop-step) (lambda (&rest _args) nil))
+       ((symbol-function benedict-tool-invoke)
+        (lambda (&rest _args)
+          (signal 'wrong-type-argument (list 'stringp 123)))))
+    (let ((buffer (generate-new-buffer " *Benedict Tool Error Payload*")))
+      (with-current-buffer buffer
+        (benedict-chat-mode)
+        (benedict-chat--init-buffer)
+        (benedict-chat--send-text "please call the failing tool"))
+      (run-at-time
+       0.5 nil
+       (lambda ()
+         (let (err)
+           (unwind-protect
+               (condition-case e
+                   (with-current-buffer buffer
+                     (let* ((tool-message
+                             (cl-find-if (lambda (message)
+                                           (eq (plist-get message :role) 'tool))
+                                         benedict-chat--messages))
+                            (content (and tool-message (plist-get tool-message :content)))
+                            (metadata (and tool-message (plist-get tool-message :metadata)))
+                            (request (benedict-chat--build-request))
+                            (tool-entry
+                             (cl-find-if (lambda (message)
+                                           (eq (plist-get message :role) 'tool))
+                                         (plist-get request :messages))))
+                       (should tool-message)
+                       (should (plist-get metadata :error))
+                       (should (string-match-p "\"type\":\"tool_error\"" content))
+                       (should (string-match-p "\"symbol\":\"wrong-type-argument\"" content))
+                       (should (string-match-p "\"backtrace\"" content))
+                       ;; Ensure follow-up requests carry the structured payload.
+                       (should tool-entry)
+                    (should (string-match-p "\"type\":\"tool_error\""
+                                            (plist-get tool-entry :content)))))
+              (error (setq err e)))
+            (when (buffer-live-p buffer)
+              (kill-buffer buffer)))
+          (funcall done err)))))))
+
 (ert-deftest benedict-chat-resolves-provider-override ()
   "Provider override takes precedence in resolution chain."
   (let ((benedict-provider 'fake)
