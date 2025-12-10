@@ -2,7 +2,7 @@
 ;; Author: Benedict maintainers
 
 ;;; Commentary:
-;; Adapts benedict-fold-core to chat buffers. Declares fold specs for
+;; Adapts benedict-fold-core to chat buffers.  Declares fold specs for
 ;; thinking blocks (overlay backend) and tool details (text-property
 ;; backend) and provides helpers to keep item plists in sync.
 

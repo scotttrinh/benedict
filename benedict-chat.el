@@ -333,7 +333,7 @@ Prompts the user to authorize extensions when limits are reached."
                  (> benedict-chat--loop-turn-count 0)
                  (= 0 (mod benedict-chat--loop-turn-count
                            limit-turns)))
-        (unless (y-or-n-p (format "Benedict has run %d autonomous steps. Continue? "
+        (unless (y-or-n-p (format "Benedict has run %d autonomous steps.  Continue? "
                                   benedict-chat--loop-turn-count))
           (setq continue nil)))
       
@@ -343,7 +343,7 @@ Prompts the user to authorize extensions when limits are reached."
                  benedict-chat--loop-start-time
                  (> (float-time (time-since benedict-chat--loop-start-time))
                     limit-time))
-        (unless (y-or-n-p (format "Time limit (%.1fs) reached. Continue? "
+        (unless (y-or-n-p (format "Time limit (%.1fs) reached.  Continue? "
                                   limit-time))
           (setq continue nil)
           ;; If continued, reset the timer to avoid prompting immediately again?
@@ -357,7 +357,7 @@ Prompts the user to authorize extensions when limits are reached."
         (let* ((usage (plist-get benedict-chat--telemetry :session-usage))
                (total (or (plist-get usage :total) 0)))
           (when (> total limit-tokens)
-            (unless (y-or-n-p (format "Token limit (%d) exceeded (current: %d). Continue? "
+            (unless (y-or-n-p (format "Token limit (%d) exceeded (current: %d).  Continue? "
                                       limit-tokens total))
               (setq continue nil)))))
       
@@ -365,7 +365,7 @@ Prompts the user to authorize extensions when limits are reached."
 
 (defun benedict-chat--check-repetition-guard (current-tool-calls history)
   "Return non-nil if CURRENT-TOOL-CALLS match the previous assistant message in HISTORY."
-  (let* ((assistants (cl-remove-if-not 
+  (let* ((assistants (cl-remove-if-not
                       (lambda (m) (eq (benedict-chat--normalize-role (plist-get m :role)) 'assistant))
                       history))
          ;; assistants is (current prev ...) because we are called after recording
@@ -1014,7 +1014,7 @@ When RICH is non-nil, include header-friendly hints."
   message)
 
 (defun benedict-chat--record-thinking (content metadata &rest properties)
-  "Record a thinking block with CONTENT and METADATA.
+  "Record a thinking block with CONTENT and METADATA.  PROPERTIES describe additional block hints.
 This does not affect provider message history."
   ;; TODO: Implement thinking block rendering in benedict-chat-render
   nil)
@@ -1253,7 +1253,7 @@ Also validates and normalizes :actions if present."
   (or (plist-get ui :body) ""))
 
 (defun benedict-chat--refresh-tool-block (item)
-  "Refresh ITEM header and content after UI or metadata changes."
+  "Refresh ITEM header and content when UI or metadata change."
   (let ((ui (plist-get item :ui)))
     (condition-case content-err
         (let ((body-str (benedict-chat--tool-ui-body-string ui)))
@@ -1354,7 +1354,7 @@ Also validates and normalizes :actions if present."
   (benedict-chat--apply-thinking-fold item))
 
 (defun benedict-chat--update-thinking-overlay (item)
-  "Refresh ITEM overlay boundaries after content changes."
+  "Refresh ITEM overlay boundaries after content change."
   (benedict-chat-fold-update-thinking item))
 
 ;; -------------------------------------------------------------------
@@ -1576,7 +1576,7 @@ RAW, when non-nil, is attached for debugging/forwarding."
           benedict-chat--thinking-temp-counter))
 
 (defun benedict-chat--register-thinking-item (id item)
-  "Register ITEM under identifier ID for later streaming updates."
+  "Register ITEM under identifier ID so streaming state can update later."
   (when id
     (unless (hash-table-p benedict-chat--thinking-items)
       (setq benedict-chat--thinking-items (make-hash-table :test 'equal)))
@@ -1649,7 +1649,7 @@ RAW, when non-nil, is attached for debugging/forwarding."
    (t nil)))
 
 (defun benedict-chat--ensure-thinking-item (detail metadata)
-  "Return the thinking item associated with DETAIL, creating it if needed."
+  "Return the thinking item associated with DETAIL and METADATA, creating it if needed."
   (let* ((id (or (plist-get detail :id)
                  (benedict-chat--next-thinking-temp-id)))
          (item (benedict-chat--lookup-thinking-item id)))
@@ -1997,7 +1997,7 @@ LANGUAGE is the identifier included in the fence (may be nil)."
                                rear-nonsticky t))))))
 
 (defun benedict-chat--insert-action-button (label action target)
-  "Insert button with LABEL that runs ACTION on TARGET."
+  "Insert button with LABEL to run ACTION on TARGET."
   (insert-text-button
    label
    'face 'benedict-chat-button
@@ -2108,7 +2108,7 @@ LANGUAGE is the identifier included in the fence (may be nil)."
     metadata))
 
 (defun benedict-chat--ensure-streaming-message (payload)
-  "Ensure a streaming assistant message exists in the buffer."
+  "Ensure a streaming assistant message exists in the buffer for PAYLOAD."
   (unless benedict-chat--streaming-message
     (let* ((metadata (benedict-chat--metadata
                       :provider (plist-get payload :provider)
@@ -2137,7 +2137,7 @@ LANGUAGE is the identifier included in the fence (may be nil)."
                   :metadata metadata)))))
 
 (defun benedict-chat--handle-provider-delta (payload)
-  "Handle structured PAYLOAD updates from the provider."
+  "Handle structured PAYLOAD update from the provider."
   (benedict-chat--telemetry-streaming payload)
   (let ((kind (plist-get payload :kind))
         (text (plist-get payload :text)))
@@ -2242,7 +2242,7 @@ LANGUAGE is the identifier included in the fence (may be nil)."
     (message "Benedict provider error: %s" content)))
 
 (defun benedict-chat--start-dispatch (request &optional retry)
-  "Send REQUEST through the provider. RETRY notes when replaying."
+  "Send REQUEST through the provider.  RETRY notes when replaying."
   (let* ((buffer (current-buffer))
          (provider-id (or (plist-get request :provider) benedict-provider))
          (provider-label (benedict-chat--provider-label provider-id)))
@@ -2292,7 +2292,7 @@ LANGUAGE is the identifier included in the fence (may be nil)."
   (benedict-chat--send-text text))
 
 (defun benedict-chat--send-text (text)
-  "Helper implementing the logic behind `benedict-chat-send-prompt'."
+  "Helper implementing the logic behind `benedict-chat-send-prompt'.  TEXT is the prompt to dispatch."
   (unless (derived-mode-p 'benedict-chat-mode)
     (user-error "Not in a Benedict chat buffer"))
   (when (string-blank-p text)

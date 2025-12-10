@@ -1,3 +1,5 @@
+;;; benedict-tools-test.el --- Tests for agent tools -*- lexical-binding: t; -*-
+
 (require 'ert)
 (require 'benedict-tools)
 

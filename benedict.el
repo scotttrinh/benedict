@@ -1,13 +1,13 @@
 ;;; benedict.el --- Emacs-first AI assistant  -*- lexical-binding: t; -*-
 ;; Author: Benedict maintainers
-;; Version: 0.1.0-pre
-;; Package-Requires: ((emacs "27.1") (lgr "0.3"))
+;; Version: 0.1.0pre
+;; Package-Requires: ((emacs "27.1") (lgr "0.3") (dash "2.26.0") (s "1.12.0") (markdown-mode "2.5"))
 ;; Keywords: tools, convenience, ai
 ;; URL: https://github.com/scotttrinh/benedict
 
 ;;; Commentary:
-;; Core package entry. Defines customization groups, faces, errors, and
-;; lightweight scaffolding used by early phases. User entry points live in
+;; Core package entry.  Defines customization groups, faces, errors, and
+;; lightweight scaffolding used by early phases.  User entry points live in
 ;; benedict-chat.el and minor mode commands in this file.
 
 ;;; Code:

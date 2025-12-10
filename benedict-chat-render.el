@@ -66,7 +66,7 @@
    "Keymap for tool action buttons.")
 
 (defun benedict-chat-tool-toggle (&optional event)
-   "Toggle tool details visibility at point."
+   "Toggle tool details visibility at point. EVENT is the mouse event that triggered the command."
    (interactive (list last-nonmenu-event))
    (when event (goto-char (posn-point (event-start event))))
    (let* ((item (get-text-property (point) 'benedict-chat-item)))
@@ -77,7 +77,7 @@
          (benedict-chat--update-tool-visibility item)))))
 
 (defun benedict-chat-tool-action-invoke (&optional event)
-   "Invoke the action handler at point."
+   "Invoke the action handler at point. EVENT is the mouse event that triggered the command."
    (interactive (list last-nonmenu-event))
    (when event (goto-char (posn-point (event-start event))))
    (let* ((handler (get-text-property (point) 'benedict-chat-action)))

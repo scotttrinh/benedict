@@ -62,18 +62,18 @@ takes no arguments and modifies `font-lock-beg' and `font-lock-end' dynamically.
                 font-lock-end new-end)
           t)))))
 
-(defun benedict-chat--enable-markdown-fontification-in-body ()
-  "Enable markdown-mode fontification only in regions marked as \='body."
-  ;; Borrow markdown-mode's keywords and syntax propertize function
-  (setq-local font-lock-defaults `(markdown-mode-font-lock-keywords
-                                   nil nil nil nil
-                                   (font-lock-multiline . t)
-                                   (font-lock-extend-region-functions . (benedict-chat--extend-region-body-only))))
-  
-  (setq-local syntax-propertize-function #'markdown-syntax-propertize)
-  
-  ;; Enable native code block fontification
-  (setq-local markdown-fontify-code-blocks-natively t))
+  (defun benedict-chat--enable-markdown-fontification-in-body ()
+    "Enable `markdown-mode` fontification only in regions marked as `'body."
+    ;; Borrow markdown-mode's keywords and syntax propertize function
+    (setq-local font-lock-defaults `(markdown-mode-font-lock-keywords
+                                     nil nil nil nil
+                                     (font-lock-multiline . t)
+                                     (font-lock-extend-region-functions . (benedict-chat--extend-region-body-only))))
+
+    (setq-local syntax-propertize-function #'markdown-syntax-propertize)
+
+    ;; Enable native code block fontification
+    (setq-local markdown-fontify-code-blocks-natively t))
 
 (define-derived-mode benedict-chat-mode special-mode "Benedict-Chat"
   "Major mode for Benedict chat buffers."

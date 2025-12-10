@@ -1,7 +1,6 @@
 ;;; benedict-flywire.el --- Agent frame and session management  -*- lexical-binding: t; -*-
 ;; Author: Benedict maintainers
 ;; Version: 0.1.0-pre
-;; Package-Requires: ((emacs "27.1") (flywire "0.1"))
 ;; Keywords: tools, convenience, ai
 ;; URL: https://github.com/scotttrinh/benedict
 

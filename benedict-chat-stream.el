@@ -36,7 +36,7 @@ Currently inserts immediately."
           (insert (propertize text 'benedict-region-kind 'body)))))))
 
 (defun benedict-chat--apply-buffered-faces (stream)
-  "Apply any buffered faces and reset state."
+  "Apply any buffered faces held by STREAM and reset state."
   (let ((start (plist-get stream :content-start))
         (end (plist-get stream :content-end)))
     (when (and start end (marker-buffer start))
