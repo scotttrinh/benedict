@@ -16,40 +16,6 @@ Working notes for future agents contributing to Benedict. This doc explains our 
   - This uses macOS `stat` to read the real creation time (`%SB`) and ensures distinct prefixes even when multiple files are created the same minute.
 - If you find yourself stuck with syntax issues, primarily issues with balancing parentheses, please summarize what you're trying to do, stop the agentic loop, and ask for help from the user.
 
-## Local Dev Environment (Doom Emacs)
-
-Choose one of these setups. Option 1 is fastest for iteration.
-
-1) Add repo to load-path (recommended during WIP)
-- In `~/.config/doom/config.el`:
-  ```elisp
-  (add-to-list 'load-path "/Users/scotttrinh/github.com/scotttrinh/benedict")
-  (use-package! benedict
-    :commands (benedict-chat benedict-mode))
-  ```
-- Reload Doom: `M-x doom/reload` (or restart Emacs).
-
-2) Symlink into straight's repos (integrated with Doom builds)
-- Shell:
-  ```sh
-  ln -s ~/github.com/scotttrinh/benedict \
-        ~/.config/emacs/.local/straight/repos/benedict
-  ```
-- In `~/.config/doom/packages.el`:
-  ```elisp
-  (package! benedict :recipe (:local-repo "benedict"))
-  ```
-- In `~/.config/doom/config.el`:
-  ```elisp
-  (use-package! benedict
-    :commands (benedict-chat benedict-mode))
-  ```
-- Run `doom sync`, then restart Emacs (or `M-x doom/reload`).
-
-Tips
-- For fast iteration, Option 1 avoids native-comp latency.
-- When using `:commands`, ensure interactive entry points are autoloaded (see below).
-
 ## Elisp Conventions (Project-Specific)
 
 - Headers & lexical-binding
@@ -79,17 +45,6 @@ Tips
 - Docs & comments
   - Write helpful docstrings and minimal comments before complex blocks. Keep code self-explanatory.
 
-## Provider & Tools (Early Phases)
-
-- Provider interface (Phase 0/1 sketch)
-  - Struct or plist carrying `:id`, `:name`, `:send`, `:capabilities`, `:cancel`.
-  - Phase 1 uses an echo provider (local, no network) to keep iteration fast.
-- Tool registry (Phase 1 skeleton)
-  - Minimal register/list/call with simple schema and approval placeholders.
-  - Approval policy values: `auto`, `confirm`, `always` (no-op or stub UI in Phase 1).
-- Security posture (carry through phases)
-  - Keys via `auth-source` first, env var fallback. Never write secrets to disk. Redact in logs.
-
 ## Testing & Quality Gates
 
 ### Nix Setup: Reproducible Dependencies
@@ -107,19 +62,6 @@ The `flake.nix` file defines a reproducible testing environment with Emacs and a
     nix run .#test -- benedict-chat-stream-insertion
     ```
   - **Do not** call `ert-run-tests-batch(-and-exit)` inside individual test files; the runner in `test/run-tests.el` loads all `*-test.el` files and handles exit status.
-
-- **Without Nix** (manual in a dev shell):
-  ```sh
-  nix develop
-  emacs -Q --batch -l test/run-tests.el
-  ```
-
-- **Interactive debugging** (in Emacs):
-  ```sh
-  emacs -Q
-  M-x load-file test/my-test.el
-  M-x ert RET my-test-name RET
-  ```
 
 - **When adding new tests**: Ensure they run in batch mode (no interactive prompts, no buffers left behind).
 
@@ -243,39 +185,17 @@ Use `cl-letf` to dynamically rebind functions and avoid side effects:
 
 This isolates tests, improves speed, and makes assertions deterministic. Functions are restored automatically after the `let` block exits.
 
-### Markers, overlays, and folding (read this before editing chat UI)
-
-- Whenever you insert complex UI like folded "Thinking" blocks, store `:content-start` and `:content-end` as markers that use **correct stickiness**. For example, thinking content should use a front-non-sticky marker at the start and a rear-sticky marker for the end so streaming append operations do not invert the region.
-- Capture `:content-end` immediately after inserting the block's payload, then keep that marker front-sticky while you append closing dividers/newlines. Once the scaffolding is in place, flip it back to rear-sticky so later updates extend the overlay without swallowing the next message.
-- If a block installs an overlay, **always** update it whenever you mutate the block's text. Forgetting to move the overlay leads to `args-out-of-range` errors once Emacs tries to adjust it during timers.
-- When regenerating content (e.g., final reasoning replaces streamed chunks), delete text between the stored markers rather than rewriting the entire block; this keeps downstream markers (buttons, block dividers) valid.
-- New streaming UI must survive timers firing after the buffer is killed. Audit every `run-at-time` callback to guard with `(buffer-live-p buffer)` before touching markers.
-- When rewriting folded headers (tool/plan toggles), temporarily make the header-start marker non-sticky so it stays anchored at the line start; otherwise it can drift into the header text and duplicating headers on subsequent toggles.
-
-## How To Manually Test Right Now
-
-- Enable `benedict-mode` and run `C-c C-b c` to open chat (`M-x benedict-chat` also works).
-- In the chat buffer, `C-c C-s` prompts for input and inserts an echo response.
-- Tool demo (eval):
-  ```elisp
-  (require 'benedict-tools)
-  (benedict-tool-invoke 'uppercase '(:text "foo"))  ;; => "FOO"
-  ```
-
 ## Devlogs: When To Write Notes
 
 - After any discrete task lands (keybinding fix, autoload change, new file skeleton), add a `Notes_*.org` entry summarizing:
   - Problem, root cause, fix, verification steps, and any follow-ups.
 - Keep entries short and scan-friendly; include commands or Emacs forms that helped verify.
 
-## Commit/PR Messaging (Future)
+## Commit/PR Messaging
 
 - Prefer messages that explain the "why" more than the "what".
 - Group changes by phase/task; avoid mixing planning docs with code changes unless directly related.
 
-## Common Pitfalls
+## Example repos
 
-- Autoload failures: ensure `benedict.el` autoloads interactive commands from other files.
-- Reserved key sequences: don't bind `C-c <letter>`.
-- Load-path issues: confirm the working copy is in `load-path` during WIP.
-- Over-eager `require`: avoid heavy `require` at top-level if it creates cycles; autoload where possible.
+If needed, there is a set of repos that are used by the current user in their Doom Emacs setup symlinked into `./example-emacs-repos` that you can use to look at the source code of well-written Emacs packages. Of special note is `org-mode` which has a lot of similar patterns to what we're doing here.
