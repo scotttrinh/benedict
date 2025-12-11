@@ -1,0 +1,103 @@
+#+TITLE: Notes — Task Pipelines, Phases, and Compact Handoffs
+#+AUTHOR: Benedict maintainers
+#+LANGUAGE: en
+#+OPTIONS: toc:nil num:nil ^:{}
+
+* Context
+Earlier notes on [[file:20251118150500-Notes_Phase_4_Context_Compose.org][Phase 4: Context & Compose]] focused on *what* we send to models (context slices, compose headers, profiles) and how to compact raw buffer state into something deliberate.
+
+This entry zooms out one level: instead of just compacting context, we ask how Benedict should represent *tasks* as pipelines of phases with artifacts between them. The goal is to make flows like "Research → Plan → Implement" (RPI) feel natural *without* baking RPI into the core or locking out more experimental harness engineering.
+
+* Working mental model: CI-style pipelines
+A helpful analogy: a Benedict task is like a CI job.
+
+- A *task* is the job the human cares about ("add RPI support to Benedict", "debug flaky test").
+- A *phase* is a step in that job (research, plan, implement, review, etc.).
+- An *artifact* is the structured output of a phase (problem brief, context anchors, plan, decision log, test results, handoff summary).
+- A *run* is one execution of a phase (possibly with retries or an agent loop).
+- A *harness* is the runner that decides what each phase sees: which artifacts are available, which tools are allowed, and how we assemble the prompt.
+
+CI gets one property very right: each step starts from a fresh shell environment, but artifacts (artifacts directory, caches) bridge the gap. For Benedict we probably want the same: *fresh model context per phase/run, shared artifacts across phases*.
+
+* Phases and artifacts as first-class abstractions
+Rather than baking "Research", "Plan", and "Implement" into Benedict, the useful abstraction seems to be:
+
+- *Task*
+  - Long-lived unit of work; tied to a chat buffer in the simplest case.
+  - Has an ID, a human-readable title, and a status/phase.
+- *Phase*
+  - Just a symbolic label like =research=, =plan=, =implement=, =review=, =debug=.
+  - Each phase can have:
+    - A default profile or profile hints.
+    - A *prompt builder*: a function that, given a task + artifacts + recent messages + context slices, constructs the provider request (messages, tools, limits).
+    - Optional constraints (tool allowlist, autonomy budget, safety knobs).
+  - Phase ordering is a property of a *pipeline*, not the core. RPI is one pipeline over generic phases.
+- *Artifact*
+  - Typed, immutable pieces of state produced by phases.
+  - Examples: =:problem-brief=, =:research-summary=, =:anchors=, =:plan=, =:decision-log=, =:test-results=, =:handoff=.
+  - Minimal shape: =id=, =task-id=, =phase=, =kind=, and a =payload= (string or plist), plus optional metadata for display.
+- *Run*
+  - One "agentic segment" of work inside a chat.
+  - Ties together: task, phase, profile, the chat items that belong to that run, and the artifacts it consumed/produced.
+- *Harness*
+  - A strategy for walking phases and runs.
+  - For each send, selects a phase, picks which artifacts to consume, and calls the phase's prompt builder.
+  - May enforce or recommend phase order (RPI) but does not have to.
+
+With these primitives, RPI becomes "just" one harness configuration rather than a special case.
+
+* Single chat, multiple model contexts
+One design pressure is that humans experience "research + planning + implementation" as a single effort and want a single Benedict chat buffer as the narrative home for that work. Meanwhile, model calls behave better when we limit context intentionally.
+
+The compromise: *a single visible chat, multiple synthetic model contexts built per run*.
+
+- The chat buffer remains a linear transcript with occasional markers ("Phase: Research → Plan", "New agent run started").
+- Internally, each run has a logical boundary: which items belong to it, which phase/profile it used, which artifacts it consumed.
+- When building a provider request, the harness can:
+  - Ignore raw research chatter and instead feed the =:research-summary= + =:anchors= artifacts into the planning phase.
+  - Ignore long plan discussions and feed only the =:plan= summary + anchors + a short tail of implementation messages into the implementing phase.
+- This is the "fresh shell with shared artifacts" property: each call sees a compact, purpose-built context built from artifacts and a short local history, not the whole buffer.
+
+This feels like the right level of abstraction for other advanced harness tricks too (debate, speculative planning, tree-of-thought, etc.): they all boil down to running more phases and manufacturing more artifacts.
+
+* Keeping RPI optional and future-proof
+The premise is that Benedict should make RPI-style flows *easy* but not mandatory. That suggests a few design constraints:
+
+- Do *not* hard-code RPI names or ordering into the core; store generic phase labels and let pipelines define sequences.
+- Make prompt builders pluggable: given the same set of artifacts, different harnesses can build very different prompts.
+- Keep artifacts and runs keyed on a logical =task-id=, not strictly on a specific chat buffer, so future work can move tasks across buffers or spawn new chats while reusing artifacts.
+- Treat "flat chat" (current behavior) as one trivial harness: no phases, no artifacts, just raw chat + context slices.
+
+This keeps room for more experimental harness engineering:
+- debate-style agents that generate and rank competing plans;
+- speculative execution flows (generate plan branches, then choose one);
+- CI-mirroring flows (spec → tests → impl → review → deploy) that reuse the same task/phase/artifact/run primitives.
+
+* Open questions
+Some questions to keep in mind before turning this into an implementation plan:
+
+- *Storage and lifetime*
+  - Where do task/phase/artifact objects live? Buffer-local only, or also persisted (e.g., Org subtrees, JSON sidecar files)?
+  - How do we garbage-collect old artifacts so a long-lived chat does not accumulate unbounded metadata?
+- *UI and discoverability*
+  - How do we surface "current phase" and "current task" in the chat UI without clutter?
+  - What are good commands for humans who want to drive phases manually ("start research", "summarize research into plan handoff", "start implementation")?
+- *Autonomy and safety*
+  - How much phase progression should be automated by a harness vs. explicitly confirmed by the user?
+  - How do per-phase autonomy budgets (max turns/time/tokens) interact with the existing agent loop safeguards?
+- *Tooling integration*
+  - How should flywire sessions and agent-frame isolation map onto phases (e.g., research/plan mostly read-only, implement phase with stronger safeguards)?
+  - How do existing tools (project search, propose-edit, test runner) advertise which phases they are appropriate for?
+- *Testing and ergonomics*
+  - What is the smallest slice of this abstraction we can prototype in tests first (e.g., a fake harness that creates =:plan= artifacts for one task), before wiring real UI?
+  - How do we ensure that flat "just answer this question" usage remains simple and does not force users to think about tasks and phases unless they want to?
+
+* Tentative point of view
+The emerging stance is:
+
+- Benedict should grow a *task pipeline* abstraction built from generic phases, artifacts, runs, and harnesses.
+- RPI is a compelling first harness to build on top, but the core should remain agnostic about specific phase names.
+- Single-chat/multiple-context behavior should be modeled as a harness concern: one visible transcript, many synthetic prompts built from shared artifacts.
+- Handoffs are best treated as artifacts, not modes, which keeps the door open for a wide range of advanced context engineering patterns.
+
+Next steps will likely involve sketching concrete Elisp shapes for tasks/phases/artifacts, deciding how much of this state is buffer-local vs. persisted, and then prototyping a very small RPI-like harness over the existing =benedict-chat= request-building path.
