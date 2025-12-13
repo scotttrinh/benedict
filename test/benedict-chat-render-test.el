@@ -71,14 +71,14 @@
 (ert-deftest benedict-chat-render-tool-toggle-does-not-duplicate-header ()
   "Toggling tool visibility should not clone the header line."
   (with-temp-buffer
-    (let* ((item (list :metadata (list :status 'success)
-                       :tool-call (list :name 'fold-me)
-                       :content "Body"
-                       :tool-folded t))
-           (label (benedict-chat--tool-name-string (plist-get (plist-get item :tool-call) :name))))
-      (benedict-chat--render-tool-item item)
-      ;; Toggle open then closed
-      (goto-char (plist-get item :header-start))
+	(let* ((item (list :metadata (list :status 'success)
+	                       :tool-call (list :name 'fold-me)
+	                       :content "Body"
+	                       :tool-folded t))
+	           (label "fold-me"))
+	      (benedict-chat--render-tool-item item)
+	      ;; Toggle open then closed
+	      (goto-char (plist-get item :header-start))
       (benedict-chat-tool-toggle)
       (benedict-chat-tool-toggle)
       ;; Header markers should still wrap the header text

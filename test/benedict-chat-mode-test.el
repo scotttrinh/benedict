@@ -22,7 +22,9 @@ and `syntax-propertize-function' is valid."
     ;; Force font-lock to be active
     (font-lock-mode 1)
     
-    (benedict-chat--stream-init (current-buffer))
+    (let ((item (list :content-start (copy-marker (point-min) nil)
+                      :content-end (copy-marker (point-min) t))))
+      (benedict-chat--stream-init (current-buffer) item))
     
     ;; Insert enough text to potentially trigger font-lock extension
     (benedict-chat--stream-insert-delta benedict-stream-state "Some text\n")

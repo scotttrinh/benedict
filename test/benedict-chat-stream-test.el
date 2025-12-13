@@ -6,11 +6,14 @@
 (ert-deftest benedict-chat-stream-insertion ()
   "Test streaming insertion into a buffer."
   (with-temp-buffer
-    (benedict-chat--stream-init (current-buffer))
+    (let* ((item (list :content-start (copy-marker (point-min) nil)
+                       :content-end (copy-marker (point-min) t))))
+      (benedict-chat--stream-init (current-buffer) item))
     (should benedict-stream-state)
     
-    (let ((start (plist-get benedict-stream-state :content-start))
-          (end (plist-get benedict-stream-state :content-end)))
+    (let* ((item (plist-get benedict-stream-state :item))
+           (start (plist-get item :content-start))
+           (end (plist-get item :content-end)))
       (should (markerp start))
       (should (markerp end))
       (should (= (marker-position start) (point-min)))
@@ -34,9 +37,7 @@
            (item (list :kind 'message :message message)))
       (plist-put message :item item)
       (benedict-chat--render-message-item item "[ASSISTANT] streaming" "")
-      (benedict-chat--stream-init (current-buffer)
-                                  (plist-get item :content-start)
-                                  (plist-get item :content-end))
+      (benedict-chat--stream-init (current-buffer) item)
       (benedict-chat--stream-insert-delta benedict-stream-state "Hi")
       (should (string-match-p "Hi" (buffer-string)))
       (should (eq (get-text-property (marker-position (plist-get item :content-start))
