@@ -9,7 +9,31 @@
   outputs = { self, nixpkgs, flake-utils }:
     flake-utils.lib.eachDefaultSystem (system:
       let
-        pkgs = nixpkgs.legacyPackages.${system};
+        easkOverlay = (final: prev: {
+          eask-cli = prev.eask-cli.overrideAttrs (old:
+            let
+              src' = prev.fetchFromGitHub {
+                owner = "scotttrinh";
+                repo = "eask-cli";
+                rev = "14d9da6d7751dd605f0d31e26e224fe0ef58c537";
+                hash = "sha256-ZA20pNiyw8hyGtYCUIRq2JmHMlnqAnhzzP3jPdALz8M=";
+              };
+              depsHash = "sha256-IIAG1ITEJ5Q0Ox0tZp6dM5DvahtB1qUFH54UUyOzjg4=";
+            in {
+            version = "0.11.8-fix-elsa-format-string";
+            src = src';
+            npmDepsHash = depsHash;
+            npmDeps = prev.fetchNpmDeps {
+              src = src';
+              hash = depsHash;
+            };
+          });
+        });
+
+        pkgs = import nixpkgs {
+          inherit system;
+          overlays = [ easkOverlay ];
+        };
 
         emacs = pkgs.emacs;
         eask = pkgs.eask-cli;

@@ -7,7 +7,7 @@
 (keywords "tools" "convenience" "ai")
 (files "benedict.el" "benedict-*.el" "test/*.el")
 
-(depends-on "emacs")
+(depends-on "emacs" "27.1")
 (depends-on "dash")
 (depends-on "s")
 (depends-on "lgr")
