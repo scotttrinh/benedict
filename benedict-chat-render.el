@@ -101,6 +101,80 @@ MESSAGE must contain :role and :content."
                         'benedict-region-kind 'body))
     (insert (propertize "\n" 'benedict-region-kind 'header))))
 
+(defun benedict-chat--render-message-item (item header content)
+  "Render chat message ITEM with HEADER and CONTENT at point.
+Sets markers in ITEM for :start, :header-start, :header-end,
+:content-start, :content-end, and :end.
+
+HEADER should be a single line string without a trailing newline.
+CONTENT may include newlines and will be marked as a body region."
+  (let ((start (point-marker))
+        (inhibit-read-only t))
+    ;; Header
+    (let ((header-start (point-marker)))
+      (insert (propertize header
+                          'face 'benedict-chat-header
+                          'benedict-region-kind 'header
+                          'benedict-chat-item item))
+      (insert (propertize "\n" 'benedict-region-kind 'header))
+      (set-marker-insertion-type header-start t)
+      (plist-put item :header-start header-start)
+      (plist-put item :header-end (copy-marker (1- (point)) t)))
+
+    ;; Body
+    (let ((content-start (point-marker)))
+      (insert (propertize (or content "")
+                          'face nil
+                          'benedict-region-kind 'body))
+      (insert (propertize "\n" 'benedict-region-kind 'header))
+      (set-marker-insertion-type content-start nil)
+      (plist-put item :content-start content-start)
+      ;; End marker sits before the sentinel newline, enabling stream appends.
+      (plist-put item :content-end (copy-marker (1- (point)) t)))
+
+    (set-marker-insertion-type start t)
+    (plist-put item :start start)
+    (plist-put item :end (copy-marker (1- (point)) t))))
+
+(defun benedict-chat--update-message-header (item header)
+  "Refresh ITEM header text to HEADER."
+  (let ((start (plist-get item :header-start))
+        (end (plist-get item :header-end)))
+    (when (and start end (marker-position start))
+      (with-current-buffer (marker-buffer start)
+        (let* ((inhibit-read-only t)
+               (start-type (marker-insertion-type start)))
+          (set-marker-insertion-type start nil)
+          ;; Delete header text, leaving its sentinel newline in place so body
+          ;; markers (which start after the newline) don't collapse onto START.
+          (delete-region start end)
+          (goto-char start)
+          (insert (propertize header
+                              'face 'benedict-chat-header
+                              'benedict-region-kind 'header
+                              'benedict-chat-item item))
+          ;; `end' already points at the existing sentinel newline and will move
+          ;; forward as we insert the new header.
+          (set-marker-insertion-type start start-type))))))
+
+(defun benedict-chat--write-message-item-body (item content)
+  "Replace ITEM body region with CONTENT."
+  (let ((start (plist-get item :content-start))
+        (end (plist-get item :content-end)))
+    (when (and start end (marker-position start) (marker-position end))
+      (with-current-buffer (marker-buffer start)
+        (let ((inhibit-read-only t)
+              (start-type (marker-insertion-type start)))
+          (save-excursion
+            (set-marker-insertion-type start nil)
+            (goto-char (marker-position start))
+            (delete-region (marker-position start) (marker-position end))
+            (insert (propertize (or content "")
+                                'face nil
+                                'benedict-region-kind 'body))
+            (set-marker end (point))
+            (set-marker-insertion-type start start-type)))))))
+
 (defun benedict-chat--render-block (item header face)
   "Render a block ITEM with HEADER and FACE at point.
 Sets markers in ITEM for :start, :header-start, :header-end,
@@ -255,35 +329,24 @@ insert-after markers to work without swallowing subsequent blocks."
       (with-current-buffer (marker-buffer start)
         (let* ((inhibit-read-only t)
                (text (benedict-chat--format-tool-header item))
-               (start-type (marker-insertion-type start))
-               (body-start (plist-get item :content-start))
-               (body-end (plist-get item :content-end))
-               (body-start-pos (and body-start (marker-position body-start)))
-               (body-end-pos (and body-end (marker-position body-end))))
-           ;; Keep start anchored at the beginning while we rewrite.
-           (set-marker-insertion-type start nil)
-           ;; Delete header text and its sentinel newline
-           (delete-region start (1+ end))
-           (goto-char start)
-            ;; Re-insert header with same structure as render
+               (start-type (marker-insertion-type start)))
+          (save-excursion
+            ;; Keep start anchored at the beginning while we rewrite.
+            (set-marker-insertion-type start nil)
+            ;; Delete header text only; keep the sentinel newline so the tool
+            ;; body markers (which start after the newline) remain stable.
+            (delete-region start end)
+            (goto-char start)
+            ;; Re-insert header with same structure as render.
             (insert (propertize text
-                               'face 'benedict-chat-tool-header
-                               'benedict-region-kind 'header
-                               'benedict-chat-item item
-                               'keymap benedict-chat-tool-toggle-map
-                               'mouse-face 'highlight))
-            ;; Re-render action buttons on same line
+                                'face 'benedict-chat-tool-header
+                                'benedict-region-kind 'header
+                                'benedict-chat-item item
+                                'keymap benedict-chat-tool-toggle-map
+                                'mouse-face 'highlight))
+            ;; Re-render action buttons on same line.
             (benedict-chat--render-tool-actions item)
-            ;; Sentinel newline
-            (insert (propertize "\n" 'benedict-region-kind 'header))
-            ;; Restore start marker insertion type and update header-end
-            (set-marker-insertion-type start start-type)
-            (plist-put item :header-end (copy-marker (1- (point)) t))
-            ;; Restore body markers to their original positions
-            (when (and body-start-pos body-start)
-              (set-marker body-start body-start-pos))
-            (when (and body-end-pos body-end)
-              (set-marker body-end body-end-pos)))))))
+            (set-marker-insertion-type start start-type)))))))
 
 (defun benedict-chat--update-tool-visibility (item)
   "Update body visibility for ITEM."

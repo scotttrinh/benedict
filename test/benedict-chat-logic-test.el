@@ -8,6 +8,23 @@
 
 (defvar benedict-provider 'fake)
 
+(ert-deftest benedict-chat-telemetry-accumulates-session-seconds ()
+  "Completed requests add to session seconds; errors do not."
+  (let ((buffer (generate-new-buffer " *Benedict Telemetry Seconds*")))
+    (unwind-protect
+        (with-current-buffer buffer
+          (benedict-chat-mode)
+          (benedict-chat--init-buffer)
+          (should (equal (plist-get benedict-chat--telemetry :session-seconds) 0.0))
+          (benedict-chat--telemetry-begin (list :provider 'fake))
+          (benedict-chat--telemetry-finish 'complete (list :latency 1.25))
+          (should (= (plist-get benedict-chat--telemetry :session-seconds) 1.25))
+          (benedict-chat--telemetry-begin (list :provider 'fake))
+          (benedict-chat--telemetry-finish 'error (list :status 500 :error t))
+          (should (= (plist-get benedict-chat--telemetry :session-seconds) 1.25)))
+      (when (buffer-live-p buffer)
+        (kill-buffer buffer)))))
+
 (ert-deftest benedict-chat-resolves-provider-and-model ()
   "Profile/provider/model resolution follows the configured precedence."
   (let ((benedict-provider 'fake)

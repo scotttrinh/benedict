@@ -83,7 +83,9 @@
         (benedict-test--last-y-or-n-prompt nil))
     (cl-letf (((symbol-function 'y-or-n-p) #'benedict-test--mock-y-or-n-p))
       (should (benedict-chat--check-loop-constraints))
-      (should (string-match-p "Time limit.*reached" benedict-test--last-y-or-n-prompt)))))
+      (should (string-match-p "Time limit.*reached" benedict-test--last-y-or-n-prompt))
+      ;; Accepting the prompt should reset the loop window.
+      (should (> benedict-chat--loop-start-time (- (float-time) 5.0))))))
 
 (ert-deftest benedict-safeguard-repetition-guard ()
   "Repetition guard should detect identical consecutive tool calls."
@@ -136,7 +138,8 @@
       ;; Advance time by 11 seconds (limit is 10s, global 100s)
       (setq benedict-chat--loop-start-time (- (float-time) 11.0))
       (should (benedict-chat--check-loop-constraints))
-      (should (string-match-p "Time limit.*reached" benedict-test--last-y-or-n-prompt)))))
+      (should (string-match-p "Time limit.*reached" benedict-test--last-y-or-n-prompt))
+      (should (> benedict-chat--loop-start-time (- (float-time) 5.0))))))
 
 (ert-deftest benedict-safeguard-layered-autonomy-global-wins ()
   "Global limits should override profile limits if stricter."

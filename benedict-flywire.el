@@ -379,7 +379,7 @@ If END-LINE is nil, reads to end of file."
 (cl-defun benedict-flywire-update-file (session path &key start-line end-line content)
   "Update file at PATH within SESSION's environment.
 Replaces lines from START-LINE to END-LINE (1-based, inclusive) with CONTENT.
-If END-LINE is nil, inserts CONTENT at START-LINE without deleting.
+If END-LINE is nil, replaces only START-LINE.
 Saves the file after modification.
 Returns a plist with :success and :message."
   (benedict-flywire-session-run session

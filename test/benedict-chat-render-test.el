@@ -112,5 +112,36 @@
       (should (eq (get-text-property (plist-get item :content-start) 'invisible)
                   'benedict-tool-details)))))
 
+(ert-deftest benedict-chat-render-message-item-header-update-preserves-body-markers ()
+  "Updating a message header should not move body markers."
+  (with-temp-buffer
+    (let* ((message (list :role 'assistant :content "Hello"))
+           (item (list :kind 'message :message message)))
+      (plist-put message :item item)
+      (benedict-chat--render-message-item item "[ASSISTANT] initial" "Hello")
+      (let ((body-start (marker-position (plist-get item :content-start)))
+            (body-end (marker-position (plist-get item :content-end))))
+        (benedict-chat--update-message-header item "[ASSISTANT] updated")
+        (should (equal body-start (marker-position (plist-get item :content-start))))
+        (should (equal body-end (marker-position (plist-get item :content-end))))
+        (should (string-match-p "\\[ASSISTANT\\] updated" (buffer-string)))
+        (should (string-match-p "Hello" (buffer-string)))))))
+
+(ert-deftest benedict-chat-render-message-item-body-rewrite-updates-end-marker ()
+  "Replacing a message body should update the end marker."
+  (with-temp-buffer
+    (let* ((message (list :role 'assistant :content "Hello"))
+           (item (list :kind 'message :message message)))
+      (plist-put message :item item)
+      (benedict-chat--render-message-item item "[ASSISTANT] hdr" "Hello")
+      (let ((old-end (marker-position (plist-get item :content-end))))
+        (benedict-chat--write-message-item-body item "Hello world")
+        (should (string-match-p "Hello world" (buffer-string)))
+        (should (> (marker-position (plist-get item :content-end)) old-end))
+        (should (equal (buffer-substring-no-properties
+                        (plist-get item :content-start)
+                        (plist-get item :content-end))
+                       "Hello world"))))))
+
 (provide 'test/benedict-chat-render-test)
 ;;; benedict-chat-render-test.el ends here

@@ -655,7 +655,10 @@ If PATH is provided, search only within that directory."
 (cl-defun benedict--tool-update-file (&key path start-line end-line content)
   "Replace lines START-LINE to END-LINE in PATH with CONTENT.
 START-LINE and END-LINE are 1-based (inclusive).
-If END-LINE is nil, replaces only START-LINE."
+If END-LINE is nil, replaces only START-LINE.
+
+If you intend to overwrite the entire file, prefer `write-file' instead of
+trying to replace a single line with the full file contents."
   (let* ((root (or (benedict--search-project-root)
                    (signal 'benedict-error "Project root unavailable")))
          (target (benedict--resolve-target-file path root))
@@ -679,7 +682,8 @@ If END-LINE is nil, replaces only START-LINE."
         (save-buffer)
         (let ((line-count (length (split-string (or content "") "\n" t))))
           (list :path relative
-                :content (format "Updated lines %d-%d in %s" start end relative)
+                :content (format "Updated lines %d-%d in %s. (Note: this edits only that line range; use write-file to overwrite the whole file.)"
+                                 start end relative)
                 :start-line start
                 :end-line end
                 :lines-written line-count
@@ -693,7 +697,42 @@ If END-LINE is nil, replaces only START-LINE."
  :fn #'benedict--tool-update-file
  :schema '(:path string :start-line integer :end-line integer :content string)
  :approval 'confirm
- :doc "Replace a range of lines in a file with new content.")
+ :doc "Replace a range of lines in a file with new content. For whole-file overwrites, use write-file.")
+
+;;; Whole-file write tool
+
+(cl-defun benedict--tool-write-file (&key path content)
+  "Overwrite PATH with CONTENT.
+
+This tool replaces the entire file contents and saves the buffer. It is safer
+than using `update-file' to attempt whole-file rewrites."
+  (let* ((root (or (benedict--search-project-root)
+                   (signal 'benedict-error "Project root unavailable")))
+         (target (benedict--resolve-target-file path root))
+         (relative (file-relative-name target root))
+         (text (or content "")))
+    (with-current-buffer (find-file-noselect target)
+      (let ((inhibit-read-only t))
+        (erase-buffer)
+        (insert text)
+        (unless (or (string-empty-p text)
+                    (string-suffix-p "\n" text))
+          (insert "\n"))
+        (save-buffer))
+      (let ((line-count (length (split-string text "\n" t))))
+        (list :path relative
+              :content (format "Wrote %d lines to %s" line-count relative)
+              :lines-written line-count
+              :ui (list :header (format "Wrote file — %s" relative)
+                        :state 'success
+                        :body (format "Overwrote file with %d lines" line-count)))))))
+
+(benedict-tools-register
+ :id 'write-file
+ :fn #'benedict--tool-write-file
+ :schema '(:path string :content string)
+ :approval 'confirm
+ :doc "Overwrite an existing file with the given content.")
 
 ;;; Elisp execution tool
 

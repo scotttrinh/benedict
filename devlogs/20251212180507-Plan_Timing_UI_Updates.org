@@ -1,0 +1,139 @@
+* Plan: Timing + Cost UI (Chat Header + Per-Item Metrics)
+
+** Goal
+Add first-class timing + cost visibility throughout the chat UI:
+- Chat buffer header shows session totals (tokens, cost, total time), and shows “in-flight” elapsed while a request is active.
+- Each chat item (assistant/user/tool/thinking as applicable) shows:
+  - Live elapsed time while in-flight (streaming/processing).
+  - Final per-item timing (latency/duration) and cost/tokens after completion.
+
+** Scope
+- Chat header-line: totals + current request elapsed.
+- Per-assistant-message blocks: header metadata line with provider/model + timing + usage/cost.
+- Streaming UX: per-item header updates while streaming.
+- Tool blocks: optionally add tool elapsed/duration (tool calls are executed synchronously today).
+- Data plumbing: ensure metadata has enough fields for per-item + totals (request start/end timestamps, latency, usage including cost).
+
+** Non-Goals (Phase 8)
+- Provider pricing computation beyond “pass-through” cost fields in provider usage payloads.
+- Persisting historical telemetry outside the buffer (no DB/log export).
+- Major redesign of folding/markdown rendering; changes should be incremental and compatible with current derived-mode render split.
+
+** Current State (Repo Findings)
+- Session-level status is in `benedict-chat.el` telemetry (`benedict-chat--telemetry-*`) and displayed in header-line via `header-line-format`.
+- Providers already compute latency and return `:usage` (may include cost) and `:latency` on completion.
+- Per-message metadata formatting exists (`benedict-chat--format-metadata-line`) but is not currently wired into message rendering.
+- Message rendering is currently simple (`benedict-chat-render.el:benedict-chat--insert-message`) and does not create marker-backed message blocks, so there is nothing to “refresh” per message during streaming.
+- Tool blocks already use marker-backed items with header refresh (`benedict-chat-render.el`), which is a good pattern to reuse for message blocks.
+
+** UX / Display Spec
+*** Header Line (chat buffer)
+- When idle: show last phase indicator + provider/model + session totals:
+  - tokens totals (respecting `benedict-chat-token-display`)
+  - cost total (if present)
+  - total time (sum of completed request durations)
+- When active (sending/streaming):
+  - show spinner + phase label + provider/model
+  - show active elapsed seconds
+  - show session totals (up to now)
+
+*** Per-Message Block Header (assistant messages)
+- Header line (single line) includes:
+  - role label (Assistant)
+  - provider/model (if known)
+  - in-flight elapsed while active (e.g., “2.1s…”)
+  - on completion: final latency (e.g., “2.34s”) + tokens breakdown (if present) + cost (if present)
+- Error/canceled states:
+  - show “error …” or “canceled” and keep elapsed/duration if available.
+
+** Data Model / State
+*** Terminology
+- “Request” = provider dispatch that yields a final `result` and may stream deltas.
+- “Item” = a rendered block in the chat buffer with marker-backed regions for header/body.
+
+*** Add/Normalize Fields
+- Request telemetry (buffer-local):
+  - `:started-at` (float-time) for active request
+  - `:last-elapsed` (float seconds) for last request (already exists)
+  - `:session-usage` (already exists)
+  - NEW: `:session-seconds` (float) accumulated across completed requests
+- Per-item metadata (assistant message):
+  - `:request-id` (stable id / seq)
+  - `:started-at` (float-time) for that message/request
+  - `:ended-at` (float-time) optional
+  - `:latency` (float seconds) final
+  - `:usage` (provider usage payload; may include cost)
+
+*** Rendering Objects
+- Introduce “message items” analogous to tool items:
+  - marker-backed `:header-start/:header-end`, `:content-start/:content-end`
+  - attach the item to the message record (e.g., `message :item`)
+  - allow header refresh during streaming (`benedict-chat--refresh-message-header`-style helper)
+
+** Implementation Plan
+*** Step 1 — Design + scaffolding (message items)
+- Add a message-item render path in `benedict-chat-render.el`:
+  - Render an assistant message as a block with a header line + body region (body remains markdown-fontified).
+  - Store markers on the item to allow rewriting header text without disturbing body markers.
+- Ensure the new header/body regions set `benedict-region-kind` appropriately so body-only fontification remains correct.
+
+*** Step 2 — Wire streaming into the message item
+- On first delta, create the assistant message item (placeholder) and initialize:
+  - per-item `:started-at`, `:request-id`
+  - item markers for body insertion
+- Modify streaming insertion to insert into the item’s body region rather than relying on `(point-max)` tricks.
+- Throttle header refreshes: reuse the existing status timer tick (0.2s) to also refresh the in-flight item header.
+
+*** Step 3 — Completion updates (timing + cost)
+- On provider success:
+  - finalize per-item metadata (`:latency`, `:usage`, `:ended-at`)
+  - refresh the item header to show final metrics
+  - accumulate session totals:
+    - `:session-usage` (already)
+    - NEW `:session-seconds` += latency (or computed end-start)
+- On provider error/cancel:
+  - finalize item header as error/canceled with elapsed/duration if available
+  - ensure session totals do not double-count partial work
+
+*** Step 4 — Tool blocks (optional)
+- Add `:started-at/:ended-at/:latency` to tool metadata and include in tool header formatting.
+- Decide whether to show “live” elapsed; if tools are sync, show duration after return (plus “running” while invoking, if feasible).
+
+*** Step 5 — Cleanup + UX polish
+- Make formatting consistent between:
+  - header-line totals vs per-item lines
+  - cost display precision
+  - token display modes
+- Ensure lines remain short and don’t cause excessive reflow.
+
+** Acceptance Criteria
+- Chat header shows:
+  - session token totals and session cost total (when available)
+  - session total time (sum of completed request durations)
+  - active request elapsed while in-flight
+- Each assistant message shows:
+  - live elapsed during streaming
+  - final latency + tokens + cost after completion
+- No noticeable UI blocking during streaming; header updates are throttled and cheap.
+- Works on Emacs 27.1+ (streaming UX best-effort on 28+).
+
+** Testing Plan
+- Add/adjust ERT tests where appropriate:
+  - Rendering: message item header/body markers remain stable when updating header text.
+  - Streaming: deltas insert into body region and font-lock only applies to body.
+  - Telemetry accumulation: session usage + session seconds accumulate correctly and don’t double-count across retries/errors.
+- Run via `nix run .#test` and ensure bytecomp/lints via `nix run .#lint` before merging.
+
+** Risks / Gotchas
+- Marker insertion types and sentinel newline boundaries: header rewrites must not shift body markers unexpectedly.
+- Font-lock extend region function relies on `benedict-region-kind`; new headers must not be marked as body.
+- Streaming currently uses `benedict-chat-stream.el` which assumes a simple content region; must be adapted carefully.
+
+** Open Questions
+- Should user messages also show duration/cost? (Probably “n/a”, but could show “queued/processing” if we add preflight stages.)
+  - No, user messages can be treated as a different kind of item and get a different set of faces.
+- How to treat retries: do we show multiple attempts per message, or overwrite the same item?
+  - Overwrite
+- Cost source: rely strictly on provider `:usage` cost fields for now, or introduce a pricing table later?
+  - Rely on provider usage, otherwise assume 0
+

@@ -343,13 +343,11 @@ Prompts the user to authorize extensions when limits are reached."
                  benedict-chat--loop-start-time
                  (> (float-time (time-since benedict-chat--loop-start-time))
                     limit-time))
-        (unless (y-or-n-p (format "Time limit (%.1fs) reached.  Continue? "
-                                  limit-time))
-          (setq continue nil)
-          ;; If continued, reset the timer to avoid prompting immediately again?
-          ;; Or just extend? For now, we update start time to give another full window.
-          (when continue
-            (setq benedict-chat--loop-start-time (float-time)))))
+        (if (y-or-n-p (format "Time limit (%.1fs) reached.  Continue? "
+                              limit-time))
+            ;; Reset the timer to give another full window.
+            (setq benedict-chat--loop-start-time (float-time))
+          (setq continue nil)))
       
       ;; 3. Token Limit (Best effort based on session telemetry)
       (when (and continue
@@ -707,6 +705,7 @@ Resolution order: buffer override → profile :provider → global `benedict-pro
                 :last-usage nil
                 :last-elapsed nil
                 :session-usage nil
+                :session-seconds 0.0
                 :spinner-index 0))))
 
 (defun benedict-chat--telemetry-update (&rest pairs)
@@ -800,6 +799,11 @@ KIND is one of 'complete, 'error, or 'canceled."
          (usage (or (plist-get metadata :usage)
                     (plist-get benedict-chat--telemetry :usage))))
     (benedict-chat--telemetry-accumulate-session usage)
+    (when (and (eq kind 'complete) elapsed)
+      (let* ((duration (or (plist-get metadata :latency) elapsed))
+             (current (or (plist-get benedict-chat--telemetry :session-seconds) 0.0)))
+        (benedict-chat--telemetry-update
+         :session-seconds (+ current duration))))
     (benedict-chat--telemetry-update
      :phase 'idle
      :started-at nil
@@ -834,6 +838,10 @@ KIND is one of 'complete, 'error, or 'canceled."
             (let* ((index (or (plist-get benedict-chat--telemetry :spinner-index) 0))
                    (next (1+ index)))
               (benedict-chat--telemetry-update :spinner-index next))
+            (when-let* ((state benedict-chat--streaming-message)
+                        (message (plist-get state :message))
+                        (item (plist-get message :item)))
+              (benedict-chat--refresh-message-header item))
             (benedict-chat--status-refresh))
         (benedict-chat--status-stop-timer)))))
 
@@ -937,11 +945,15 @@ When RICH is non-nil, include header-friendly hints."
          (elapsed (or (and active (benedict-chat--status-elapsed))
                       (plist-get benedict-chat--telemetry :last-elapsed)))
          (usage (plist-get benedict-chat--telemetry :session-usage))
+         (session-seconds (plist-get benedict-chat--telemetry :session-seconds))
          (indicator (benedict-chat--status-indicator phase last-phase))
          (label (benedict-chat--status-phase-label phase))
          (provider (benedict-chat--status-provider-label rich))
          (usage-str (benedict-chat--status-usage-string usage))
-         (elapsed-str (when elapsed (format "%.0fs" elapsed)))
+         (elapsed-str (when (and elapsed (or (not rich) active))
+                        (format "%.0fs" elapsed)))
+         (session-str (when (and rich session-seconds (> session-seconds 0))
+                        (format "Σ%.0fs" session-seconds)))
          (agent-indicator (benedict-chat--status-agent-indicator))
          (hint (and rich active "ESC to cancel")))
     (string-join
@@ -949,6 +961,7 @@ When RICH is non-nil, include header-friendly hints."
            (list (format "%s %s" indicator label)
                  provider
                  elapsed-str
+                 session-str
                  usage-str
                  agent-indicator
                  hint))
@@ -1002,6 +1015,122 @@ When RICH is non-nil, include header-friendly hints."
    ((eq role 'assistant) 'benedict-chat-assistant)
    (t 'benedict-chat-system)))
 
+(defun benedict-chat--message-provider-label (metadata)
+  "Return a display label for METADATA :provider."
+  (when-let ((provider (plist-get metadata :provider)))
+    (cond
+     ((stringp provider) provider)
+     (t (benedict-chat--provider-label provider)))))
+
+(defun benedict-chat--message-header-string (message &optional in-flight)
+  "Return the message header line for MESSAGE.
+When IN-FLIGHT is non-nil, include a live elapsed hint when possible."
+  (let* ((role (benedict-chat--normalize-role (plist-get message :role)))
+         (metadata (plist-get message :metadata))
+         (item (plist-get message :item))
+         (tag (format "[%s]" (upcase (symbol-name role))))
+         (provider (and metadata (benedict-chat--message-provider-label metadata)))
+         (model (and metadata (plist-get metadata :model)))
+         (provider-model (cond
+                          ((and provider model) (format "%s:%s" provider model))
+                          (provider provider)
+                          (model model)))
+         (usage (and metadata (plist-get metadata :usage)))
+         (usage-str (and usage (benedict-chat--status-usage-string usage)))
+         (latency (and metadata (plist-get metadata :latency)))
+         (time-str (cond
+                    ((and in-flight item (plist-get item :started-at))
+                     (format "%.1fs…" (- (float-time) (plist-get item :started-at))))
+                    (latency (format "%.2fs" latency))))
+         (error-str (and metadata (plist-get metadata :error) "error"))
+         (parts (delq nil (list provider-model time-str usage-str error-str))))
+    (if parts
+        (concat tag " " (string-join parts " · "))
+      tag)))
+
+(defun benedict-chat--refresh-message-header (item)
+  "Refresh ITEM's header text based on current message metadata."
+  (when-let ((message (plist-get item :message)))
+    (let ((in-flight (and (benedict-chat--status-active-p)
+                          benedict-chat--streaming-message
+                          (eq (plist-get benedict-chat--streaming-message :message) message))))
+      (save-excursion
+        (benedict-chat--update-message-header
+         item
+         (benedict-chat--message-header-string message in-flight)))
+      (when-let ((end (plist-get item :content-end)))
+        (when (markerp end)
+          (goto-char (marker-position end)))))))
+
+(defun benedict-chat--replace-message-content (message content)
+  "Replace MESSAGE content in the buffer with CONTENT."
+  (when-let ((item (plist-get message :item)))
+    (benedict-chat--write-message-item-body item content)
+    ;; Replacing the full body region clears any existing font-lock faces.
+    ;; During streaming we force fontification per delta, but completion updates
+    ;; often rewrite the full body once more; ensure markdown-mode faces are
+    ;; restored immediately.
+    (when-let ((start (plist-get item :content-start))
+               (end (plist-get item :content-end)))
+      (when (and (markerp start)
+                 (markerp end)
+                 (marker-buffer start))
+        (with-current-buffer (marker-buffer start)
+          (font-lock-flush start end)
+          (font-lock-ensure start end))))))
+
+(defvar-local benedict-chat--has-rendered-block nil
+  "Non-nil once a message/tool block has been rendered in this chat buffer.")
+
+(defun benedict-chat--maybe-insert-item-gap ()
+  "Insert a blank line before rendering the next chat block.
+
+This keeps message/tool blocks visually separated while remaining compatible
+with marker-backed streaming inserts."
+  (when benedict-chat--has-rendered-block
+    (let ((inhibit-read-only t))
+      (goto-char (point-max))
+      (let* ((end (point))
+             (start (save-excursion
+                      (skip-chars-backward "\n")
+                      (point)))
+             (trailing-newlines (- end start))
+             (needed (max 0 (- 2 trailing-newlines))))
+        (when (> needed 0)
+          (insert (propertize (make-string needed ?\n)
+                              'benedict-region-kind 'header)))))))
+
+(defun benedict-chat--render-message (message)
+  "Render MESSAGE into the current chat buffer.
+Assistant messages are rendered as marker-backed items."
+  (let* ((role (benedict-chat--normalize-role (plist-get message :role)))
+         (metadata (plist-get message :metadata))
+         (content (or (plist-get message :display-content)
+                      (plist-get message :content)
+                      ""))
+         (inhibit-read-only t))
+    (goto-char (point-max))
+    (benedict-chat--maybe-insert-item-gap)
+    (pcase role
+      ('assistant
+       (let* ((item (benedict-chat--make-item
+                     'message
+                     :role role
+                     :metadata metadata
+                     :message message)))
+         (plist-put message :item item)
+         (benedict-chat--track-item item)
+         (benedict-chat--render-message-item
+          item
+          (benedict-chat--message-header-string message nil)
+          content)
+         (setq benedict-chat--has-rendered-block t)
+         item))
+      (_
+       (benedict-chat--insert-message message)
+       (setq benedict-chat--has-rendered-block t)
+       nil))))
+
 (defun benedict-chat--history-store (message)
   "Persist MESSAGE in buffer history without rendering."
   (push message benedict-chat--messages)
@@ -1010,7 +1139,7 @@ When RICH is non-nil, include header-friendly hints."
 (defun benedict-chat--record-message (message)
   "Persist MESSAGE in buffer history and render it."
   (benedict-chat--history-store message)
-  (benedict-chat--insert-message message)
+  (benedict-chat--render-message message)
   message)
 
 (defun benedict-chat--record-thinking (content metadata &rest properties)
@@ -1399,7 +1528,10 @@ Also validates and normalizes :actions if present."
                                          :content (benedict-chat--tool-ui-body-string initial-ui)
                                          :tool-folded t)))
     (benedict-chat--track-item item)
+    (goto-char (point-max))
+    (benedict-chat--maybe-insert-item-gap)
     (benedict-chat--render-tool-item item)
+    (setq benedict-chat--has-rendered-block t)
     item))
 
 (defun benedict-chat--update-tool-block (item metadata ui fallback)
@@ -2120,16 +2252,14 @@ LANGUAGE is the identifier included in the fence (may be nil)."
                          :metadata metadata)))
       ;; Insert header and register item in history
       (setq record (benedict-chat--record-message record))
-      
-      ;; Initialize stream state.
-      ;; benedict-chat--insert-message appends a newline at the end.
-      ;; We want to stream content *before* that footer newline so it stays inside the block.
-      (with-current-buffer (current-buffer)
-        (save-excursion
-          (goto-char (point-max))
-          (when (eq (char-before) ?\n)
-            (backward-char 1))
-          (benedict-chat--stream-init (current-buffer))))
+      (when-let ((item (plist-get record :item)))
+        (plist-put item :request-id benedict-chat--active-request-id)
+        (plist-put item :started-at (or (plist-get benedict-chat--telemetry :started-at)
+                                        (float-time)))
+        (benedict-chat--refresh-message-header item)
+        (benedict-chat--stream-init (current-buffer)
+                                    (plist-get item :content-start)
+                                    (plist-get item :content-end)))
 
       (setq benedict-chat--streaming-message
             (list :message record
@@ -2139,6 +2269,22 @@ LANGUAGE is the identifier included in the fence (may be nil)."
 (defun benedict-chat--handle-provider-delta (payload)
   "Handle structured PAYLOAD update from the provider."
   (benedict-chat--telemetry-streaming payload)
+  (when-let* ((state benedict-chat--streaming-message)
+              (message (plist-get state :message)))
+    (let* ((current (plist-get message :metadata))
+           (metadata (benedict-chat--metadata
+                      :provider (or (plist-get payload :provider)
+                                    (and current (plist-get current :provider)))
+                      :model (or (plist-get payload :model)
+                                 (and current (plist-get current :model)))
+                      :usage (or (plist-get payload :usage)
+                                 (and current (plist-get current :usage))))))
+      (plist-put message :metadata metadata)
+      (setq benedict-chat--streaming-message
+            (plist-put state :metadata metadata))
+      (when-let ((item (plist-get message :item)))
+        (plist-put item :metadata metadata)
+        (benedict-chat--refresh-message-header item))))
   (let ((kind (plist-get payload :kind))
         (text (plist-get payload :text)))
     (pcase kind
@@ -2185,6 +2331,11 @@ LANGUAGE is the identifier included in the fence (may be nil)."
           (plist-put record :content content)
           (plist-put record :metadata metadata)
           (when tool-calls (plist-put record :tool-calls tool-calls))
+          (when-let ((item (plist-get record :item)))
+            (plist-put item :metadata metadata)
+            (plist-put item :ended-at (float-time))
+            (benedict-chat--replace-message-content record content)
+            (benedict-chat--refresh-message-header item))
 
           ;; Note: The record is already in benedict-chat--messages
           ;; and already rendered in the buffer.
@@ -2198,7 +2349,7 @@ LANGUAGE is the identifier included in the fence (may be nil)."
       (let ((record (list :role role :content content :time (current-time) :metadata metadata)))
         (when tool-calls (plist-put record :tool-calls tool-calls))
         (push record benedict-chat--messages)
-        (benedict-chat--insert-message record)
+        (benedict-chat--render-message record)
         
         (when tool-calls
           (benedict-chat--process-tool-calls record tool-calls metadata)
@@ -2850,6 +3001,7 @@ When INCLUDE-ERRORS is nil, skip entries flagged with :error metadata."
   (setq-local benedict-chat--messages nil)
   (setq-local benedict-chat--items nil)
   (setq-local benedict-chat--item-counter 0)
+  (setq-local benedict-chat--has-rendered-block nil)
   (setq-local benedict-chat--thinking-items (make-hash-table :test 'equal))
   (setq-local benedict-chat--active-request-id nil)
   (setq-local benedict-chat--request-seq 0)

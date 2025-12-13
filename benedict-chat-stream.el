@@ -14,11 +14,14 @@
   "Plist containing streaming state for the current buffer.
 Keys: :content-start, :content-end, :pending-text.")
 
-(defun benedict-chat--stream-init (buffer)
-  "Initialize streaming state in BUFFER."
+(defun benedict-chat--stream-init (buffer &optional content-start content-end)
+  "Initialize streaming state in BUFFER.
+
+When CONTENT-START and CONTENT-END are provided, reuse those markers for
+stream insertions.  Otherwise, create fresh markers at point in BUFFER."
   (with-current-buffer buffer
-    (let ((start (copy-marker (point) nil))
-          (end (copy-marker (point) t)))
+    (let ((start (or content-start (copy-marker (point) nil)))
+          (end (or content-end (copy-marker (point) t))))
       (setq benedict-stream-state
             (list :content-start start
                   :content-end end
