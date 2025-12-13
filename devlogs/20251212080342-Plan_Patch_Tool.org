@@ -1,0 +1,132 @@
+#+TITLE: Plan — Patch-Style File Editing Tool
+#+AUTHOR: Benedict maintainers
+#+LANGUAGE: en
+#+OPTIONS: toc:2 num:nil ^:{}
+
+* Objective
+Replace the current line-based =update-file= and diff-review =propose-edit= tools with a single patch-style tool that is easy for the model to use correctly, easy for humans to review in an Emacs buffer, and safe to apply.
+
+* Problem Statement
+The current tool set has two recurring failure modes:
+
+- *Semantic mismatch:* =update-file= performs a line-range replacement, but the model often attempts whole-file overwrites by replacing a single line with the entire file contents, which effectively duplicates content.
+- *Split-brain UX:* =propose-edit= creates a reviewable diff, while =update-file= performs immediate edits. Models choose inconsistently, and humans must mentally map between two workflows.
+
+A unified patch tool can eliminate ambiguity by making *the patch* the unit of change, while relying on Emacs’ native diff/patch affordances for review and application.
+
+* Proposed Tool
+** Tool ID
+- =apply-patch= (or =apply_patch=, but prefer dash to match other tools)
+
+** Inputs
+- =:patch= string
+- Optional metadata:
+  - =:description= string (short rationale shown in the review buffer header)
+  - =:cwd= string (optional; defaults to project root; primarily for display and diff headers)
+
+** Patch format
+Use a constrained, unified-diff-compatible format so Emacs diff tools can display and apply it.
+
+- Must include file headers:
+  - =--- a/path= and =+++ b/path=, or =--- path= / =+++ path=
+- Hunks use =@@= headers and leading =+=, =-=, and space lines.
+- Allow /dev/null for adds/deletes.
+
+Design goal: the patch string should be directly viewable in =diff-mode= and apply-able with built-in commands.
+
+* Emacs Building Blocks
+** Review buffer
+- Create a dedicated review buffer per patch:
+  - Name: =*Benedict Patch: <short description or id>*=
+- Insert patch text verbatim.
+- Enable =diff-mode= for navigation and familiar affordances.
+- Provide buttons/actions at top (or as =:actions= in tool UI):
+  - “Apply patch”
+  - “Reverse patch” (optional)
+  - “Open files” / “Jump to hunk” (diff-mode already supports)
+
+Suggested functions/approach:
+- Use =diff-mode= for rendering.
+- Use =diff-hunk-text=, =diff-goto-source=, and friends for navigation.
+
+** Applying patches
+Prefer built-in patch application flows instead of reimplementing diff parsing.
+
+Options (ranked):
+1. =vc-apply-patch= (works well when VC is active; leverages VC backends)
+2. =diff-apply-hunk= / =diff-apply-buffer= style flows when available (diff-mode patch application)
+3. Fallback: invoke =patch= executable in a temporary directory (last resort; platform-dependent)
+
+We should pick one primary path and keep fallbacks minimal.
+
+** Safety and approval
+Because patches may touch multiple files:
+- Approval policy should be =confirm=.
+- The approval prompt should summarize:
+  - files touched
+  - add/delete counts
+  - total hunks
+
+Implement summary by parsing diff headers minimally (regex over =^---/=^\+\+\+= and =^@@=).
+
+* Behavior and Semantics
+** Single source of truth
+- The *patch text* is the only input. There are no line-number parameters.
+- The tool is deterministic: apply patch as-is or fail with an actionable error.
+
+** Output
+Return a structured plist:
+- =:success= t/nil
+- =:files= list of relative paths
+- =:stats= plist (e.g. hunks, added lines, removed lines)
+- =:content= short summary string for provider history
+- =:ui= review-oriented UI:
+  - header: “Patch ready” / “Patch applied” / “Patch failed”
+  - body: short summary + optionally the diff in a fenced block
+  - actions: open review buffer, apply, reverse (when applicable)
+
+* Migration Plan
+** Deprecation
+- Deprecate =update-file= and =propose-edit= tools in the registry.
+- Keep them behind a feature flag for one release window if needed.
+
+** Code layout
+- New file: =benedict-tool-apply-patch.el= (single feature)
+- Registry wiring in =benedict-tools.el= (autoload if needed)
+
+** Compatibility
+- Target Emacs 27.1+: confirm that the chosen apply mechanism exists.
+- If relying on VC, confirm behavior when the project is not under version control.
+
+* Acceptance Criteria
+- Model can perform:
+  - one-line edits
+  - multi-hunk edits
+  - file creation/deletion
+  - rename/move (optional; can defer)
+- Review experience:
+  - patch opens in =diff-mode=
+  - hunks are navigable
+  - apply/reverse actions work
+- Safety:
+  - approval prompt summarizes patch impact
+  - tool fails cleanly when patch doesn’t apply
+
+* Open Questions
+- Should we allow non-unified formats (e.g. “file sections” like Codex CLI’s patch envelope), or enforce unified diff only?
+- What is the best apply mechanism on Emacs 27.1 without external dependencies?
+- How should we handle patches that partially apply?
+- Should we integrate with =ediff= for interactive conflict resolution?
+
+* Work Order
+1. Decide patch format constraints (unified diff + minimal headers)
+2. Implement patch review buffer in =diff-mode=
+3. Implement apply path (VC-first or diff-mode-first)
+4. Add approval summary + confirmation UI
+5. Add ERT tests for:
+   - patch parsing summary
+   - apply to temp repo/files
+   - failure messaging
+
+* Notes
+Keep this plan forward-looking. Record implementation details and decisions in a separate =Notes_= devlog after landing.
