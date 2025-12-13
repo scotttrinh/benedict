@@ -33,9 +33,39 @@
 (require 'benedict-logging)
 (require 'benedict-provider)
 
-;; Faces (initial, minimal)
+;; Faces
+(defgroup benedict-chat nil
+  "Chat buffers and rendering for Benedict."
+  :group 'benedict
+  :prefix "benedict-chat-")
+
+(defface benedict-chat-role
+  '((t :inherit (font-lock-keyword-face bold)))
+  "Face for role labels like \"[USER]\" in chat headers."
+  :group 'benedict-chat)
+
+(defface benedict-chat-header
+  '((t :inherit shadow))
+  "Face for message header metadata."
+  :group 'benedict-chat)
+
+(defface benedict-chat-header-meta
+  '((t :inherit benedict-chat-header))
+  "Face for provider/model/time metadata in message headers."
+  :group 'benedict-chat)
+
+(defface benedict-chat-header-separator
+  '((t :inherit benedict-chat-header))
+  "Face for separators (e.g. \"·\") in message headers."
+  :group 'benedict-chat)
+
+(defface benedict-chat-header-error
+  '((t :inherit error))
+  "Face for error markers shown in message headers."
+  :group 'benedict-chat)
+
 (defface benedict-chat-user
-  '((t :inherit default :weight bold))
+  '((t :inherit (font-lock-keyword-face bold)))
   "Face for user messages in chat buffers.")
 
 (defface benedict-chat-assistant
@@ -47,7 +77,7 @@
   "Face for system messages in chat buffers.")
 
 (defface benedict-chat-error
-  '((t :inherit error :weight bold))
+  '((t :inherit (error bold)))
   "Face for error responses in chat buffers.")
 
 (defface benedict-chat-block-divider
@@ -59,56 +89,78 @@
   "Face for prose content in chat messages.")
 
 (defface benedict-chat-heading-1
-  '((t :inherit (org-level-1 variable-pitch) :weight bold))
+  '((t :inherit (outline-1 variable-pitch) :weight bold))
   "Face for top-level markdown headings in chat messages.")
 
 (defface benedict-chat-heading-2
-  '((t :inherit (org-level-2 variable-pitch) :weight bold))
+  '((t :inherit (outline-2 variable-pitch) :weight bold))
   "Face for second-level markdown headings in chat messages.")
 
 (defface benedict-chat-heading-3
-  '((t :inherit (org-level-3 variable-pitch) :weight bold))
+  '((t :inherit (outline-3 variable-pitch) :weight bold))
   "Face for third-level markdown headings in chat messages.")
 
 (defface benedict-chat-list-bullet
-  '((t :inherit (org-list-dt variable-pitch)))
+  '((t :inherit shadow))
   "Face for list bullets and markers in chat messages.")
 
 (defface benedict-chat-inline-code
-  '((t :inherit (fixed-pitch org-code)))
+  '((t :inherit (fixed-pitch highlight)))
   "Face for inline code spans in chat messages.")
 
 (defface benedict-chat-strong
-  '((t :inherit (org-bold bold)))
+  '((t :inherit bold))
   "Face for bold emphasis in chat messages.")
 
 (defface benedict-chat-emphasis
-  '((t :inherit (org-italic italic)))
+  '((t :inherit italic))
   "Face for italic emphasis in chat messages.")
 
 (defface benedict-chat-link
-  '((t :inherit (org-link link) :weight semibold))
+  '((t :inherit link :weight semibold))
   "Face for links in chat messages.")
 
 (defface benedict-chat-code-block
-  '((((class color) (min-colors 88) (background light))
-    :inherit fixed-pitch
-    :background "#f6f8fa"
-    :extend t)
-  (((class color) (min-colors 88) (background dark))
-    :inherit fixed-pitch
-    :background "#161b22"
-    :extend t)
-  (t :inherit fixed-pitch))
+  '((t :inherit (fixed-pitch highlight) :extend t))
   "Face for content inside fenced code blocks.")
 
 (defface benedict-chat-button
-  '((t :inherit link :weight semi-bold))
+  '((t :inherit button :weight semi-bold))
   "Face for inline chat action buttons.")
 
 (defface benedict-chat-thinking
-  '((t :inherit italic))
+  '((t :inherit (shadow italic)))
   "Face for thinking blocks in chat buffers.")
+
+(defface benedict-chat-tool-header
+  '((t :inherit benedict-chat-header :weight semi-bold))
+  "Face for tool call header labels."
+  :group 'benedict-chat)
+
+(defface benedict-chat-tool-label
+  '((t :inherit (benedict-chat-tool-header font-lock-function-name-face)))
+  "Face for tool call names/labels in tool headers."
+  :group 'benedict-chat)
+
+(defface benedict-chat-tool-indicator
+  '((t :inherit shadow))
+  "Face for fold indicators and icons in tool headers."
+  :group 'benedict-chat)
+
+(defface benedict-chat-tool-success
+  '((t :inherit success))
+  "Face for successful tool call status indicators."
+  :group 'benedict-chat)
+
+(defface benedict-chat-tool-error
+  '((t :inherit error))
+  "Face for failed tool call status indicators."
+  :group 'benedict-chat)
+
+(defface benedict-chat-tool-running
+  '((t :inherit warning))
+  "Face for running tool call status indicators."
+  :group 'benedict-chat)
 
 ;; Error hierarchy
 (define-error 'benedict-error "Benedict error")
