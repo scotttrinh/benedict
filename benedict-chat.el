@@ -1022,6 +1022,20 @@ When RICH is non-nil, include header-friendly hints."
      ((stringp provider) provider)
      (t (benedict-chat--provider-label provider)))))
 
+(defun benedict-chat--message-provider-model-fragment (provider model)
+  "Return a propertized provider/model fragment for the message header.
+
+PROVIDER and MODEL should be strings (or nil)."
+  (let ((provider (and provider (format "%s" provider)))
+        (model (and model (format "%s" model))))
+    (cond
+     ((and provider model)
+      (concat (propertize provider 'face 'benedict-chat-header-provider)
+              (propertize ":" 'face 'benedict-chat-header-separator)
+              (propertize model 'face 'benedict-chat-header-model)))
+     (provider (propertize provider 'face 'benedict-chat-header-provider))
+     (model (propertize model 'face 'benedict-chat-header-model)))))
+
 (defun benedict-chat--message-header-string (message &optional in-flight)
   "Return the message header line for MESSAGE.
 When IN-FLIGHT is non-nil, include a live elapsed hint when possible.
@@ -1035,10 +1049,7 @@ insertion into a chat buffer."
          (tag-face (list 'benedict-chat-role (benedict-chat--face-for-role role metadata)))
          (provider (and metadata (benedict-chat--message-provider-label metadata)))
          (model (and metadata (plist-get metadata :model)))
-         (provider-model (cond
-                          ((and provider model) (format "%s:%s" provider model))
-                          (provider provider)
-                          (model model)))
+         (provider-model (benedict-chat--message-provider-model-fragment provider model))
          (usage (and metadata (plist-get metadata :usage)))
          (usage-str (and usage (benedict-chat--status-usage-string usage)))
          (latency (and metadata (plist-get metadata :latency)))
@@ -1047,16 +1058,15 @@ insertion into a chat buffer."
                      (format "%.1fs…" (- (float-time) (plist-get item :started-at))))
                     (latency (format "%.2fs" latency))))
          (error-str (and metadata (plist-get metadata :error) "error"))
-         (parts (delq nil (list provider-model time-str usage-str error-str)))
+         (time* (and time-str (propertize time-str 'face 'benedict-chat-header-time)))
+         (usage* (and usage-str (propertize usage-str 'face 'benedict-chat-header-usage)))
+         (parts (delq nil (list provider-model time* usage* error-str)))
          (separator (propertize " · " 'face 'benedict-chat-header-separator))
          (tag* (propertize tag 'face tag-face))
          (parts* (delq nil
-                       (list (and provider-model
-                                  (propertize provider-model 'face 'benedict-chat-header-meta))
-                             (and time-str
-                                  (propertize time-str 'face 'benedict-chat-header-meta))
-                             (and usage-str
-                                  (propertize usage-str 'face 'benedict-chat-header-meta))
+                       (list provider-model
+                             time*
+                             usage*
                              (and error-str
                                   (propertize error-str 'face 'benedict-chat-header-error))))))
     (if parts
@@ -2071,65 +2081,6 @@ Returns non-nil when an active streaming entry handled the error."
               (let ((inhibit-read-only t))
                 (delete-region button-start button-end))
               (setq pos (marker-position start-marker)))))))))
-
-(defun benedict-chat--apply-code-fences (start end)
-  "Highlight code fences between START and END and install block buttons."
-  (save-excursion
-    (save-match-data
-      (goto-char start)
-      (let ((case-fold-search nil))
-        (while (re-search-forward "^\W*```\\([^ \n\r]*\\)?[ \t]*\n" end t)
-          (let* ((language (match-string 1))
-                 (body-start (point))
-                 (closing (save-excursion
-                            (when (re-search-forward "^\W*```[ \t]*$" end t)
-                              (match-beginning 0)))))
-            (if (and closing (> closing body-start))
-                (let ((button-pos (save-excursion
-                                    (goto-char closing)
-                                    (forward-line 1)
-                                    (point))))
-                  (benedict-chat--decorate-code-block body-start closing language button-pos)
-                  (goto-char button-pos))
-              (benedict-chat--decorate-code-block body-start end language nil)
-              (goto-char end))))))))
-
-(defun benedict-chat--decorate-code-block (body-start body-end language insertion-point)
-  "Apply faces to BODY-START → BODY-END and insert buttons near INSERTION-POINT.
-LANGUAGE is the identifier included in the fence (may be nil)."
-  (when (> body-end body-start)
-    (let* ((lang (and language (string-trim (substring-no-properties language))))
-           (target (list :start (copy-marker body-start t)
-                         :end (copy-marker body-end nil)
-                         :language lang)))
-      (remove-text-properties body-start body-end '(face nil font-lock-face nil))
-      (add-text-properties body-start body-end
-                           (list 'face 'benedict-chat-code-block
-                                 'font-lock-face 'benedict-chat-code-block
-                                 'benedict-chat-code-block t
-                                 'benedict-chat-code-language lang))
-      (when insertion-point
-        (benedict-chat--insert-code-block-buttons insertion-point target))
-      target)))
-
-(defun benedict-chat--insert-code-block-buttons (position target)
-  "Insert Copy/Apply buttons at POSITION operating on TARGET."
-  (save-excursion
-    (goto-char position)
-    (let ((inhibit-read-only t))
-      (unless (or (bobp) (eq (char-before) ?\n))
-        (insert "\n"))
-      (let ((line-start (point)))
-        (insert "  ")
-        (benedict-chat--insert-action-button "Copy block" #'benedict-chat-copy-block target)
-        (insert "   ")
-        (benedict-chat--insert-action-button "Apply block" #'benedict-chat-apply-block target)
-        (insert "\n")
-        (add-text-properties line-start (point)
-                             '(benedict-chat-block-button t
-                               read-only t
-                               front-sticky t
-                               rear-nonsticky t))))))
 
 (defun benedict-chat--insert-action-button (label action target)
   "Insert button with LABEL to run ACTION on TARGET."

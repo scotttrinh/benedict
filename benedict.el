@@ -45,17 +45,12 @@
   :group 'benedict-chat)
 
 (defface benedict-chat-header
-  '((t :inherit shadow))
-  "Face for message header metadata."
-  :group 'benedict-chat)
-
-(defface benedict-chat-header-meta
-  '((t :inherit benedict-chat-header))
-  "Face for provider/model/time metadata in message headers."
+  '((t :inherit default :weight semi-bold))
+  "Face for message headers."
   :group 'benedict-chat)
 
 (defface benedict-chat-header-separator
-  '((t :inherit benedict-chat-header))
+  '((t :inherit shadow))
   "Face for separators (e.g. \"·\") in message headers."
   :group 'benedict-chat)
 
@@ -64,17 +59,37 @@
   "Face for error markers shown in message headers."
   :group 'benedict-chat)
 
+(defface benedict-chat-header-provider
+  '((t :inherit (benedict-chat-header font-lock-keyword-face)))
+  "Face for provider labels in message headers."
+  :group 'benedict-chat)
+
+(defface benedict-chat-header-model
+  '((t :inherit (benedict-chat-header font-lock-type-face)))
+  "Face for model labels in message headers."
+  :group 'benedict-chat)
+
+(defface benedict-chat-header-time
+  '((t :inherit (benedict-chat-header font-lock-constant-face)))
+  "Face for timing/latency labels in message headers."
+  :group 'benedict-chat)
+
+(defface benedict-chat-header-usage
+  '((t :inherit (benedict-chat-header font-lock-function-name-face)))
+  "Face for usage/cost labels in message headers."
+  :group 'benedict-chat)
+
 (defface benedict-chat-user
   '((t :inherit (font-lock-keyword-face bold)))
-  "Face for user messages in chat buffers.")
+  "Face for user role labels in chat buffers.")
 
 (defface benedict-chat-assistant
   '((t :inherit font-lock-doc-face))
-  "Face for assistant messages in chat buffers.")
+  "Face for assistant role labels in chat buffers.")
 
 (defface benedict-chat-system
   '((t :inherit shadow))
-  "Face for system messages in chat buffers.")
+  "Face for system role labels in chat buffers.")
 
 (defface benedict-chat-error
   '((t :inherit (error bold)))
@@ -84,46 +99,6 @@
   '((t :inherit shadow))
   "Face for divider lines separating chat blocks.")
 
-(defface benedict-chat-body
-  '((t :inherit variable-pitch))
-  "Face for prose content in chat messages.")
-
-(defface benedict-chat-heading-1
-  '((t :inherit (outline-1 variable-pitch) :weight bold))
-  "Face for top-level markdown headings in chat messages.")
-
-(defface benedict-chat-heading-2
-  '((t :inherit (outline-2 variable-pitch) :weight bold))
-  "Face for second-level markdown headings in chat messages.")
-
-(defface benedict-chat-heading-3
-  '((t :inherit (outline-3 variable-pitch) :weight bold))
-  "Face for third-level markdown headings in chat messages.")
-
-(defface benedict-chat-list-bullet
-  '((t :inherit shadow))
-  "Face for list bullets and markers in chat messages.")
-
-(defface benedict-chat-inline-code
-  '((t :inherit (fixed-pitch highlight)))
-  "Face for inline code spans in chat messages.")
-
-(defface benedict-chat-strong
-  '((t :inherit bold))
-  "Face for bold emphasis in chat messages.")
-
-(defface benedict-chat-emphasis
-  '((t :inherit italic))
-  "Face for italic emphasis in chat messages.")
-
-(defface benedict-chat-link
-  '((t :inherit link :weight semibold))
-  "Face for links in chat messages.")
-
-(defface benedict-chat-code-block
-  '((t :inherit (fixed-pitch highlight) :extend t))
-  "Face for content inside fenced code blocks.")
-
 (defface benedict-chat-button
   '((t :inherit button :weight semi-bold))
   "Face for inline chat action buttons.")
@@ -132,13 +107,8 @@
   '((t :inherit (shadow italic)))
   "Face for thinking blocks in chat buffers.")
 
-(defface benedict-chat-tool-header
-  '((t :inherit benedict-chat-header :weight semi-bold))
-  "Face for tool call header labels."
-  :group 'benedict-chat)
-
 (defface benedict-chat-tool-label
-  '((t :inherit (benedict-chat-tool-header font-lock-function-name-face)))
+  '((t :inherit (benedict-chat-header font-lock-function-name-face)))
   "Face for tool call names/labels in tool headers."
   :group 'benedict-chat)
 
