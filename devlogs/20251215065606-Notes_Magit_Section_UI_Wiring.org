@@ -1,0 +1,13 @@
+#+title: Notes: Magit section UI wiring
+#+date: 2025-12-15
+
+* Summary
+- Added `benedict-chat-ui-mode` derived from `magit-section-mode`, reusing the shared chat buffer setup.
+- Wrapped assistant/user/tool renders in section helpers when the UI mode is active and recorded section pointers on items/messages.
+- Normalized chat records to carry `:kind 'message` and introduced `benedict-chat-major-mode` for opting into the new UI without disrupting the classic mode.
+- Updated `flake.nix` test/lint runners to install dependencies (`magit-section`, etc.) before executing. First attempt used `eask install --dev` (wrong subcommand); corrected to `eask install-deps --dev` so the test runner pulls magit-section/svg-lib/markdown-mode in the nix sandbox.
+
+* Testing
+- Failure: `nix run .#test` => `Cannot open load file: No such file or directory, magit-section` (sandbox lacked deps).
+- Resolution: ensure `eask install-deps --dev` runs inside the flake test/lint scripts so the dev dependencies are present in the ephemeral build directory.
+- Current: `nix run .#test` now succeeds after the runner fix. Lint should also install deps up front.

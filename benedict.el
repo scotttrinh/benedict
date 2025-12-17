@@ -1,7 +1,7 @@
 ;;; benedict.el --- Emacs-first AI assistant  -*- lexical-binding: t; -*-
 ;; Author: Benedict maintainers
 ;; Version: 0.1.0pre
-;; Package-Requires: ((emacs "27.1") (lgr "0.3") (dash "2.26.0") (s "1.12.0") (markdown-mode "2.5"))
+;; Package-Requires: ((emacs "27.1") (lgr "0.3") (dash "2.26.0") (s "1.12.0") (markdown-mode "2.5") (magit-section "3.3.0") (svg-lib "0.2.8"))
 ;; Keywords: tools, convenience, ai
 ;; URL: https://github.com/scotttrinh/benedict
 
@@ -140,6 +140,18 @@
 (defvar benedict-prefix-map
   (let ((map (make-sparse-keymap)))
     (define-key map (kbd "c") #'benedict-chat)
+    (define-key map (kbd "l") #'benedict-chat-jump-to-latest)
+    (define-key map (kbd "a") #'benedict-chat-jump-to-last-assistant)
+    (define-key map (kbd "A") #'benedict-chat-jump-to-last-assistant-with-tools)
+    (define-key map (kbd "t") #'benedict-chat-next-tool)
+    (define-key map (kbd "T") #'benedict-chat-previous-tool)
+    (define-key map (kbd "f") #'benedict-chat-next-tool-failure)
+    (define-key map (kbd "F") #'benedict-chat-previous-tool-failure)
+    (define-key map (kbd "e") #'benedict-chat-next-error)
+    (define-key map (kbd "E") #'benedict-chat-previous-error)
+    (define-key map (kbd "h") #'benedict-chat-next-thinking)
+    (define-key map (kbd "H") #'benedict-chat-previous-thinking)
+    (define-key map (kbd "s") #'benedict-chat-toggle-thinking)
     map)
   "Prefix map for Benedict commands.")
 
@@ -157,6 +169,18 @@
 
 ;; Autoload interactive entry points to avoid load-order issues
 (autoload 'benedict-chat "benedict-chat" "Open Benedict chat buffer." t)
+(autoload 'benedict-chat-jump-to-latest "benedict-chat" "Jump to the newest Benedict chat item." t)
+(autoload 'benedict-chat-jump-to-last-assistant "benedict-chat" "Jump to the most recent Benedict assistant message." t)
+(autoload 'benedict-chat-jump-to-last-assistant-with-tools "benedict-chat" "Jump to the most recent assistant message that has tool blocks." t)
+(autoload 'benedict-chat-next-tool "benedict-chat" "Move to the next Benedict tool block." t)
+(autoload 'benedict-chat-previous-tool "benedict-chat" "Move to the previous Benedict tool block." t)
+(autoload 'benedict-chat-next-tool-failure "benedict-chat" "Move to the next failed Benedict tool block." t)
+(autoload 'benedict-chat-previous-tool-failure "benedict-chat" "Move to the previous failed Benedict tool block." t)
+(autoload 'benedict-chat-next-error "benedict-chat" "Move to the next Benedict error block." t)
+(autoload 'benedict-chat-previous-error "benedict-chat" "Move to the previous Benedict error block." t)
+(autoload 'benedict-chat-next-thinking "benedict-chat" "Move to the next Benedict thinking block." t)
+(autoload 'benedict-chat-previous-thinking "benedict-chat" "Move to the previous Benedict thinking block." t)
+(autoload 'benedict-chat-toggle-thinking "benedict-chat" "Toggle Benedict thinking blocks at point." t)
 
 (require 'benedict-provider-openrouter)
 (require 'benedict-provider-vercel)

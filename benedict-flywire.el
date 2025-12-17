@@ -345,7 +345,8 @@ Each line is prefixed with \"N | \" where N is the line number."
     (string-join (nreverse result) "\n")))
 
 (cl-defun benedict-flywire-read-file (session path &key start-line end-line)
-  "Read file at PATH within SESSION's environment.
+  "Read file or buffer at PATH within SESSION's environment.
+If PATH matches a live buffer in the session, reads from it.
 Returns content with line numbers prepended.
 START-LINE and END-LINE are 1-based (inclusive).
 If START-LINE is nil, starts from line 1.
@@ -354,27 +355,44 @@ If END-LINE is nil, reads to end of file."
     (lambda ()
       (unless (and (stringp path) (not (string-empty-p path)))
         (signal 'benedict-error '("Path must be a non-empty string")))
-      (unless (file-exists-p path)
-        (signal 'benedict-error (list (format "File does not exist: %s" path))))
-      (unless (file-readable-p path)
-        (signal 'benedict-error (list (format "File is not readable: %s" path))))
       (let* ((start (or start-line 1))
              (end end-line)
-             (buf (find-file-noselect path t)))
-        (unwind-protect
-            (with-current-buffer buf
-              (goto-char (point-min))
-              (forward-line (1- start))
-              (let ((beg (point)))
-                (if end
-                    (progn
-                      (goto-char (point-min))
-                      (forward-line end)
-                      (let ((content (buffer-substring-no-properties beg (point))))
-                        (benedict-flywire--format-line-numbered content start)))
-                  (let ((content (buffer-substring-no-properties beg (point-max))))
-                    (benedict-flywire--format-line-numbered content start)))))
-          (kill-buffer buf))))))
+             (existing-buf (get-buffer path)))
+        (if existing-buf
+            ;; Read from buffer
+            (with-current-buffer existing-buf
+              (save-excursion
+                (goto-char (point-min))
+                (forward-line (1- start))
+                (let ((beg (point)))
+                  (if end
+                      (progn
+                        (goto-char (point-min))
+                        (forward-line end)
+                        (let ((content (buffer-substring-no-properties beg (point))))
+                          (benedict-flywire--format-line-numbered content start)))
+                    (let ((content (buffer-substring-no-properties beg (point-max))))
+                      (benedict-flywire--format-line-numbered content start))))))
+          ;; Read from file
+          (unless (file-exists-p path)
+            (signal 'benedict-error (list (format "File/Buffer does not exist: %s" path))))
+          (unless (file-readable-p path)
+            (signal 'benedict-error (list (format "File is not readable: %s" path))))
+          (let ((buf (find-file-noselect path t)))
+            (unwind-protect
+                (with-current-buffer buf
+                  (goto-char (point-min))
+                  (forward-line (1- start))
+                  (let ((beg (point)))
+                    (if end
+                        (progn
+                          (goto-char (point-min))
+                          (forward-line end)
+                          (let ((content (buffer-substring-no-properties beg (point))))
+                            (benedict-flywire--format-line-numbered content start)))
+                      (let ((content (buffer-substring-no-properties beg (point-max))))
+                        (benedict-flywire--format-line-numbered content start)))))
+              (kill-buffer buf))))))))
 
 (cl-defun benedict-flywire-update-file (session path &key start-line end-line content)
   "Update file at PATH within SESSION's environment.
@@ -417,16 +435,20 @@ Returns a plist with :success and :message."
 
 (defun benedict-flywire-exec-elisp (session code)
   "Execute elisp CODE string within SESSION's environment.
-Returns a plist with :success, :result (or :error)."
+Returns a plist with :success, :result, :output (or :error)."
   (benedict-flywire-session-run session
     (lambda ()
       (unless (and (stringp code) (not (string-empty-p code)))
         (signal 'benedict-error '("Code must be a non-empty string")))
       (condition-case err
           (let* ((form (read code))
-                 (result (eval form t)))
+                 (output nil)
+                 (result nil))
+            (setq output (with-output-to-string
+                           (setq result (eval form t))))
             (list :success t
-                  :result (prin1-to-string result)))
+                  :result (prin1-to-string result)
+                  :output (if (string-empty-p output) nil output)))
         (error
          (list :success nil
                :error (format "%S" err)))))))

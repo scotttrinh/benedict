@@ -514,7 +514,7 @@ ARGS must be a plist passed directly to the tool implementation."
                          :state 'success
                          :body formatted-diff
                          :actions (list open-diff-action)))))))
- (benedict-tools-register
+(benedict-tools-register
   :id 'propose-edit
   :fn #'benedict--tool-propose-edit
   :schema '(:path string :diff string :description string)
@@ -578,30 +578,52 @@ ARGS must be a plist passed directly to the tool implementation."
  :doc "Search files within the current project using grep patterns.")
 
 (cl-defun benedict--tool-read-file (&key path start-line end-line)
-  "Return the content of the file at PATH.
+  "Return the content of the file or buffer at PATH.
+If PATH matches a live buffer name, reads from that buffer.
+Otherwise treats PATH as a file path relative to the project root.
 Optional START-LINE and END-LINE (1-based) restrict the output."
-  (let* ((root (or (benedict--search-project-root)
-                   (signal 'benedict-error "Project root unavailable")))
-         (target (benedict--resolve-target-file path root))
-         (relative (file-relative-name target root))
-         (start (if (and start-line (> start-line 0)) start-line 1))
-         (end (if (and end-line (> end-line 0)) end-line nil)))
+  (let* ((start (if (and start-line (> start-line 0)) start-line 1))
+         (end (if (and end-line (> end-line 0)) end-line nil))
+         ;; Try to resolve as buffer first
+         (buffer (get-buffer path))
+         (root (unless buffer (benedict--search-project-root)))
+         ;; If no buffer, resolve as file
+         (target (unless buffer
+                   (unless root (signal 'benedict-error "Project root unavailable"))
+                   (benedict--resolve-target-file path root)))
+         (relative (if buffer path (file-relative-name target root))))
+
     (when (and end (< end start))
       (signal 'benedict-error "end-line cannot be less than start-line"))
-    (let ((content (with-temp-buffer
-                     (insert-file-contents target)
-                     (goto-char (point-min))
-                     (forward-line (1- start))
-                     (let ((beg (point)))
-                       (if end
-                           (forward-line (1+ (- end start)))
-                         (goto-char (point-max)))
-                       (buffer-substring-no-properties beg (point))))))
+
+    (let ((content
+           (if buffer
+               ;; Read from buffer
+               (with-current-buffer buffer
+                 (save-excursion
+                   (goto-char (point-min))
+                   (forward-line (1- start))
+                   (let ((beg (point)))
+                     (if end
+                         (forward-line (1+ (- end start)))
+                       (goto-char (point-max)))
+                     (buffer-substring-no-properties beg (point)))))
+             ;; Read from file
+             (with-temp-buffer
+               (insert-file-contents target)
+               (goto-char (point-min))
+               (forward-line (1- start))
+               (let ((beg (point)))
+                 (if end
+                     (forward-line (1+ (- end start)))
+                   (goto-char (point-max)))
+                 (buffer-substring-no-properties beg (point)))))))
       (list :path relative
             :content content
             :start-line start
             :end-line end
-            :ui (list :header (format "Read file — %s%s"
+            :ui (list :header (format "Read %s — %s%s"
+                                      (if buffer "buffer" "file")
                                       relative
                                       (if (or (> start 1) end)
                                           (format " (lines %d-%s)" start (or end "EOF"))
@@ -743,14 +765,26 @@ This is a high-risk tool that evaluates arbitrary elisp code."
     (signal 'benedict-error "exec-elisp requires a non-empty :code"))
   (condition-case err
       (let* ((form (read code))
-             (result (eval form t))
-             (result-str (prin1-to-string result)))
-        (list :success t
-              :result result-str
-              :content result-str
-              :ui (list :header "Elisp execution"
-                        :state 'success
-                        :body (format "```elisp\n%s\n```\n=> %s" code result-str))))
+             (output nil)
+             (result nil))
+        (setq output (with-output-to-string
+                       (setq result (eval form t))))
+        (let* ((result-str (prin1-to-string result))
+               (output-str (if (string-empty-p output) nil output)))
+          (list :success t
+                :result result-str
+                :output output-str
+                :content (if output-str
+                             (format "%s\nOutput:\n%s" result-str output-str)
+                           result-str)
+                :ui (list :header "Elisp execution"
+                          :state 'success
+                          :body (format "```elisp\n%s\n```\n=> %s%s"
+                                        code
+                                        result-str
+                                        (if output-str
+                                            (format "\nOutput:\n%s" output-str)
+                                          ""))))))
     (error
      (let ((err-str (format "%S" err)))
        (list :success nil

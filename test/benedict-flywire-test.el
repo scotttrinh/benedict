@@ -324,3 +324,12 @@
 
 (provide 'test/benedict-flywire-test)
 ;;; benedict-flywire-test.el ends here
+
+(ert-deftest benedict-flywire-exec-elisp-output ()
+  "Exec elisp captures standard output."
+  (let ((session (benedict-flywire-session-create :headless t)))
+    (unwind-protect
+        (let ((result (benedict-flywire-exec-elisp session "(print \"flywire hello\")")))
+          (should (plist-get result :success))
+          (should (string-match-p "flywire hello" (or (plist-get result :output) ""))))
+      (benedict-flywire-session-teardown session))))

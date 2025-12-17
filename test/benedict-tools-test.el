@@ -138,3 +138,20 @@
     (should-not (plist-get result :success))
     (should (plist-get result :error))
     (should (string-match-p "arith-error" (plist-get result :error)))))
+
+(ert-deftest benedict-tools-exec-elisp-output-test ()
+  "Test executing elisp that produces stdout output."
+  (let ((result (benedict--tool-exec-elisp :code "(print \"hello world\")")))
+    (should (plist-get result :success))
+    (should (string-match-p "hello world" (or (plist-get result :output) "")))))
+
+(ert-deftest benedict-tools-read-file-buffer-test ()
+  "Test reading from a buffer."
+  (let ((buf (get-buffer-create "*Benedict Test Buffer*")))
+    (with-current-buffer buf
+      (erase-buffer)
+      (insert "buffer content"))
+    (unwind-protect
+        (let ((result (benedict--tool-read-file :path "*Benedict Test Buffer*")))
+          (should (string= (plist-get result :content) "buffer content")))
+      (kill-buffer buf))))

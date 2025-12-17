@@ -1,0 +1,14 @@
+* Notes: Phase E Fixes (Thinking Parity & Visual Polish)
+
+** Status
+- Tasks from [[file:20251217120728-Plan_Phase_E_Fixes.org][Plan_Phase_E_Fixes]] are complete.
+- All tests passed, including ~benedict-chat-thinking~ suite.
+
+** Changes
+- Refactored ~benedict-chat-ui--insert-section~ to explicitly capture ~magit-current-section~ inside the ~magit-insert-section~ body. This fixed the parenting issue where thinking blocks were not nesting under assistant messages.
+- Updated ~benedict-chat--render-message~ to call ~benedict-chat-ui--begin-turn~ for User messages, restoring the structural turn hierarchy.
+- Applied visual polish to User message headers using ~benedict-chat-render--badge~.
+- Fixed a syntax error (missing parenthesis) in ~benedict-chat-render.el~ that was causing test failures.
+
+** Verification
+- Ran ~nix run .#test -- benedict-chat-thinking~: 149 tests passed.

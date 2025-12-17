@@ -1,0 +1,5 @@
+* Notes: badge alignment + thinking tests + navigation bindings
+- Tweaked badge header alignment via benedict-chat-render helpers; message and tool headers share spacing + right-aligned metadata padding.
+- Added navigation commands (jump to latest, next/prev tool/error) and wired them into benedict-prefix-map and chat/ui keymaps.
+- Added thinking section tests covering streaming append/replace, magit/state sync (UI+classic), and adjusted UI section scaffolding to use magit-section slots instead of custom subclasses.
+- Test run: `nix run .#test`.
