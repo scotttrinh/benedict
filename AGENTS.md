@@ -2,19 +2,29 @@
 
 Working notes for future agents contributing to Benedict. This doc explains our planning/devlogs flow, how we develop and test in Doom Emacs, and coding practices that keep the Elisp predictable in a live Emacs environment.
 
-## Workflow: Plans vs Notes
+## Workflow: Efforts & Agents
 
-- Plans live in `devlogs/` with filenames like `YYYYMMDDHHMM-Plan_Phase_N.org`.
-  - Contents: tasks, decisions, acceptance criteria, tentative file layout.
-- Notes (what actually happened) also live in `devlogs/` as `YYYYMMDDHHMM-Notes_*.org`.
-  - Contents: what worked, what didn't, concrete diffs/decisions, and follow-ups.
-- Keep planning docs forward-looking; keep notes factual/retrospective. Don't mix them.
-- Reference: see `devlogs/20251116105736-Plan_Phase_0.org`, `devlogs/20251116105752-Plan_Phase_1.org`, and subsequent `Notes_*` entries.
-- Timestamp accuracy
-  - Create the file however you like (Org capture, `touch`, Emacs, etc.), then rename it based on the filesystem creation time so the prefix is always correct.
-  - Command: `ts=$(stat -f '%SB' -t '%Y%m%d%H%M%S' devlogs/tmp.org) && mv devlogs/tmp.org "devlogs/${ts}-Plan_Phase_2.org"`.
-  - This uses macOS `stat` to read the real creation time (`%SB`) and ensures distinct prefixes even when multiple files are created the same minute.
-- If you find yourself stuck with syntax issues, primarily issues with balancing parentheses, please summarize what you're trying to do, stop the agentic loop, and ask for help from the user.
+We no longer use ad-hoc `devlogs/` plan/notes files for new work. All non-trivial work is organized into **Efforts** driven by three primary agents:
+
+- Research agent (`efforts/<effort-slug>/research.md`)
+  - Documents the current state of the codebase and data flows.
+  - Answers "what exists today" with `path:line` references.
+- Planning agent (`efforts/<effort-slug>/plan.md`)
+  - Turns the research into a concrete, testable implementation plan.
+  - Phases, success criteria, and verification strategy live here.
+- Build agent (`efforts/<effort-slug>/log.md`)
+  - Executes the plan and records what actually happened.
+  - Uses this AGENTS.md as its primary guide for logging.
+
+### Effort directory layout
+
+For a given `effort-slug` (kebab-case summary of the task):
+
+- `efforts/<effort-slug>/research.md` — Current state analysis (input to planning).
+- `efforts/<effort-slug>/plan.md` — Implementation plan (input to build/execution).
+- `efforts/<effort-slug>/log.md` — Chronological log of work performed and decisions made.
+
+If you find yourself stuck with syntax issues, primarily issues with balancing parentheses, please summarize what you're trying to do, stop the agentic loop, and ask for help from the user.
 
 ## Elisp Conventions (Project-Specific)
 
@@ -185,11 +195,40 @@ Use `cl-letf` to dynamically rebind functions and avoid side effects:
 
 This isolates tests, improves speed, and makes assertions deterministic. Functions are restored automatically after the `let` block exits.
 
-## Devlogs: When To Write Notes
+## Effort Logs: How To Write `log.md`
 
-- After any discrete task lands (keybinding fix, autoload change, new file skeleton), add a `Notes_*.org` entry summarizing:
-  - Problem, root cause, fix, verification steps, and any follow-ups.
-- Keep entries short and scan-friendly; include commands or Emacs forms that helped verify.
+The **Build agent** (and humans doing implementation work) are responsible for maintaining `efforts/<effort-slug>/log.md`. This file replaces ad-hoc `devlogs/Notes_*.org` entries for new work.
+
+### Purpose
+
+- Capture what actually happened while executing the plan: changes made, decisions taken, surprises, and verification steps.
+- Provide enough context that a future contributor can reconstruct the story of the effort without digging through shell history.
+- Stay tightly linked to `research.md` and `plan.md`:
+  - Reference research findings when they influence decisions.
+  - Reference specific plan phases/steps when you complete or adjust them.
+
+### Structure of `log.md`
+
+Use timestamped, append-only entries. A simple recommended pattern:
+
+- `## [YYYY-MM-DD HH:MM] [Agent/Human]`
+  - **Phase/Step**: Short reference to the plan phase or step.
+  - **Event**: What you attempted or completed.
+  - **Decision**: Any choice made (including alternatives considered briefly).
+  - **Rationale**: Why this decision was reasonable, referencing `research.md` or `plan.md` when applicable.
+  - **Impact**: What changed in the codebase or plan (include `path:line` refs when possible).
+  - **Verification**: Commands run or checks performed (e.g., `nix run .#test`, specific ERT selectors).
+
+Keep entries short and scan-friendly; prefer bullets and concise sentences over prose. Avoid inlining large diffs — instead point to files and describe the change.
+
+### When to add a log entry
+
+- After completing a meaningful plan step (e.g., implementing a function, adding a test, updating a keybinding).
+- When you discover new information that was not captured in `research.md` and that materially affects the plan.
+- When you deviate from the plan (and whether the plan or research docs should be updated later).
+- When you run tests or lints that meaningfully increase confidence (or fail in surprising ways).
+
+Older `devlogs/Notes_*.org` files remain as historical context but should not be extended for new work; prefer the Efforts-based `log.md` instead.
 
 ## Commit/PR Messaging
 
