@@ -14,6 +14,7 @@
 (require 'json)
 (require 'lgr)
 (require 'benedict-provider)
+(require 'benedict-tools)
 (require 'benedict-http)
 
 (defgroup benedict-provider-openrouter nil
@@ -315,8 +316,8 @@ which some providers (like xAI/Grok) seem to emit within a single SSE block."
           (let ((choices (benedict-provider-openrouter--normalize-seq
                           (plist-get event :choices))))
             (cond
-             (choices)
-             (let* ((normalized (benedict-provider-openrouter--normalize-delta-choices
+             (choices
+              (let* ((normalized (benedict-provider-openrouter--normalize-delta-choices
                                   context choices)))
                 (let ((lgr (lgr-get-logger "benedict.openrouter")))
                   (lgr-trace lgr "Stream delta"
@@ -340,7 +341,7 @@ which some providers (like xAI/Grok) seem to emit within a single SSE block."
                                              :message-id request-id
                                              :kind 'thinking-delta
                                              :text chunk))))
-                              reasoning))))))
+                              reasoning)))))))
              ((benedict-provider-openrouter--stream-handle-reasoning-event
                context event)
               nil))))))))
@@ -1012,15 +1013,17 @@ When STREAM is non-nil, include the \"stream\": true flag in the payload."
   "Serialize TOOL spec plist into a tool definition."
   (let* ((id (plist-get tool :id))
          (doc (or (plist-get tool :doc) ""))
-         (schema (plist-get tool :schema)))
+         (schema (plist-get tool :schema))
+         (parameters (if schema
+                         (benedict-tool-schema->json-parameters schema)
+                       (benedict-tool-schema->json-parameters '(:type object)))))
     (list
      (cons "type" "function")
      (cons "function"
            (delq nil
                  (list (cons "name" (benedict-provider-openrouter--tool-name id))
                        (cons "description" doc)
-                       (cons "parameters"
-                             (benedict-provider-openrouter--encode-tool-schema schema))))))))
+                       (cons "parameters" parameters)))))))
 
 (defun benedict-provider-openrouter--tool-name (id)
   "Return a provider-safe string for tool ID."
@@ -1029,42 +1032,7 @@ When STREAM is non-nil, include the \"stream\": true flag in the payload."
    ((stringp id) id)
    (t (format "%s" id))))
 
-(defun benedict-provider-openrouter--encode-tool-schema (schema)
-  "Convert SCHEMA plist into a JSON schema alist."
-  (let ((properties nil)
-        (required nil))
-    (when (and schema (listp schema))
-      (let ((plist (copy-sequence schema)))
-        (while plist
-          (let* ((key (pop plist))
-                 (type (pop plist))
-                 (name (benedict-provider-openrouter--tool-argument-name key)))
-            (cond
-             ;; Nested object schema, e.g. :target (:kind string :path string ...)
-             ((and (listp type) (not (keywordp (car type))))
-              (let ((subschema (benedict-provider-openrouter--encode-tool-schema type)))
-                (push (cons name subschema) properties)))
-             ;; Simple leaf type
-             (t
-              (push (cons name
-                          (list (cons "type"
-                                      (benedict-provider-openrouter--tool-type-string type))))
-                    properties)))
-            (push name required)))))
-    (let ((payload (list (cons "type" "object")
-                         (cons "properties" (nreverse properties)))))
-      (when required
-        (push (cons "required" (vconcat (nreverse required))) payload))
-      payload)))
 
-(defun benedict-provider-openrouter--tool-type-string (type)
-  "Map TYPE indicator to a JSON schema \"type\" string."
-  (pcase type
-    ((or 'string :string "string") "string")
-    ((or 'integer :integer "integer" 'int :int) "integer")
-    ((or 'number :number "number" 'float :float) "number")
-    ((or 'boolean :boolean "boolean" 'bool :bool) "boolean")
-    (_ "string")))
 
 (defun benedict-provider-openrouter--serialize-tool-calls (calls)
   "Serialize CALLS (a list of tool call plists) for JSON encoding."
@@ -1077,8 +1045,10 @@ When STREAM is non-nil, include the \"stream\": true flag in the payload."
          (type (or (plist-get call :type) "function"))
          (name (benedict-provider-openrouter--tool-name
                 (or (plist-get call :name) (plist-get call :tool))))
-         (arguments (benedict-provider-openrouter--encode-tool-arguments
-                     (plist-get call :arguments))))
+         (raw-arguments (plist-get call :arguments))
+         (arguments (if (stringp raw-arguments)
+                        raw-arguments
+                      (benedict-tool-encode-args-json raw-arguments))))
     (list (cons "id" id)
           (cons "type" (if (stringp type) type "function"))
           (cons "function"
@@ -1086,41 +1056,6 @@ When STREAM is non-nil, include the \"stream\": true flag in the payload."
                       (list (cons "name" name)
                             (cons "arguments" arguments)))))))
 
-(defun benedict-provider-openrouter--encode-tool-arguments (arguments)
-  "Encode tool ARGUMENTS plist/alist into a JSON string."
-  (cond
-   ((stringp arguments) arguments)
-   ((null arguments) "{}")
-   (t (let ((alist (benedict-provider-openrouter--tool-arguments->alist arguments)))
-        (encode-coding-string (json-encode alist) 'utf-8)))))
-
-(defun benedict-provider-openrouter--tool-arguments->alist (arguments)
-  "Convert ARGUMENTS (plist/alist) into an alist with string keys."
-  (cond
-   ((null arguments) nil)
-   ((and (listp arguments) (keywordp (car arguments)))
-    (let ((plist (copy-sequence arguments))
-          result)
-      (while plist
-        (let ((key (pop plist))
-              (value (pop plist)))
-          (push (cons (benedict-provider-openrouter--tool-argument-name key) value)
-                result)))
-      (nreverse result)))
-   ((listp arguments)
-    (mapcar (lambda (entry)
-              (cons (benedict-provider-openrouter--tool-argument-name (car entry))
-                    (cdr entry)))
-            arguments))
-   (t nil)))
-
-(defun benedict-provider-openrouter--tool-argument-name (key)
-  "Normalize KEY into a string for tool argument encoding."
-  (cond
-   ((keywordp key) (substring (symbol-name key) 1))
-   ((symbolp key) (symbol-name key))
-   ((stringp key) key)
-   (t (format "%s" key))))
 
 (defun benedict-provider-openrouter--role-string (role)
   "Convert ROLE (symbol/string) to API string."

@@ -45,6 +45,112 @@ Each entry becomes a \"--glob !PATTERN\" argument to ripgrep."
   :type '(repeat string)
   :group 'benedict)
 
+;;; Tool schema encoding
+
+(defun benedict-tool--plist-entries (plist)
+  "Return PLIST as an alist preserving declaration order."
+  (let (result)
+    (cl-loop for (key value) on plist by #'cddr
+             do (push (cons key value) result))
+    (nreverse result)))
+
+(defun benedict-tool--schema-key-string (key)
+  "Return KEY represented as a JSON property name."
+  (cond
+   ((keywordp key) (substring (symbol-name key) 1))
+   ((symbolp key) (symbol-name key))
+   ((stringp key) key)
+   (t (error "Tool schema keys must be symbols or strings: %S" key))))
+
+(defun benedict-tool-type->json-type (type-tag)
+  "Normalize TYPE-TAG symbol to a JSON Schema type string."
+  (unless (symbolp type-tag)
+    (error "Tool schema :type must be a symbol: %S" type-tag))
+  (pcase type-tag
+    ('string "string")
+    ((or 'integer 'int) "integer")
+    ((or 'number 'float 'double 'real) "number")
+    ((or 'boolean 'bool) "boolean")
+    ('object "object")
+    (_ (error "Unknown tool schema type: %S" type-tag))))
+
+(defun benedict-tool--schema-append-metadata (alist schema)
+  "Append common metadata keys from SCHEMA onto ALIST."
+  (let ((result alist))
+    (when-let ((description (plist-get schema :description)))
+      (setq result (append result (list (cons "description" description)))))
+    (when (plist-member schema :default)
+      (setq result (append result (list (cons "default" (plist-get schema :default))))))
+    result))
+
+(defun benedict-tool--schema-required-vector (required)
+  "Return REQUIRED list as a JSON array vector."
+  (let ((names (and (listp required)
+                    (cl-remove-if-not #'identity
+                                      (mapcar #'benedict-tool--schema-key-string required)))))
+    (when names
+      (apply #'vector names))))
+
+(defun benedict-tool--encode-property-schema (prop-schema)
+  "Return JSON Schema alist for PROP-SCHEMA plist."
+  (let* ((type (plist-get prop-schema :type)))
+    (unless type
+      (error "Property schema missing :type: %S" prop-schema))
+    (let ((json-type (benedict-tool-type->json-type type)))
+      (if (string= json-type "object")
+          (benedict-tool-schema->json-parameters prop-schema)
+        (let ((result (list (cons "type" json-type))))
+          (benedict-tool--schema-append-metadata result prop-schema))))))
+
+(defun benedict-tool--encode-properties (props)
+  "Encode PROPS plist into a JSON Schema properties alist."
+  (when props
+    (let (encoded)
+      (dolist (entry (benedict-tool--plist-entries props))
+        (push (cons (benedict-tool--schema-key-string (car entry))
+                    (benedict-tool--encode-property-schema (cdr entry)))
+              encoded))
+      (nreverse encoded))))
+
+(defun benedict-tool-schema->json-parameters (schema)
+  "Convert SCHEMA plist to a JSON-Schema-shaped parameters object."
+  (let* ((json-type (benedict-tool-type->json-type (plist-get schema :type))))
+    (unless (string= json-type "object")
+      (error "Tool schemas must use :type object (got %S)" (plist-get schema :type)))
+    (let ((result nil))
+      (setq result (append result (list (cons "type" "object"))))
+      (setq result (benedict-tool--schema-append-metadata result schema))
+      (when-let ((properties (benedict-tool--encode-properties (plist-get schema :properties))))
+        (setq result (append result (list (cons "properties" properties)))))
+      (when-let ((required (benedict-tool--schema-required-vector (plist-get schema :required))))
+        (setq result (append result (list (cons "required" required)))))
+      result)))
+
+(defun benedict-tool-args->alist (args)
+  "Normalize ARGS plist or alist to a string-keyed alist."
+  (cond
+   ((null args) nil)
+   ((and (listp args) (consp (car args)))
+    (mapcar (lambda (pair)
+              (cons (benedict-tool--schema-key-string (car pair))
+                    (cdr pair)))
+            args))
+   ((listp args)
+    (unless (cl-evenp (length args))
+      (error "Tool args plist must have even length: %S" args))
+    (let (result)
+      (cl-loop for (key value) on args by #'cddr
+               do (push (cons (benedict-tool--schema-key-string key) value) result))
+      (nreverse result)))
+   (t (error "Tool args must be a plist or alist: %S" args))))
+
+(defun benedict-tool-encode-args-json (args)
+  "Return JSON string for ARGS by delegating to `json-encode'."
+  (let ((normalized (benedict-tool-args->alist args)))
+    (if normalized
+        (json-encode normalized)
+      "{}")))
+
 (defun benedict--search-project-root ()
   "Return the project root for the current buffer.
 Falls back to `default-directory' when no project is active."
@@ -263,8 +369,10 @@ via GLOBS, a list of strings passed as \"--glob\" arguments."
 
 (cl-defun benedict-tools-register (&key id fn schema approval doc)
   "Register a tool with ID and FN.
-SCHEMA is a plist describing arguments; APPROVAL is one of
-'auto, 'confirm, or 'always. DOC is an optional string."
+SCHEMA is a plist following the JSON-Schema-like contract consumed by
+`benedict-tool-schema->json-parameters' (top-level :type object with
+:properties and optional :required). APPROVAL is one of 'auto,
+'confirm, or 'always. DOC is an optional string."
   (puthash id (list :id id :fn fn :schema schema :approval approval :doc doc)
            benedict--tools))
 
@@ -313,25 +421,50 @@ ARGS must be a plist passed directly to the tool implementation."
 (benedict-tools-register
  :id 'write
  :fn #'benedict--tool-write
- :schema '(:target (:kind string :path string :buffer_name string)
-           :content string
-           :create_if_missing boolean)
+ :schema '(:type object
+           :description "Write content to a file or buffer."
+           :properties
+           (:target
+            (:type object
+             :description "Target file or buffer."
+             :properties
+             (:kind (:type string :description "Either 'file' or 'buffer'.")
+              :path (:type string :description "Filesystem path when kind is 'file'.")
+              :buffer_name (:type string :description "Buffer name when kind is 'buffer'.")))
+            :content (:type string :description "New content to write.")
+            :create_if_missing
+            (:type boolean :description "Whether to create the target if missing."))
+           :required (:target :content))
  :approval 'confirm
  :doc "Create or overwrite a file or buffer with new content.")
 
 (benedict-tools-register
  :id 'edit
  :fn #'benedict--tool-edit
- :schema '(:target (:kind string :path string :buffer_name string)
-           :old_text string
-           :new_text string)
+ :schema '(:type object
+           :description "Edit text in a file or buffer."
+           :properties
+           (:target
+            (:type object
+             :description "Target file or buffer."
+             :properties
+             (:kind (:type string :description "Either 'file' or 'buffer'.")
+              :path (:type string :description "Filesystem path when kind is 'file'.")
+              :buffer_name (:type string :description "Buffer name when kind is 'buffer'.")))
+            :old_text (:type string :description "Exact text to replace.")
+            :new_text (:type string :description "Replacement text."))
+           :required (:target :old_text :new_text))
  :approval 'confirm
  :doc "Replace exactly one occurrence of old_text with new_text.")
 
 (benedict-tools-register
  :id 'project-search
  :fn #'benedict--tool-project-search
- :schema '(:query string)
+ :schema '(:type object
+           :description "Search files within the current project using grep patterns."
+           :properties
+           (:query (:type string :description "Search query."))
+           :required (:query))
  :approval 'auto
  :doc "Search files within the current project using grep patterns.")
 
@@ -582,7 +715,13 @@ Optional START-LINE and END-LINE (1-based) restrict the output."
 (benedict-tools-register
  :id 'read-file
  :fn #'benedict--tool-read-file
- :schema '(:path string :start-line integer :end-line integer)
+ :schema '(:type object
+           :description "Read a file or buffer, optionally by line range."
+           :properties
+           (:path (:type string :description "Filesystem path or buffer name.")
+            :start-line (:type integer :description "1-based start line (optional).")
+            :end-line (:type integer :description "1-based end line (optional)."))
+           :required (:path))
  :approval 'auto
  :doc "Read the contents of a file.")
 
@@ -616,7 +755,12 @@ If PATH is provided, search only within that directory."
 (benedict-tools-register
  :id 'find-files
  :fn #'benedict--tool-find-files
- :schema '(:pattern string :path string)
+ :schema '(:type object
+           :description "Find files matching a glob pattern."
+           :properties
+           (:pattern (:type string :description "Glob-like pattern to search for.")
+            :path (:type string :description "Base directory relative to the project root."))
+           :required (:pattern))
  :approval 'auto
  :doc "Find files matching a glob pattern.")
 
@@ -662,7 +806,11 @@ This is a high-risk tool that evaluates arbitrary elisp code."
 (benedict-tools-register
  :id 'exec-elisp
  :fn #'benedict--tool-exec-elisp
- :schema '(:code string)
+ :schema '(:type object
+           :description "Execute Emacs Lisp code."
+           :properties
+           (:code (:type string :description "Elisp form to evaluate."))
+           :required (:code))
  :approval 'always
  :doc "Execute arbitrary elisp code and return the result.")
 
