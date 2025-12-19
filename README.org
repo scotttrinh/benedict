@@ -6,7 +6,7 @@
 * Benedict
 Benedict is an Emacs package that brings a truly native Emacs experience for interacting with AI agents: chat, refactors, diffs, search, tests, and approvals — all inside Emacs buffers, keymaps, and familiar UIs. It is not a thin CLI wrapper; it is Emacs-first.
 
-Status: pre‑alpha, design‑driven. This README describes the vision and interfaces we want to build. See ROADMAP.org for phased delivery.
+Status: alpha, functional. This README describes the core vision and currently implemented features. See ROADMAP.org for what's next.
 
 * Quick Start (Doom Emacs)
 
@@ -29,6 +29,8 @@ The snippet below is an annotated, copy‑pasteable Doom Emacs setup. Drop it in
 
         ;; Choose the provider:
         ;; - 'openrouter (default): real network calls
+        ;; - 'ollama: local models
+        ;; - 'vercel: Vercel AI Gateway
         ;; - 'fake: offline echo backend for testing
         benedict-provider 'openrouter)
 
@@ -65,7 +67,15 @@ The snippet below is an annotated, copy‑pasteable Doom Emacs setup. Drop it in
         :desc "Copy last response"   "y" #'benedict-chat-copy-last-response
         :desc "Retry last request"   "R" #'benedict-chat-retry-last
         :desc "Choose profile"       "P" #'benedict-chat-choose-profile
-        :desc "Choose model"         "M" #'benedict-chat-choose-model))
+        :desc "Choose model"         "M" #'benedict-chat-choose-model
+        :desc "Jump to latest"       "l" #'benedict-chat-jump-to-latest
+        :desc "Next tool"            "t" #'benedict-chat-next-tool
+        :desc "Prev tool"            "T" #'benedict-chat-previous-tool
+        :desc "Next failure"         "f" #'benedict-chat-next-tool-failure
+        :desc "Prev failure"         "F" #'benedict-chat-previous-tool-failure
+        :desc "Next thinking"        "h" #'benedict-chat-next-thinking
+        :desc "Prev thinking"        "H" #'benedict-chat-previous-thinking
+        :desc "Toggle thinking"      "s" #'benedict-chat-toggle-thinking))
 
 ;; OpenRouter credentials
 ;;
@@ -118,61 +128,43 @@ The snippet below is an annotated, copy‑pasteable Doom Emacs setup. Drop it in
 - Safe-by-default flows: preview edits, approve actions, track provenance
 - Local-first: support remote providers and local OpenAI‑compatible backends
 
-* Core Ideas (Aspirational)
-- Chat buffers with streaming responses, markdown/code rendering, retry/cancel
-- Region/defun/buffer/project-aware actions: ask, explain, transform, refactor
-- Tool calls map to Elisp capabilities with approval policies and diff previews
-- Project & git context: project.el, ripgrep, Magit, xref/imenu integration
-- Provider‑agnostic: OpenAI/Anthropic/OpenRouter/local endpoints via a small interface
- - Persistence: SQLite-backed per-thread histories, per-project settings, reproducible actions
+* Core Ideas
+- Chat buffers with streaming responses, markdown/code rendering, and Magit-inspired section folding.
+- Region/defun/buffer/project-aware actions: ask, explain, transform, refactor.
+- Tool calls map to Elisp capabilities with approval policies and diff previews.
+- Project & git context: project.el, ripgrep, Magit integration.
+- Provider‑agnostic: OpenRouter, Ollama, Vercel, and local endpoints via a shared interface.
+- Loop and autonomy safeguards: repetition detection, turn limits, and timing budget.
 
 * Emacs‑Native Tools & Workflows
 Typical agent tools → Emacs-native capabilities:
 - Files/Buffers
-  - read_file, list_files → project.el (project-files), dired listings, buffer slices (narrow)
-  - write_file/apply_patch → diff-mode/ediff preview; accept/reject hunks; optional Magit stage
-  - open_paths → find-file, dired-find-file, find-file-at-point
+  - read-file, find-files → project.el (project-files), buffer slices
+  - write, edit → direct edits with save-buffer and atomic changes
 - Project/Git
-  - git_status/diff/commit → Magit (magit-status, magit-diff, magit-commit); Forge for PRs
-  - branch/checkout/rebase → Magit transients; safe, guided flows
-- Search/Navigation
-  - search_text → ripgrep.el/consult-ripgrep; occur for in-buffer; xref/imenu/treesit for symbols
-  - jump_to_symbol → xref, imenu, eglot/lsp when available
-- Editing/Refactors
-  - transform_region → overlays or ediff preview; preserve indent/comments
-  - format_code → format-all/reformatter; language mode formatters
-  - snippet_insert → yasnippet; code fences to snippet
+  - project-search → fast ripgrep (rg) integration with structured matches
 - Build/Run/Tests
-  - run_command → make-process/compile with compilation-mode
-  - run_tests → projectile-test-project; clickable diagnostics
-- UI/Completion
-  - ask_user_choice → completing-read; transient menus for complex flows
-  - stream_render → incremental overlays with throttling; modeline status
-- Knowledge/Docs
-  - get_docstring → helpful/describe-symbol; eldoc; attach to chat
-  - notes/capture → org-capture for decisions, prompts, diffs
+  - exec-elisp → direct evaluation in the agent environment
+- UI/Navigation
+  - Magit-inspired sections: every turn, thinking block, and tool call is a foldable section
+  - Badges & Icons: visual status for roles, tools (success/error/running), and thinking
+  - Keyboard navigation: dedicated shortcuts for jumping between latest items, tools, and errors
 
-Unique tools we plan to expose:
-- propose_edits: Agent returns unified diff → diff-mode/ediff → Apply/Stage/Reject/Explain; provenance logged
-- search_project: ripgrep with globs; results as (file line col preview); open candidates
-- context_pack: Gather region/defun/file header/git diff/README; preview before send
-- magit_actions: High-level stage/commit/branch via Magit; agent suggests message
-- compile_run: Run targets; summarize diagnostics; jump-to-first-error
-- code_map: Outline and call sites via xref/imenu/treesit
-- apply_snippet: Insert fenced code into correct buffer with mode hooks
-- explain_diff: Summarize a diff into bullets; link to files
-- doc_lookup: Language-specific docs (helpful, pydoc, go doc, cargo doc)
-- interactive_select: completing-read gateway for one-of-N choices
-- security_gate: Mandatory approval for destructive ops; show proposed change + egress summary
-- elisp_eval (restricted): Whitelisted helpers; opt-in per project
+Implemented tools:
+- `project-search`: Search project files with ripgrep (rg).
+- `write`: Create or overwrite a file or buffer with specified content.
+- `edit`: Replace exactly one occurrence of a snippet in a file or buffer.
+- `read-file`: Read file or buffer contents (supports line ranges).
+- `find-files`: Search for files matching a glob pattern.
+- `exec-elisp`: Evaluate arbitrary Elisp code (requires explicit approval).
 
-* Architecture Overview (Planned)
-- Provider interface: create-session, send, stream, cancel; capability flags (tools, images)
-- HTTP/Streaming: url-retrieve for non-streaming; make-process + curl -N/SSE for streaming
-- Tool registry: map provider tool_calls → Elisp functions with schemas and approvals
-- Persistence: SQLite (sqlite.el, WAL) under XDG data dir (~/.local/share/benedict/benedict.sqlite) and/or per-project .benedict/benedict.sqlite; normalized tables (files/nodes/links/tags/aliases/refs), FTS5; migrations via PRAGMA user_version
-- Rendering: markdown-lite with code fences → prog-mode font-lock; action buttons
-- Telemetry: timings, token counts (if available), errors surfaced in buffer and echo area
+* Architecture Overview
+- Provider interface: Registry for providers (OpenRouter, Ollama, Vercel, Fake) with capabilities for streaming and tools.
+- HTTP/Streaming: `benedict-http` uses `url-retrieve` for simple requests and `curl` for robust streaming (SSE).
+- Tool registry: Maps tool identifiers to Elisp functions with JSON schema validation and per-tool approval policies.
+- Rendering: `benedict-chat-render` uses markers and a "Sentinel Pattern" to manage live-updating regions for messages, thinking blocks, and tool calls.
+- UI: Built on `magit-section` for deep nesting and folding; `svg-lib` is used for visual badges.
+- Agent Frame: `benedict-flywire` provides isolated execution environments for tools, preventing agents from polluting the user's primary Emacs session.
 
 Example: registering a tool (sketch)
 #+begin_src elisp
@@ -191,212 +183,17 @@ Example: registering a tool (sketch)
 - Streaming reuses the same markdown-lite layer: chunks are appended as plain text, then decorated in-place (code fences detected, faces/buttons added) without re-rendering the whole buffer, keeping cursor movement and redisplay stable.
 
 * Security & Privacy
-- Keys via auth-source or env vars; never written to disk; masked in logs
-- Approval policies: auto (read-only), confirm (writes, network with file content), always (cross-project writes, pushes)
-- Diff/ediff previews for file changes; explicit user action required to apply
-- Data boundary preview: show what will be sent; redaction helpers
-- Provenance: log tool invocations with redacted args and outcomes
+- Keys via auth-source or env vars; never written to disk; masked in logs.
+- Approval policies: auto (read-only), confirm (writes), always (high-risk like `exec-elisp`).
+- Diff previews for file changes via `propose-edit`.
+- Provenance: structured logs of all tool calls and outcomes.
 
-* Quickstart (Early MVP, subject to change)
-- Install: MELPA (planned). Until then, clone and add to load-path.
-- Enable minor mode: =benedict-mode= for ask/transform shortcuts; =M-x benedict-chat= opens the chat buffer.
-- Configure the OpenRouter provider (default): add an auth-source entry or set =$OPENROUTER_API_KEY= so Benedict can talk to multiple models through one endpoint.
-- Manual testing: once wired, send prompts from the chat buffer and inspect the provider metadata/latency inline; retry or copy outputs via keybindings.
-Example init:
-#+begin_src elisp
-(use-package benedict
-  :commands (benedict-chat benedict-mode)
-  :custom
-  ;; Phase 2 defaults to the OpenRouter backend
-  (benedict-provider 'openrouter)
-  (benedict-keymap-prefix (kbd "C-c C-b")))
-#+end_src
+* Loop and Autonomy Safeguards
+Benedict includes safeguards to prevent runaway loops or infinite tool usage.
 
-** Configure OpenRouter access
-Benedict looks for credentials in =~/.authinfo= (or any auth-source backend) first, then falls back to the environment variable listed in =benedict-provider-openrouter-env-var= (=OPENROUTER_API_KEY= by default).
-
-Auth-source example (machine derived from =benedict-provider-openrouter-endpoint=):
-#+begin_src text
-machine openrouter.ai login openrouter password sk-or-1234567890abcdef
-#+end_src
-
-Environment variable fallback:
-#+begin_src sh
-export OPENROUTER_API_KEY="sk-or-1234567890abcdef"
-#+end_src
-
-Optional customization knobs (see =M-x customize-group RET benedict-provider-openrouter=) let you change the endpoint, default model (e.g., =deepseek/chat=), or temperature for manual runs.
-
-** Configure Vercel AI Gateway access
-Benedict looks for credentials in =~/.authinfo= (or any auth-source backend) first, then falls back to the environment variable listed in =benedict-provider-vercel-env-var= (=VERCEL_API_KEY= by default).
-
-Auth-source example (machine derived from =benedict-provider-vercel-endpoint=):
-#+begin_src text
-machine ai-gateway.vercel.sh login vercel password sk_live_xxxxx
-#+end_src
-
-Environment variable fallback:
-#+begin_src sh
-export VERCEL_API_KEY="sk_live_xxxxx"
-#+end_src
-
-Optional customization knobs (see =M-x customize-group RET benedict-provider-vercel=) let you change the endpoint, default model (e.g., =gpt-4=), or temperature for manual runs.
-
-To use Vercel as your active provider, set:
-#+begin_src elisp
-(after! benedict
-  (setq benedict-provider 'vercel))
-#+end_src
-
-** Compose profiles and models
-- Profiles live in =benedict-chat-profiles=; entries accept =:label=, =:preamble=, and optional =:provider= / =:model= defaults used when composing. Preambles are treated as system-level snippets (combined with Benedict's base system prompt) and are not injected into user messages; history stays user/assistant/tool only.
-- Profiles may also opt into =:tool-allowlist= / =:tool-denylist= or high-level =:capabilities= so the request's =:tools= list matches the active profile. Basic =:autonomy= metadata can be attached for future enforcement.
-- Compose headers now show the active profile, provider, and model; click the profile/model labels to pick a profile or set a per-compose model override without touching user configuration.
-- Model overrides are free-form strings scoped to the compose buffer; sending or canceling clears the override so subsequent chats fall back to the profile/provider defaults.
-
-** Manual testing (non-streaming)
-1. Configure credentials as above and evaluate the Benedict init snippet (or load via =use-package!=).
-2. Run =M-x benedict-chat= to open the chat buffer (Phase 2 wires the send command to OpenRouter).
-3. Type =C-c C-s= (or =M-x benedict-chat-send-prompt=) and enter a question like “Summarize org-mode bullet syntax.”
-4. Watch for role-tagged lines in the chat buffer; metadata lines show the model, latency, and token usage when available.
-5. Use =g r= to retry the last request (replays the same payload) or =w= to copy the last assistant response into the kill ring.
-6. Problems? Inline error blocks include retry hints; the minibuffer also logs redacted provider diagnostics. Capture any findings in the devlogs for future automation.
-
-** Streaming with OpenRouter (Phase 3)
-Streaming is now enabled for OpenRouter by default so you can watch responses arrive incrementally alongside “Thinking…” reasoning blocks. To try it locally:
-
-1. Ensure =curl= is installed and on your =$PATH=. Any recent build (7.60+) that supports =--no-buffer= and =--fail-with-body= works. macOS 14+ ships a new-enough version; other systems can install via Homebrew/Nix.
-2. Confirm credentials as in the previous section, then visit =M-x customize-group RET benedict-provider-openrouter=.
-3. Verify or tweak these defcustoms:
-   - =benedict-provider-openrouter-enable-streaming= → =t= (default). Set to =nil= to force legacy non-streaming behavior.
-   - =benedict-provider-openrouter-curl-program= → path to =curl= if it is not discoverable via =$PATH=.
-   - =benedict-provider-openrouter-streaming-extra-args= → optional list of extra flags (e.g., proxy settings) appended to the curl command.
-4. Open =M-x benedict-chat= and send a prompt. When streaming works you will see:
-   - Progress logged at =trace= level (=benedict-provider-log-level=) with =:stream-start= / =:delta= / =:stream-complete= events.
-   - Thinking blocks appearing before the final assistant message whenever OpenRouter emits reasoning payloads.
-5. If curl is missing or streaming fails mid-request, Benedict automatically falls back to the non-streaming =url-retrieve= path; you can also set =:stream nil= on individual requests if you write your own client code.
-6. Cancellation (=g c= inside the chat buffer) now signals curl via the provider’s =:cancel= hook, so long-running responses can be interrupted cleanly.
-
-Tip: when reporting bugs, capture both =*Messages*= output with =benedict-provider-log-level= set to =trace= and the stderr buffer named =*benedict-openrouter-<request>-stderr*= for easier diagnosis of curl/HTTP issues.
-
-** Fake/test provider (offline + automated checks)
-Need to iterate without network or write automated tests? Switch to the fake provider:
-#+begin_src elisp
-(setq benedict-provider 'fake) ; echo backend with simulated latency
-#+end_src
-
-The fake backend:
-- Echoes the last user prompt with metadata similar to OpenRouter (model, latency, usage).
-- Is asynchronous by default (tunable via =benedict-provider-fake-latency-seconds=) so callbacks/UX behave like the real backend.
-- Offers helpers for deterministic tests — e.g., enqueue scripted successes/errors:
-  #+begin_src elisp
-  (benedict-provider-fake-with-script
-      (list (list :type 'success :content "hi")
-            (list :type 'error :message "nope" :code "fake_error")))
-    (benedict-chat-send-prompt "Hello"))
-  #+end_src
-
-For ERT/Buttercup, require =benedict-provider-fake=, set =(setq benedict-provider 'fake)=, and use =benedict-provider-fake-enqueue-response= / =...-enqueue-error= or the =...-with-script= macro to control outputs. This ensures chat/provider code paths are covered without relying on real OpenRouter keys.
-
-** Provider logs & traffic debugging
-All providers emit structured logs through a shared defcustom, so you can trace network failures or retry loops without patching code.
-
-- Set =benedict-provider-log-level= (Customize → Benedict → Benedict Provider) to =debug= or =trace= to enable logging. The default =nil= silences everything.
-- Logs appear in =~*Messages*= (or via =M-x view-echo-area-messages=) and include JSON payloads: request ids, attempts, masked headers, payload sizes, HTTP statuses, and retry decisions.
-- =debug= covers request/response lifecycle, retries, completions, and errors; =trace= adds streaming deltas (e.g., reasoning chunks from the fake provider).
-- Because logs use `message`, they follow =message-log-max=. Increase that variable if you need deeper history.
-
-Example init snippet:
-#+begin_src elisp
-(setq benedict-provider-log-level 'debug)   ; emit per-request diagnostics
-#+end_src
-
-* Configuration (Doom Emacs)
-
-This section assumes a Doom Emacs setup (see AGENT.md for local dev details). The snippets below go in =~/.config/doom/config.el= unless noted otherwise.
-
-** Core package
-
-- =benedict-keymap-prefix= :: Prefix key for =benedict-mode= commands (default: =C-c C-b=).
-- =benedict-provider= :: Active provider symbol, either =openrouter= (default) or =fake=.
-
-Minimal Doom setup with a custom prefix and default provider:
-#+begin_src elisp
-(add-to-list 'load-path "~/github.com/scotttrinh/benedict")
-
-(use-package! benedict
-  :commands (benedict-chat benedict-mode)
-  :init
-  (setq benedict-keymap-prefix (kbd "C-c C-b") ; default, customize if you like
-        benedict-provider      'openrouter))
-#+end_src
-
-Switch to the fake provider globally for offline work:
-#+begin_src elisp
-(after! benedict
-  (setq benedict-provider 'fake))
-#+end_src
-
-** Chat behavior & profiles
-
-- =benedict-chat-apply-buffer-name= :: Name of the temporary buffer used for apply blocks (default: =*Benedict Block*=).
-- =benedict-chat-token-display= :: How token usage appears in status lines; one of =prompt+completion= (default), =total=, or =none=.
-- =benedict-chat-compose-buffer-name-format= :: Format string for compose buffer names (default: =*Benedict Compose: %s*=).
-- =benedict-chat-base-system-prompt= :: Global system prompt prepended to every request; profile preambles are appended as system text (not injected into user messages).
-- =benedict-chat-profiles= :: Alist of profile definitions keyed by symbol; each entry supports =:label=, =:preamble=, optional =:provider= / =:model=, and optional tool/autonomy hints (= :tool-allowlist=, =:tool-denylist=, =:capabilities=, =:autonomy=, =:verbosity=).
-- =benedict-chat-capability-tool-map= :: Maps capability keywords (e.g., =:plan=, =:edit-files=) to tool ID lists used when profiles declare =:capabilities=.
-- =benedict-chat-default-profile= :: Default profile when opening a chat buffer (default: =coding=).
-- =benedict-chat-project-default-profiles= :: Alist mapping project roots (strings) to default profile symbols.
-- =benedict-chat-context-retain-after-send= :: When non-nil, keep pending context slices after sending from compose.
-
-Example: customize token display, tweak compose names, and add a focused “Review” profile plus a “Planner” profile that only advertises plan tools:
-#+begin_src elisp
-(after! benedict
-  (setq benedict-chat-token-display 'total
-        benedict-chat-compose-buffer-name-format "*Benedict Compose <%s>*"
-        benedict-chat-base-system-prompt "You are Benedict, a careful Emacs coding copilot."
-        benedict-chat-capability-tool-map '((:plan update-plan)
-                                            (:read-files list-files read-file))
-        benedict-chat-profiles
-        '((coding :label "Coding"
-                  :preamble "You assist with code inside Emacs.")
-          (review :label "Review"
-                  :preamble "You review patches for bugs and risks."
-                  :model "anthropic/claude-3.5-sonnet")
-          (planner :label "Planner"
-                   :preamble "Propose steps only; do not edit files or run tests."
-                   :capabilities (:plan)))))) ; expands via benedict-chat-capability-tool-map
-#+end_src
-
-Example: set per-project default profiles:
-#+begin_src elisp
-(after! benedict
-  (setq benedict-chat-project-default-profiles
-        '(("~/src/my-monorepo" . coding)
-          ("~/src/knowledge-base" . writing))))
-#+end_src
-
-Keep context slices attached to a chat after sending:
-#+begin_src elisp
-(after! benedict
-  (setq benedict-chat-context-retain-after-send t))
-#+end_src
-
-** Loop and Autonomy Safeguards
-
-Benedict includes safeguards to prevent runaway loops or infinite tool usage. These are configured via the `benedict` customize group.
-
-- =benedict-chat-loop-checkpoint-interval= :: Number of autonomous steps before pausing to ask for user confirmation (default: =5=). Set to =nil= to disable.
+- =benedict-chat-loop-checkpoint-interval= :: Number of autonomous steps before pausing to ask for user confirmation (default: =5=).
 - =benedict-chat-loop-max-time= :: Maximum duration (in seconds) an autonomous loop can run before pausing (default: =60.0=).
-- =benedict-chat-loop-max-tokens= :: Maximum total tokens consumed in a session before pausing (default: =nil=; disabled).
-- Repetition Guard :: Benedict automatically halts if it detects identical tool calls in consecutive turns. This is always enabled.
-
-Example: Allow 10 steps or 2 minutes of autonomy before pausing:
-#+begin_src elisp
-(after! benedict
-  (setq benedict-chat-loop-checkpoint-interval 10
-        benedict-chat-loop-max-time 120.0))
-#+end_src
+- Repetition Guard :: Benedict automatically halts if it detects identical tool calls in consecutive turns.
 
 ** Layered Autonomy Profiles
 
@@ -520,6 +317,22 @@ Example: enforce non-streaming behavior globally:
 #+begin_src elisp
 (after! benedict
   (setq benedict-provider-vercel-enable-streaming nil))
+#+end_src
+
+** Ollama provider options
+Ollama is a great way to run open-weights models locally. Benedict talks to the Ollama API (defaulting to localhost).
+
+All of these live under the Customize group =benedict-provider-ollama=.
+
+- =benedict-provider-ollama-endpoint= :: The completion endpoint (default: =http://localhost:11434/v1/chat/completions=).
+- =benedict-provider-ollama-default-model= :: The model to use (default: =gpt-oss:20b=).
+- =benedict-provider-ollama-default-temperature= :: Default sampling temperature (default: =0.2=).
+- =benedict-provider-ollama-enable-streaming= :: When non-nil, use curl-based streaming when available (default: =t=).
+
+Example: use Ollama as your active provider:
+#+begin_src elisp
+(after! benedict
+  (setq benedict-provider 'ollama))
 #+end_src
 
 ** Fake provider options

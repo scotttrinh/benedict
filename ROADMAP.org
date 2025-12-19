@@ -68,47 +68,48 @@ Acceptance:
 - Typed items render as distinct blocks (messages vs thinking vs tools vs plans); folding and buttons work; copy/apply actions operate on the correct regions
 - Code fences font-lock in streaming content; markdown-lite decoration is incremental and does not re-fontify the entire buffer
 
-* Phase 4 — Context & Project Integration [IN PROGRESS]
+* Phase 4 — Context & Project Integration [PARTIAL]
 Tasks:
-- Commands: ask region/defun/buffer/project; keymap prefix (default C-c b)
-- xref/imenu/treesit context providers; configurable slice sizes; elide large files
-- Git context: current branch, staged/unstaged diffs; preview what will be sent
-- Profiles: planning/coding/writing/review; system prompts; per-project defaults
+- [DONE] Commands: ask region/defun/buffer/project; keymap prefix (default C-c C-b)
+- [DONE] Basic Git context: current branch, status, and diff --stat
+- [DONE] Profiles: planning/coding/writing/review; system prompts; per-project defaults
+- [PENDING] xref/imenu/treesit context providers; configurable slice sizes; elide large files
 Acceptance:
-- Context_pack preview shows what will be sent; toggles apply; provider receives slices
-- Ask commands aware of region/defun; responses differ by profile
+- [DONE] Ask commands aware of region/defun; responses differ by profile
+- [DONE] Simple Git status/diff included in context
 
-* Phase 5 — Tools & Approvals (OpenCode‑inspired)
+* Phase 5 — Tools & Approvals [PARTIAL]
 Tasks:
-- Toolcall protocol: JSON args → plist; schema validation; approval policies: auto/confirm/always
-- Built-ins: search_project (ripgrep), propose_edits (unified diff), apply_diff (diff-mode/ediff)
-- Approval UI: transient menu + diff/ediff buffer; provenance logged to thread metadata
-- Magit actions (safe subset): stage hunks, commit with suggested message; no pushes initially
+- [DONE] Toolcall protocol: JSON args → plist; schema validation; approval policies: auto/confirm/always
+- [DONE] Built-ins: project-search (ripgrep), read-file, write, edit, find-files
+- [DONE] Isolated environment: `benedict-flywire` for agent-frame isolation and tool execution safety
+- [DONE] Basic Approval UI: y-or-n-p prompt showing tool and arguments
+- [PENDING] Advanced Approval UI: transient menu + diff/ediff buffer; provenance logged to thread metadata
+- [PENDING] Magit actions (safe subset): stage hunks, commit with suggested message
 Acceptance:
-- Agent can request search/edit; user sees approvals; diffs apply correctly; Magit reflects changes
-- Provenance shows who/what/when with redacted args
+- [DONE] Agent can request search/edit; user sees approvals; diffs apply correctly
+- [DONE] Isolated frame prevents agent from polluting user's session
 
-* Phase 6 — Multi‑Provider & Local Models
+* Phase 6 — Multi‑Provider & Local Models [DONE]
 Tasks:
-- Provider and model registry, selection, feature flags (tools, images, long contexts)
-- Anthropic/OpenRouter; local OpenAI‑compatible (vLLM, llama.cpp server)
-- Capability discovery; graceful degradation if a feature is unavailable
-- Can assign certain provider/model to certain profiles by default.
+- [DONE] Provider and model registry, selection, feature flags (tools, streaming)
+- [DONE] OpenRouter, Vercel, and Ollama (local) providers
+- [DONE] Capability discovery; graceful degradation if a feature is unavailable
+- [DONE] Assign certain provider/model to certain profiles by default
 Acceptance:
-- Switching providers is one command/customize; features adapt without errors
+- [DONE] Switching providers is one command/customize; features adapt without errors
 
-* Phase 7 — Persistence, History, UX Polish
+* Phase 7 — Persistence, History, UX Polish [IN PROGRESS]
 Tasks:
-- Thread histories: storage interface with file-per-thread, human-readable format (JSONL/sexp); per-project quick switch; file watchers and after-save hooks for incremental reindex; SQLite deferred to a later release
-- Placement: project-local .benedict/ (gitignored) with global fallback under XDG data dir; user-configurable
-- Versioning/migrations: per-thread schema version tags; migrate on load/save; refuse to write “newer-than-supported” files
-- History management UX: branch-at-any-message affordance; named vs ephemeral branches; simple visual history/graph per project; “redo from here” that creates a branch instead of mutating history
-- Time-travel and checkpoints: named checkpoints (e.g., “pre-bug-xyz”), safe snapshots around risky operations, and an easy “go back to before this detour” workflow
-- Compaction policies: layered history (raw transcript → summaries), per-thread auto-compaction options, reversible “unzip/rezip” of compacted segments backed by preserved full transcripts, and pinning to prevent compaction of important turns
-- Snippet library for prompts; message pinning; attachments (files/regions)
-- Faces/themes tweaks; customization group tidy; command palette via transient
+- [DONE] Magit-inspired UI: turn-based structural hierarchy using `magit-section`
+- [DONE] Visual Polish: standard badges and icons via `svg-lib` for roles and statuses
+- [DONE] Navigation: keyboard shortcuts for jumping between tools, errors, and thinking blocks
+- [PENDING] Thread histories: storage interface with file-per-thread, human-readable format (JSONL/sexp); SQLite deferred
+- [PENDING] History management UX: branch-at-any-message; named vs ephemeral branches
+- [PENDING] Compaction policies: layered history (raw transcript → summaries)
 Acceptance:
-- Threads persist across sessions; switching projects restores context; history UI makes branching and checkpointing discoverable and safe; UX feels consistent
+- [DONE] UX feels consistent and follows established Emacs patterns (folding, navigation)
+- [PENDING] Threads persist across sessions; switching projects restores context
 
 * Phase 8 — Extensibility API
 Tasks:
