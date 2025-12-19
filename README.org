@@ -133,7 +133,7 @@ The snippet below is an annotated, copy‑pasteable Doom Emacs setup. Drop it in
 - Region/defun/buffer/project-aware actions: ask, explain, transform, refactor.
 - Tool calls map to Elisp capabilities with approval policies and diff previews.
 - Project & git context: project.el, ripgrep, Magit integration.
-- Provider‑agnostic: OpenRouter, Ollama, Vercel, and local endpoints via a shared interface.
+- Provider‑agnostic: OpenRouter, Ollama, Vercel, Gemini (experimental), and local endpoints via a shared interface.
 - Loop and autonomy safeguards: repetition detection, turn limits, and timing budget.
 
 * Emacs‑Native Tools & Workflows
@@ -159,7 +159,7 @@ Implemented tools:
 - `exec-elisp`: Evaluate arbitrary Elisp code (requires explicit approval).
 
 * Architecture Overview
-- Provider interface: Registry for providers (OpenRouter, Ollama, Vercel, Fake) with capabilities for streaming and tools.
+- Provider interface: Registry for providers (OpenRouter, Ollama, Vercel, Gemini (experimental), Fake) with capabilities for streaming and tools.
 - HTTP/Streaming: `benedict-http` uses `url-retrieve` for simple requests and `curl` for robust streaming (SSE).
 - Tool registry: Maps tool identifiers to Elisp functions with JSON schema validation and per-tool approval policies.
 - Rendering: `benedict-chat-render` uses markers and a "Sentinel Pattern" to manage live-updating regions for messages, thinking blocks, and tool calls.
@@ -319,6 +319,48 @@ Example: enforce non-streaming behavior globally:
   (setq benedict-provider-vercel-enable-streaming nil))
 #+end_src
 
+** Gemini provider
+
+The `gemini` provider now implements the full Phase 2+ plan: credential
+resolution, PKCE, an Emacs-driven login command, and a basic
+`generateContent` chat request. OAuth refresh tokens are the only secrets ever
+written to disk, and they live in `auth-source`. Everything else stays
+in-memory.
+
+Typical workflow:
+- Run `M-x benedict-provider-gemini-login`, follow the browser instructions, then paste
+the redirected URL back into Emacs. The command exchanges the code for tokens,
+stores the refresh token via `auth-source`, and seeds the in-memory cache for
+immediate use.
+- Set `benedict-provider` to `'gemini` and chat as usual. The provider refreshes
+access tokens automatically, asynchronously updating your `auth-source` entry if
+Google rotates the refresh token.
+
+Gemini credentials in `auth-source` look like:
+#+begin_example
+machine gemini
+login oauth
+password 1//0gr3fr3sh-token
+port 443
+#+end_example
+`machine`/`login`/`port` default to the `benedict-provider-gemini-auth-source-*`
+defcustoms, so advanced users can point different hosts at different projects.
+
+Key customization knobs under the =benedict-provider-gemini= group:
+- =benedict-provider-gemini-endpoint= :: Base API endpoint (defaults to
+  https://generativelanguage.googleapis.com/v1beta/models).
+- =benedict-provider-gemini-default-model= :: Default text model when a request
+  omits :model (`gemini-2.0-flash`).
+- =benedict-provider-gemini-auth-source-host/user/port= :: Where refresh tokens
+  are stored and looked up.
+- =benedict-provider-gemini-client-id/secret=, =-redirect-uri=, =-scopes= :: OAuth
+  client wiring shared with `gemini-cli`.
+- =benedict-provider-gemini-authorization-endpoint= and
+  =-token-endpoint= :: Override Google endpoints if needed (e.g., for testing proxies).
+
+If you prefer to provision credentials outside Emacs, drop a refresh token into
+`auth-source` using the format above; future calls to `--send` will pick it up
+and refresh as needed.
 ** Ollama provider options
 Ollama is a great way to run open-weights models locally. Benedict talks to the Ollama API (defaulting to localhost).
 

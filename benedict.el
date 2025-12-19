@@ -184,6 +184,7 @@
 
 (require 'benedict-provider-openrouter)
 (require 'benedict-provider-vercel)
+(require 'benedict-provider-gemini)
 (require 'benedict-provider-fake)
 (require 'benedict-provider-ollama)
 
