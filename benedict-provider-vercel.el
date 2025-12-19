@@ -1074,13 +1074,21 @@ When STREAM is non-nil, include the \"stream\": true flag in the payload."
     (when (and schema (listp schema))
       (let ((plist (copy-sequence schema)))
         (while plist
-          (let ((key (pop plist))
-                (type (pop plist)))
-            (let ((name (benedict-provider-vercel--tool-argument-name key)))
-              (push (cons name (list (cons "type"
-                                           (benedict-provider-vercel--tool-type-string type))))
-                    properties)
-              (push name required))))))
+          (let* ((key (pop plist))
+                 (type (pop plist))
+                 (name (benedict-provider-vercel--tool-argument-name key)))
+            (cond
+             ;; Nested object schema, e.g. :target (:kind string :path string ...)
+             ((and (listp type) (not (keywordp (car type))))
+              (let ((subschema (benedict-provider-vercel--encode-tool-schema type)))
+                (push (cons name subschema) properties)))
+             ;; Simple leaf type
+             (t
+              (push (cons name
+                          (list (cons "type"
+                                      (benedict-provider-vercel--tool-type-string type))))
+                    properties)))
+            (push name required)))))
     (let ((payload (list (cons "type" "object")
                          (cons "properties" (nreverse properties)))))
       (when required

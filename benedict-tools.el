@@ -16,14 +16,6 @@
 (defvar benedict--tools (make-hash-table :test 'eq)
   "Registry of tool specs keyed by :id symbol.")
 
-(defcustom benedict-propose-edit-review-buffer-history-size 16
-  "Maximum number of propose-edit review buffers to remember."
-  :type 'integer
-  :group 'benedict)
-
-(defvar benedict--propose-edit-review-buffers nil
-  "History of review buffer names produced by the propose-edit tool.")
-
 (defcustom benedict-search-project-executable "rg"
   "Name or path of the ripgrep executable used for project searches."
   :type 'string
@@ -318,6 +310,31 @@ ARGS must be a plist passed directly to the tool implementation."
       (signal 'benedict-error (format "Tool %S invocation canceled by user" id)))
     (benedict--tool-call-direct id args)))
 
+(benedict-tools-register
+ :id 'write
+ :fn #'benedict--tool-write
+ :schema '(:target (:kind string :path string :buffer_name string)
+           :content string
+           :create_if_missing boolean)
+ :approval 'confirm
+ :doc "Create or overwrite a file or buffer with new content.")
+
+(benedict-tools-register
+ :id 'edit
+ :fn #'benedict--tool-edit
+ :schema '(:target (:kind string :path string :buffer_name string)
+           :old_text string
+           :new_text string)
+ :approval 'confirm
+ :doc "Replace exactly one occurrence of old_text with new_text.")
+
+(benedict-tools-register
+ :id 'project-search
+ :fn #'benedict--tool-project-search
+ :schema '(:query string)
+ :approval 'auto
+ :doc "Search files within the current project using grep patterns.")
+
 ;; Example demo tool used by echo provider later
 (defun benedict--tool-uppercase (&key text)
   "Return TEXT uppercased."
@@ -336,118 +353,7 @@ ARGS must be a plist passed directly to the tool implementation."
           :ui ui
           :data result)))
 
-;; Helpers for the propose-edit tool
-
-(defun benedict--propose-edit--review-buffer-name (path)
-  "Return the review buffer name for PATH."
-  (format "*Benedict Edit: %s*" path))
-
-(defun benedict--propose-edit--strip-diff-header (header)
-  "Trim HEADER and drop trailing metadata such as timestamps."
-  (when header
-    (let ((clean (string-trim header)))
-      (car (split-string clean "\t" t)))))
-
-(defun benedict--propose-edit--relative-diff-path (value root)
-  "Normalize diff path VALUE relative to ROOT."
-  (when-let ((header (benedict--propose-edit--strip-diff-header value)))
-    (let ((clean (string-trim header)))
-      (unless (string-empty-p clean)
-        (cond
-         ((string= clean "/dev/null") nil)
-         ((or (string-prefix-p "a/" clean)
-              (string-prefix-p "b/" clean))
-          (benedict--propose-edit--relative-diff-path
-           (substring clean 2) root))
-         (t
-          (let ((expanded (if (file-name-absolute-p clean)
-                              (expand-file-name clean)
-                            (expand-file-name clean root))))
-            (if (and root (file-in-directory-p expanded root))
-                (file-relative-name expanded root)
-              clean))))))))
-
-(defun benedict--propose-edit--unique-diff-paths (diff root)
-  "Return the unique normalized paths mentioned in DIFF relative to ROOT."
-  (with-temp-buffer
-    (insert diff)
-    (goto-char (point-min))
-    (let (paths)
-      (while (re-search-forward "^\\(?:--- \\|\\+\\+\\+ \\)\\(.+\\)$" nil t)
-        (let ((path (benedict--propose-edit--relative-diff-path
-                     (match-string 1) root)))
-          (when path (push path paths))))
-      (cl-delete-duplicates (nreverse paths) :test #'string=))))
-
-(defun benedict--propose-edit--count-diff-stats (diff)
-  "Return a plist of statistics for DIFF."
-  (with-temp-buffer
-    (insert diff)
-    (goto-char (point-min))
-    (let ((added 0)
-          (removed 0)
-          (hunks 0))
-      (while (not (eobp))
-        (let ((line (buffer-substring-no-properties
-                     (line-beginning-position) (line-end-position))))
-          (cond
-           ((string-prefix-p "@@" line)
-            (cl-incf hunks))
-           ((and (> (length line) 0)
-                 (eq (aref line 0) ?+)
-                 (not (string-prefix-p "+++" line)))
-            (cl-incf added))
-           ((and (> (length line) 0)
-                 (eq (aref line 0) ?-)
-                 (not (string-prefix-p "---" line)))
-            (cl-incf removed))))
-        (forward-line 1))
-      (unless (> hunks 0)
-        (signal 'benedict-error "Diff must include at least one hunk"))
-      (list :added added :removed removed :hunks hunks))))
-
-(defun benedict--propose-edit--prepare-review-buffer (name diff root)
-  "Create a review buffer NAME containing DIFF and rooted at ROOT."
-  (let ((buffer (get-buffer-create name)))
-    (with-current-buffer buffer
-      (let ((inhibit-read-only t))
-        (erase-buffer)
-        (insert diff)
-        (goto-char (point-min))
-        (setq-local default-directory root)
-        (diff-mode)))
-    buffer))
-
-(defun benedict--propose-edit--apply-review-buffer (buffer)
-  "Apply the diffs contained in BUFFER."
-  (let ((failed nil)
-        (orig-message (symbol-function 'message)))
-    (cl-letf (((symbol-function 'display-buffer)
-               (lambda (_buf &rest _)
-                 (or (get-buffer-window _buf 'visible) (selected-window))))
-              ((symbol-function 'message)
-               (lambda (fmt &rest args)
-                 (let ((text (apply #'format fmt args)))
-                   (when (and (stringp text)
-                              (string-match-p "hunks failed" text))
-                     (setq failed t))
-                   (apply orig-message fmt args)))))
-      (with-current-buffer buffer
-        (goto-char (point-min))
-        (diff-apply-buffer)))
-    (when failed
-      (signal 'benedict-error "Diff could not be applied"))))
-
-(defun benedict--propose-edit--record-review-buffer (name)
-  "Remember the review buffer NAME for later navigation."
-  (setq benedict--propose-edit-review-buffers
-        (cons name (cl-remove name benedict--propose-edit-review-buffers
-                              :test #'string=)))
-  (when (> (length benedict--propose-edit-review-buffers)
-           benedict-propose-edit-review-buffer-history-size)
-    (setcdr (nthcdr (1- benedict-propose-edit-review-buffer-history-size)
-                    benedict--propose-edit-review-buffers)
-            nil)))
+;; Helpers for the project tools
 
 (defun benedict--resolve-target-path (path root)
   "Return the absolute path for PATH under ROOT."
@@ -467,117 +373,159 @@ ARGS must be a plist passed directly to the tool implementation."
       (signal 'benedict-error (format "Target %s is not a file" path)))
     expanded))
 
-(cl-defun benedict--tool-propose-edit (&key path diff description &allow-other-keys)
-   "Apply DIFF to PATH and expose an Emacs diff buffer for review."
-   (let* ((path (string-trim (or path "")))
-          (diff (or diff ""))
-          (root (or (benedict--search-project-root)
-                    (signal 'benedict-error "Project root unavailable")))
-          (root (expand-file-name root))
-          (target (benedict--resolve-target-file path root))
-          (relative-path (file-relative-name target root)))
-     (when (string-empty-p diff)
-       (signal 'benedict-error "propose-edit requires a non-empty :diff"))
-     (let* ((diff (if (string-suffix-p "\n" diff) diff (concat diff "\n")))
-            (stats (benedict--propose-edit--count-diff-stats diff))
-            (diff-paths (benedict--propose-edit--unique-diff-paths diff root)))
-       (unless (= (length diff-paths) 1)
-         (signal 'benedict-error "Diff must touch exactly one file"))
-       (unless (string= (car diff-paths) relative-path)
-         (signal 'benedict-error
-                 (format "Diff header %s does not match expected path %s"
-                         (car diff-paths) relative-path)))
-       (let* ((review-name (benedict--propose-edit--review-buffer-name relative-path))
-              (review-buffer (benedict--propose-edit--prepare-review-buffer
-                              review-name diff root))
-              (description-suffix (if (and description (not (string-empty-p description)))
-                                      (format " (%s)" description)
-                                    ""))
-              (summary-line (format "Diff: %d hunks, +%d/-%d lines"
-                                    (plist-get stats :hunks)
-                                    (plist-get stats :added)
-                                    (plist-get stats :removed)))
-              ;; Format diff for inline display with syntax highlighting
-              (formatted-diff (concat summary-line "\n\n"
-                                      (concat "```diff\n" diff "```")))
-              ;; Action to open the review buffer
-              (open-diff-action (list :label "Open diff"
-                                      :handler (lambda ()
-                                                 (pop-to-buffer review-name)))))
-         (benedict--propose-edit--apply-review-buffer review-buffer)
-         (benedict--propose-edit--record-review-buffer review-name)
-         (list :path path
-               :content (format "Applied edit to %s%s" relative-path description-suffix)
-               :stats stats
-               :review-buffer review-name
-               :ui (list :header (format "Proposed edit — %s" relative-path)
-                         :state 'success
-                         :body formatted-diff
-                         :actions (list open-diff-action)))))))
-(benedict-tools-register
-  :id 'propose-edit
-  :fn #'benedict--tool-propose-edit
-  :schema '(:path string :diff string :description string)
-  :approval 'confirm
-  :doc "Apply a single-file diff patch and show an Emacs review buffer.")
 
-(cl-defun benedict--tool-create-file (&key path content description &allow-other-keys)
-  "Create a new file at PATH with CONTENT."
-  (let* ((path (string-trim (or path "")))
-         (content (or content ""))
-         (root (or (benedict--search-project-root)
-                   (signal 'benedict-error "Project root unavailable")))
-         (root (expand-file-name root)))
-    (unless (and (stringp path) (not (string-empty-p path)))
-      (signal 'benedict-error "Path argument must be non-empty"))
-    (let ((expanded (expand-file-name path root)))
-      (unless (file-in-directory-p expanded root)
-        (signal 'benedict-error "Path must stay inside the project root"))
-      (when (file-exists-p expanded)
-        (signal 'benedict-error (format "File %s already exists" path)))
-      ;; Create parent directories if needed
-      (let ((parent (file-name-directory expanded)))
-        (unless (file-directory-p parent)
-          (make-directory parent t)))
-      ;; Write the file
-      (write-region content nil expanded nil 'silent)
-      ;; Verify it was written
-      (unless (file-exists-p expanded)
-        (signal 'benedict-error (format "Failed to create file %s" path)))
-      ;; Return success result
-      (let ((relative-path (file-relative-name expanded root))
-            (line-count (length (split-string content "\n" t)))
-            ;; Action to open the created file
-            (open-file-action (list :label "Open file"
-                                    :handler (lambda ()
-                                               (find-file expanded)))))
-        (list :path path
-              :content (format "Created file %s with %d lines" relative-path line-count)
-              :ui (list :header (format "Created file — %s" relative-path)
+(defun benedict--tool-resolve-target-buffer (target &optional create-if-missing)
+  "Resolve TARGET to a buffer.
+TARGET is a plist with :kind (string), and either :path (for kind \"file\")
+or :buffer_name (for kind \"buffer\").
+If CREATE-IF-MISSING is non-nil, create the file/buffer if it doesn't exist.
+Returns a plist:
+  :buffer        (buffer object)
+  :kind          (\"file\" or \"buffer\")
+  :path          (original path if file)
+  :buffer_name   (original buffer name if buffer)
+  :absolute-path (absolute path if file)
+  :file-backed-p (boolean)"
+  (let* ((kind (plist-get target :kind))
+         (path (plist-get target :path))
+         (buffer-name (plist-get target :buffer_name)))
+    (cond
+     ((string= kind "file")
+      (unless (and path (not (string-empty-p (string-trim path))))
+        (signal 'benedict-error "Target kind is 'file' but 'path' is missing or empty"))
+      (let* ((root (or (benedict--search-project-root)
+                       (signal 'benedict-error "Project root unavailable")))
+             (expanded (expand-file-name path root)))
+        (unless (file-in-directory-p expanded root)
+          (signal 'benedict-error (format "Path %s must stay inside the project root" path)))
+        (when (and (not create-if-missing) (not (file-exists-p expanded)))
+          (signal 'benedict-error (format "File %s does not exist and create_if_missing is false" path)))
+        (when (and create-if-missing (not (file-exists-p expanded)))
+          (let ((parent (file-name-directory expanded)))
+            (unless (file-directory-p parent)
+              (make-directory parent t))))
+        (let ((buf (find-file-noselect expanded)))
+          (list :buffer buf
+                :kind "file"
+                :path path
+                :absolute-path expanded
+                :file-backed-p t))))
+     ((string= kind "buffer")
+      (unless (and buffer-name (not (string-empty-p (string-trim buffer-name))))
+        (signal 'benedict-error "Target kind is 'buffer' but 'buffer_name' is missing or empty"))
+      (let ((buf (if create-if-missing
+                     (get-buffer-create buffer-name)
+                   (or (get-buffer buffer-name)
+                       (signal 'benedict-error (format "Buffer %s does not exist and create_if_missing is false" buffer-name))))))
+        (list :buffer buf
+              :kind "buffer"
+              :buffer_name buffer-name
+              :file-backed-p (not (null (buffer-file-name buf))))))
+     (t
+      (signal 'benedict-error (format "Unknown target kind: %S" kind))))))
+
+(cl-defun benedict--tool-write (&key target content (create_if_missing t))
+  "Create or overwrite TARGET with CONTENT.
+TARGET is a plist with :kind, and either :path or :buffer_name."
+  (let* ((create-if-missing (if (eq create_if_missing 'json-false) nil create_if_missing))
+         (res (benedict--tool-resolve-target-buffer target create-if-missing))
+         (buf (plist-get res :buffer))
+         (kind (plist-get res :kind))
+         (path (plist-get res :path))
+         (buffer-name (plist-get res :buffer_name))
+         (file-backed-p (plist-get res :file-backed-p))
+         (text (or content "")))
+    (with-current-buffer buf
+      (atomic-change-group
+        (let ((inhibit-read-only t))
+          (erase-buffer)
+          (insert text)
+          ;; Ensure trailing newline for file-backed buffers
+          (when (and file-backed-p
+                     (not (string-empty-p text))
+                     (not (string-suffix-p "\n" text)))
+            (insert "\n"))))
+      (when file-backed-p
+        (save-buffer)))
+    (let* ((line-count (with-current-buffer buf (count-lines (point-min) (point-max))))
+           (target-label (if (string= kind "file") path buffer-name))
+           (summary (format "Wrote %d lines to %s %s" line-count kind target-label))
+           (open-action (list :label (if (string= kind "file") "Open file" "Switch to buffer")
+                              :handler (let ((absolute-path (plist-get res :absolute-path))
+                                             (target-buffer-name buffer-name)
+                                             (target-kind kind))
+                                         (lambda ()
+                                           (if (string= target-kind "file")
+                                               (find-file absolute-path)
+                                             (pop-to-buffer target-buffer-name)))))))
+      (list :target res
+            :operation "write"
+            :lines_written line-count
+            :content summary
+            :ui (list :header (format "Wrote %s — %s" kind target-label)
+                      :state 'success
+                      :body (format "Overwrote %s with %d lines" kind line-count)
+                      :actions (list open-action))))))
+
+(cl-defun benedict--tool-edit (&key target old_text new_text)
+  "Replace exactly one occurrence of OLD_TEXT with NEW_TEXT in TARGET.
+TARGET is a plist with :kind, and either :path or :buffer_name."
+  (let* ((old-text (or old_text ""))
+         (new-text (or new_text ""))
+         ;; 'edit' never creates missing targets
+         (res (benedict--tool-resolve-target-buffer target nil))
+         (buf (plist-get res :buffer))
+         (kind (plist-get res :kind))
+         (path (plist-get res :path))
+         (buffer-name (plist-get res :buffer_name))
+         (file-backed-p (plist-get res :file-backed-p)))
+    (when (string= old-text new-text)
+      (signal 'benedict-error "edit: old_text and new_text are identical; no change to apply"))
+    (with-current-buffer buf
+      (save-excursion
+        (goto-char (point-min))
+        (let ((matches nil)
+              (case-fold-search nil)) ;; Strict literal matching
+          (while (search-forward old-text nil t)
+            (push (cons (match-beginning 0) (match-end 0)) matches))
+          (let ((n (length matches)))
+            (cond
+             ((= n 0)
+              (signal 'benedict-error "edit: old_text not found; expected exactly one occurrence. Include more surrounding context in old_text"))
+             ((> n 1)
+              (signal 'benedict-error (format "edit: old_text matched %d times; expected exactly one. Include more surrounding context in old_text" n)))
+             (t
+              ;; Exactly one match
+              (atomic-change-group
+                (let ((inhibit-read-only t)
+                      (match (car matches)))
+                  (delete-region (car match) (cdr match))
+                  (goto-char (car match))
+                  (insert new-text)))
+              (when file-backed-p
+                (save-buffer)))))))
+      (let* ((target-label (if (string= kind "file") path buffer-name))
+             (summary (format "Replaced 1 snippet in %s %s" kind target-label))
+             (open-action (list :label (if (string= kind "file") "Open file" "Switch to buffer")
+                                :handler (let ((absolute-path (plist-get res :absolute-path))
+                                               (target-buffer-name buffer-name)
+                                               (target-kind kind))
+                                           (lambda ()
+                                             (if (string= target-kind "file")
+                                                 (find-file absolute-path)
+                                               (pop-to-buffer target-buffer-name)))))))
+        (list :target res
+              :operation "edit"
+              :matches_found 1
+              :replacements_made 1
+              :content summary
+              :ui (list :header (format "Edited %s — %s" kind target-label)
                         :state 'success
-                        :body (format "File created with %d lines of content" line-count)
-                        :actions (list open-file-action)))))))
-
-(benedict-tools-register
-  :id 'create-file
-  :fn #'benedict--tool-create-file
-  :schema '(:path string :content string :description string)
-  :approval 'confirm
-  :doc "Create a new file with the given content.")
-
-;; Seed demo tool
-(benedict-tools-register :id 'uppercase :fn #'benedict--tool-uppercase
-                         :schema '(:text string) :approval 'auto
-                         :doc "Uppercase a string")
-
-(benedict-tools-register
- :id 'project-search
- :fn #'benedict--tool-project-search
- :schema '(:query string)
- :approval 'auto
- :doc "Search files within the current project using grep patterns.")
+                        :body summary
+                        :actions (list open-action)))))))
 
 (cl-defun benedict--tool-read-file (&key path start-line end-line)
+
   "Return the content of the file or buffer at PATH.
 If PATH matches a live buffer name, reads from that buffer.
 Otherwise treats PATH as a file path relative to the project root.
@@ -672,91 +620,8 @@ If PATH is provided, search only within that directory."
  :approval 'auto
  :doc "Find files matching a glob pattern.")
 
-;;; Line-based file update tool
-
-(cl-defun benedict--tool-update-file (&key path start-line end-line content)
-  "Replace lines START-LINE to END-LINE in PATH with CONTENT.
-START-LINE and END-LINE are 1-based (inclusive).
-If END-LINE is nil, replaces only START-LINE.
-
-If you intend to overwrite the entire file, prefer `write-file' instead of
-trying to replace a single line with the full file contents."
-  (let* ((root (or (benedict--search-project-root)
-                   (signal 'benedict-error "Project root unavailable")))
-         (target (benedict--resolve-target-file path root))
-         (relative (file-relative-name target root))
-         (start (if (and start-line (> start-line 0)) start-line 1))
-         (end (or end-line start)))
-    (when (< end start)
-      (signal 'benedict-error "end-line cannot be less than start-line"))
-    (with-current-buffer (find-file-noselect target)
-      (goto-char (point-min))
-      (forward-line (1- start))
-      (let ((beg (point)))
-        (forward-line (1+ (- end start)))
-        (delete-region beg (point))
-        (goto-char beg)
-        (insert (or content ""))
-        (unless (or (null content)
-                    (string-empty-p content)
-                    (string-suffix-p "\n" content))
-          (insert "\n"))
-        (save-buffer)
-        (let ((line-count (length (split-string (or content "") "\n" t))))
-          (list :path relative
-                :content (format "Updated lines %d-%d in %s. (Note: this edits only that line range; use write-file to overwrite the whole file.)"
-                                 start end relative)
-                :start-line start
-                :end-line end
-                :lines-written line-count
-                :ui (list :header (format "Updated file — %s" relative)
-                          :state 'success
-                          :body (format "Replaced lines %d-%d with %d lines"
-                                        start end line-count))))))))
-
-(benedict-tools-register
- :id 'update-file
- :fn #'benedict--tool-update-file
- :schema '(:path string :start-line integer :end-line integer :content string)
- :approval 'confirm
- :doc "Replace a range of lines in a file with new content. For whole-file overwrites, use write-file.")
-
-;;; Whole-file write tool
-
-(cl-defun benedict--tool-write-file (&key path content)
-  "Overwrite PATH with CONTENT.
-
-This tool replaces the entire file contents and saves the buffer. It is safer
-than using `update-file' to attempt whole-file rewrites."
-  (let* ((root (or (benedict--search-project-root)
-                   (signal 'benedict-error "Project root unavailable")))
-         (target (benedict--resolve-target-file path root))
-         (relative (file-relative-name target root))
-         (text (or content "")))
-    (with-current-buffer (find-file-noselect target)
-      (let ((inhibit-read-only t))
-        (erase-buffer)
-        (insert text)
-        (unless (or (string-empty-p text)
-                    (string-suffix-p "\n" text))
-          (insert "\n"))
-        (save-buffer))
-      (let ((line-count (length (split-string text "\n" t))))
-        (list :path relative
-              :content (format "Wrote %d lines to %s" line-count relative)
-              :lines-written line-count
-              :ui (list :header (format "Wrote file — %s" relative)
-                        :state 'success
-                        :body (format "Overwrote file with %d lines" line-count)))))))
-
-(benedict-tools-register
- :id 'write-file
- :fn #'benedict--tool-write-file
- :schema '(:path string :content string)
- :approval 'confirm
- :doc "Overwrite an existing file with the given content.")
-
 ;;; Elisp execution tool
+
 
 (cl-defun benedict--tool-exec-elisp (&key code)
   "Execute elisp CODE and return the result.

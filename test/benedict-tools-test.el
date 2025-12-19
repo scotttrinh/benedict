@@ -57,67 +57,6 @@
               (should (string= content "line 3\nline 4\n")))))
       (delete-directory test-dir t))))
 
-;;; Update file tests
-
-(ert-deftest benedict-tools-update-file-replace-test ()
-  "Test replacing a range of lines in a file."
-  (let* ((test-dir (make-temp-file "benedict-test-update-" t))
-         (file (expand-file-name "test.txt" test-dir)))
-    (unwind-protect
-        (progn
-          (with-temp-file file
-            (insert "line 1\nline 2\nline 3\nline 4\n"))
-          (let ((default-directory test-dir))
-            (let ((result (benedict--tool-update-file :path "test.txt"
-                                                      :start-line 2
-                                                      :end-line 3
-                                                      :content "new A\nnew B\n")))
-              (should (plist-get result :path))
-              (let ((contents (with-temp-buffer
-                                (insert-file-contents file)
-                                (buffer-string))))
-                (should (string= contents "line 1\nnew A\nnew B\nline 4\n"))))))
-      (delete-directory test-dir t))))
-
-(ert-deftest benedict-tools-update-file-single-line-test ()
-  "Test replacing a single line in a file."
-  (let* ((test-dir (make-temp-file "benedict-test-update-" t))
-         (file (expand-file-name "test.txt" test-dir)))
-    (unwind-protect
-        (progn
-          (with-temp-file file
-            (insert "line 1\nline 2\nline 3\n"))
-          (let ((default-directory test-dir))
-            (let ((result (benedict--tool-update-file :path "test.txt"
-                                                      :start-line 2
-                                                      :content "replaced")))
-              (should (plist-get result :path))
-              (let ((contents (with-temp-buffer
-                                (insert-file-contents file)
-                                (buffer-string))))
-                (should (string= contents "line 1\nreplaced\nline 3\n"))))))
-      (delete-directory test-dir t))))
-
-;;; Write file tests
-
-(ert-deftest benedict-tools-write-file-overwrite-test ()
-  "Test overwriting an existing file."
-  (let* ((test-dir (make-temp-file "benedict-test-write-" t))
-         (file (expand-file-name "test.txt" test-dir)))
-    (unwind-protect
-        (progn
-          (with-temp-file file
-            (insert "old 1\nold 2\n"))
-          (let ((default-directory test-dir))
-            (let ((result (benedict--tool-write-file :path "test.txt"
-                                                     :content "new A\nnew B\n")))
-              (should (equal (plist-get result :path) "test.txt"))
-              (let ((contents (with-temp-buffer
-                                (insert-file-contents file)
-                                (buffer-string))))
-                (should (string= contents "new A\nnew B\n"))))))
-      (delete-directory test-dir t))))
-
 ;;; Exec elisp tests
 
 (ert-deftest benedict-tools-exec-elisp-success-test ()

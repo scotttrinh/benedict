@@ -315,7 +315,7 @@ which some providers (like xAI/Grok) seem to emit within a single SSE block."
           (let ((choices (benedict-provider-openrouter--normalize-seq
                           (plist-get event :choices))))
             (cond
-             (choices
+             (choices)
              (let* ((normalized (benedict-provider-openrouter--normalize-delta-choices
                                   context choices)))
                 (let ((lgr (lgr-get-logger "benedict.openrouter")))
@@ -340,7 +340,7 @@ which some providers (like xAI/Grok) seem to emit within a single SSE block."
                                              :message-id request-id
                                              :kind 'thinking-delta
                                              :text chunk))))
-                              reasoning)))))))
+                              reasoning))))))
              ((benedict-provider-openrouter--stream-handle-reasoning-event
                context event)
               nil))))))))
@@ -798,8 +798,8 @@ Returns non-nil when a delta was dispatched."
                        :status status-code
                        :latency latency
                        :raw parsed
-                       :empty-response empty-response))
-        (log-level (if empty-response 'warn 'info)))
+                       :empty-response empty-response)))
+        (log-level (if empty-response 'warn 'info))
     (benedict-provider-openrouter--state-update
      request-id :usage usage :model model :latency latency
      :status :completed :end-time end-time)
@@ -1036,13 +1036,21 @@ When STREAM is non-nil, include the \"stream\": true flag in the payload."
     (when (and schema (listp schema))
       (let ((plist (copy-sequence schema)))
         (while plist
-          (let ((key (pop plist))
-                (type (pop plist)))
-            (let ((name (benedict-provider-openrouter--tool-argument-name key)))
-              (push (cons name (list (cons "type"
-                                           (benedict-provider-openrouter--tool-type-string type))))
-                    properties)
-              (push name required))))))
+          (let* ((key (pop plist))
+                 (type (pop plist))
+                 (name (benedict-provider-openrouter--tool-argument-name key)))
+            (cond
+             ;; Nested object schema, e.g. :target (:kind string :path string ...)
+             ((and (listp type) (not (keywordp (car type))))
+              (let ((subschema (benedict-provider-openrouter--encode-tool-schema type)))
+                (push (cons name subschema) properties)))
+             ;; Simple leaf type
+             (t
+              (push (cons name
+                          (list (cons "type"
+                                      (benedict-provider-openrouter--tool-type-string type))))
+                    properties)))
+            (push name required)))))
     (let ((payload (list (cons "type" "object")
                          (cons "properties" (nreverse properties)))))
       (when required
@@ -1205,13 +1213,13 @@ When STREAM is non-nil, include the \"stream\": true flag in the payload."
 (defun benedict-provider-openrouter--decode-message (message)
   "Convert MESSAGE alist to Benedict's internal plist."
   (let* ((role (or (benedict-provider-openrouter--aget "role" message)
-                  "assistant"))
+                  "assistant")))
         (content (or (benedict-provider-openrouter--aget "content" message)
                      ""))
         (tool-calls (benedict-provider-openrouter--aget "tool_calls" message))
         (result (list :role (intern (downcase role))
                       :content content
-                      :raw message)))
+                      :raw message))
     (when tool-calls
       (when-let ((decoded (benedict-provider-openrouter--decode-tool-calls tool-calls)))
         (setq result (plist-put result :tool-calls decoded))))
