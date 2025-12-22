@@ -67,7 +67,6 @@
         apps.test = {
           type = "app";
           program = toString (runWithEask "run-tests" ''
-            ${eask}/bin/eask install-deps --dev
             exec ${eask}/bin/eask test ert-runner "$@"
           '');
         };
@@ -75,7 +74,6 @@
         apps.lint = {
           type = "app";
           program = toString (runWithEask "run-lint" ''
-            ${eask}/bin/eask install-deps --dev
             exec ${eask}/bin/eask lint checkdoc
             exec ${eask}/bin/eask lint package
           '');

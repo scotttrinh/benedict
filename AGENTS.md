@@ -67,11 +67,10 @@ The `flake.nix` file defines a reproducible testing environment with Emacs and a
   ```sh
   nix run .#test
   ```
-  - You can filter with an ERT selector:
+  - You can filter by filename
     ```sh
-    nix run .#test -- benedict-chat-stream-insertion
+    nix run .#test -- test/benedict-provider-gemini-test.el
     ```
-  - **Do not** call `ert-run-tests-batch(-and-exit)` inside individual test files; the runner in `test/run-tests.el` loads all `*-test.el` files and handles exit status.
 
 - **When adding new tests**: Ensure they run in batch mode (no interactive prompts, no buffers left behind).
 
@@ -91,7 +90,7 @@ Linters run checkdoc (docstring style), package-lint (packaging best practices),
 
 ### Test Architecture
 
-Tests use **ERT** (Emacs' standard test runner) with support for **ert-async** (non-blocking tests). This is documented in `test/run-tests.el`.
+Tests use **ERT** (Emacs' standard test runner) with support for **ert-async** (non-blocking tests).
 
 #### Standard unit tests (ERT)
 
@@ -174,7 +173,7 @@ Each test file should follow this pattern:
 ;;; my-feature-test.el ends here
 ```
 
-**Do not use `require` to load test files** if they don't provide a feature; `test/run-tests.el` uses `load` with force=t instead.
+**Do not use `require` to load test files** if they don't provide a feature;
 
 ### Byte-Compilation & Linting
 
