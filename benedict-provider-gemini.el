@@ -19,11 +19,27 @@
 (require 'lgr)
 (require 'benedict-provider)
 (require 'benedict-http)
+(require 'benedict-credentials)
 
 (defgroup benedict-provider-gemini nil
   "Settings for the Benedict Google Gemini provider."
   :group 'benedict
   :prefix "benedict-provider-gemini-")
+
+(defcustom benedict-provider-gemini-auth-method 'oauth
+  "Method used to authenticate with Gemini.
+Can be `oauth` (default) or `api-key`.
+In `oauth` mode, Benedict uses OAuth refresh tokens stored in the
+filesystem store (~/.config/benedict/auth.json).
+In `api-key` mode, Benedict uses an API key from environment variables,
+filesystem store, or auth-source."
+  :type '(choice (const oauth) (const api-key))
+  :group 'benedict-provider-gemini)
+
+(defcustom benedict-provider-gemini-env-var "GEMINI_API_KEY"
+  "Environment variable name used to locate the Gemini API key."
+  :type 'string
+  :group 'benedict-provider-gemini)
 
 (defcustom benedict-provider-gemini-endpoint
   "https://generativelanguage.googleapis.com/v1beta/models"
@@ -107,6 +123,16 @@ issuing chat requests."
 (defconst benedict-provider-gemini--logger-name "benedict.gemini"
   "Logger name used for Gemini provider events.")
 
+(defconst benedict-provider-gemini-cloud-code-endpoint
+  "https://cloudcode-pa.googleapis.com"
+  "Endpoint for Gemini Code Assist API.")
+
+(defconst benedict-provider-gemini-cloud-code-headers
+  '(("User-Agent" . "google-api-nodejs-client/9.15.1")
+    ("X-Goog-Api-Client" . "gl-node/22.17.0")
+    ("Client-Metadata" . "ideType=IDE_UNSPECIFIED,platform=PLATFORM_UNSPECIFIED,pluginType=GEMINI"))
+  "Headers required by the Gemini Code Assist API.")
+
 (defconst benedict-provider-gemini--token-debug-buffer-name
   "*Benedict Gemini Token Response*"
   "Name of the buffer used to surface raw token endpoint responses.")
@@ -121,38 +147,47 @@ issuing chat requests."
       (format "%s…%s" (substring value 0 4) (substring value (- (length value) 2)))
     "***"))
 
+(defun benedict-provider-gemini--authorization-token-part (string)
+  "Return the token portion of a Bearer Authorization STRING.
+Returns nil if STRING does not start with Bearer (case-insensitive)
+or contains no token."
+  (when (and (stringp string)
+             (string-match "^[Bb][Ee][Aa][Rr][Ee][Rr]\\s-*" string))
+    (let ((token (string-trim (substring string (match-end 0)))))
+      (if (string-empty-p token) nil token))))
+
 (defun benedict-provider-gemini--redact-authorization-value (value)
   "Return VALUE redacted while preserving Bearer metadata."
-  (let ((string (benedict-provider-gemini--stringify value)))
-    (if (string-prefix-p "Bearer " string)
-        (format "Bearer %s"
-                (benedict-provider-gemini--redact-secret
-                 (string-trim (substring string 7))))
-      (benedict-provider-gemini--redact-secret string))))
+  (let* ((string (benedict-provider-gemini--stringify value))
+         (token (benedict-provider-gemini--authorization-token-part string)))
+    (if token
+        (format "Bearer %s" (benedict-provider-gemini--redact-secret token))
+      ;; If it matched Bearer prefix but has no token, return "Bearer ***"
+      ;; Otherwise, for unknown Authorization formats, return fixed mask for safety
+      (if (and (stringp string) (string-match "^[Bb][Ee][Aa][Rr][Ee][Rr]\\s-*" string))
+          "Bearer ***"
+        "***"))))
 
 (defun benedict-provider-gemini--redact-headers (headers)
   "Redact sensitive HEADERS before logging."
   (mapcar
    (lambda (pair)
-     (let ((name (car pair))
-           (value (cdr pair)))
-       (if (string-match-p "^authorization$" (downcase (format "%s" name)))
-           (cons name (benedict-provider-gemini--redact-authorization-value value))
-         pair)))
-   (copy-sequence headers)))
+      (let* ((name (car pair))
+             (value (cdr pair))
+             ;; Ensure we have a string for the check
+             (name-str (cond ((symbolp name) (symbol-name name))
+                             ((stringp name) name)
+                             (t (format "%s" name)))))
+        (if (string-equal "authorization" (downcase name-str))
+            (cons name (benedict-provider-gemini--redact-authorization-value value))
+          pair)))
+   (if (listp headers) (copy-sequence headers) nil)))
 
 (defun benedict-provider-gemini--make-request-id ()
   "Return a log-friendly request identifier."
   (format "gemini-%s-%06x"
           (format-time-string "%Y%m%dT%H%M%SZ" (current-time) t)
           (random #x1000000)))
-
-(defun benedict-provider-gemini--auth-source-entry ()
-  "Return the auth-source entry storing the Gemini refresh token."
-  (car (auth-source-search :host benedict-provider-gemini-auth-source-host
-                           :user benedict-provider-gemini-auth-source-user
-                           :port benedict-provider-gemini-auth-source-port
-                           :max 1 :require '(:secret))))
 
 (defun benedict-provider-gemini--secret-as-string (secret)
   "Return SECRET resolved to a string."
@@ -175,35 +210,121 @@ issuing chat requests."
              benedict-provider-gemini--token-cache))
   data)
 
+(defun benedict-provider-gemini--load-managed-project (access-token)
+  "Load managed project information from Google using ACCESS-TOKEN.
+ Returns plist with :project-id (string or nil), :current-tier (string or nil),
+ :allowed-tiers (list or nil)."
+  (let* ((lgr (benedict-provider-gemini--logger))
+         (url (format "%s/v1internal:loadCodeAssist"
+                      (string-remove-suffix "/" benedict-provider-gemini-cloud-code-endpoint)))
+         (headers (append benedict-provider-gemini-cloud-code-headers
+                          (list (cons "Content-Type" "application/json")
+                                (cons "Authorization" (format "Bearer %s" access-token)))))
+         (body (json-encode `(("metadata" . ,(list (cons "ideType" "IDE_UNSPECIFIED")
+                                                   (cons "platform" "PLATFORM_UNSPECIFIED")
+                                                   (cons "pluginType" "GEMINI"))))))
+         (url-request-method "POST")
+         (url-request-extra-headers headers)
+         (url-request-data (encode-coding-string body 'utf-8))
+         (buffer (url-retrieve-synchronously url t t benedict-provider-gemini-token-timeout)))
+    (when buffer
+      (with-current-buffer buffer
+        (unwind-protect
+            (progn
+              (goto-char (point-min))
+              (if (re-search-forward "^HTTP/[0-9.]+ \\([0-9]+\\)" nil t)
+                  (let ((status (string-to-number (match-string 1))))
+                    (goto-char (point-min))
+                    (when (re-search-forward "\n\n" nil t)
+                      (let* ((parsed (benedict-provider-gemini--parse-json
+                                      (buffer-substring-no-properties (point) (point-max))))
+                             (project-id (plist-get parsed :cloudaicompanionProject))
+                             (current-tier (plist-get (plist-get parsed :currentTier) :id))
+                             (allowed-tiers (plist-get parsed :allowedTiers))
+                             (result (list :project-id project-id
+                                           :current-tier current-tier
+                                           :allowed-tiers allowed-tiers)))
+                        (if (= status 200)
+                            (progn
+                              (lgr-info lgr "Loaded Gemini managed project" :project-id project-id)
+                              result)
+                          (lgr-error lgr "Failed to load Gemini managed project"
+                                      :status status
+                                      :current-tier current-tier
+                                      :allowed-tiers allowed-tiers
+                                      :url url)
+                          result))))
+                (lgr-error lgr "Failed to load Gemini managed project: no HTTP status"
+                            :url url)
+                nil))
+          (when (buffer-live-p buffer)
+            (kill-buffer buffer)))))))
+
 (defun benedict-provider-gemini--credential-error ()
   "Signal a standardized credential error message."
-  (error (concat "Gemini refresh token missing. Add an auth-source entry for host %s "
-                 "and user %s, or run M-x benedict-provider-gemini-login.")
-         benedict-provider-gemini-auth-source-host
-         benedict-provider-gemini-auth-source-user))
+  (if (eq benedict-provider-gemini-auth-method 'oauth)
+      (error (concat "Gemini OAuth refresh token missing. "
+                     "Run M-x benedict-provider-gemini-login to authenticate."))
+    (error (benedict-credentials-error-message
+            'gemini
+            benedict-provider-gemini-env-var
+            benedict-provider-gemini-auth-source-host))))
 
 (defun benedict-provider-gemini--resolve-credential ()
   "Return plist describing the resolved credential."
-  (unless (featurep 'auth-source)
-    (require 'auth-source))
-  (let* ((entry (benedict-provider-gemini--auth-source-entry))
-         (refresh (and entry
-                       (benedict-provider-gemini--secret-as-string
-                        (plist-get entry :secret)))))
-    (unless (and refresh (not (string-empty-p refresh)))
-      (benedict-provider-gemini--credential-error))
-    (let* ((cached (benedict-provider-gemini--cache-get refresh))
-           (expires (plist-get cached :expires))
-           (access (plist-get cached :access))
-           (now (float-time)))
-      (if (and cached access expires (> expires now))
-          (list :access access :expires expires :refresh refresh)
-        (let* ((fresh (benedict-provider-gemini--refresh-access-token refresh entry))
-               (next-refresh (or (plist-get fresh :refresh) refresh)))
-          (benedict-provider-gemini--cache-store next-refresh fresh refresh)
-          (list :access (plist-get fresh :access)
-                :expires (plist-get fresh :expires)
-                :refresh next-refresh))))))
+  (if (eq benedict-provider-gemini-auth-method 'api-key)
+      (or (benedict-credentials-resolve-api-key
+           'gemini
+           :env-var benedict-provider-gemini-env-var
+           :auth-source-params (list :host benedict-provider-gemini-auth-source-host
+                                     :user benedict-provider-gemini-auth-source-user
+                                     :port benedict-provider-gemini-auth-source-port))
+          (benedict-provider-gemini--credential-error))
+    ;; OAuth mode
+    (let* ((creds (benedict-credentials-get 'gemini 'oauth))
+           (packed-refresh (plist-get creds :refresh))
+           (access (plist-get creds :access))
+           (expires (plist-get creds :expires))
+           (refresh-parts (benedict-provider-gemini--parse-refresh packed-refresh))
+           (refresh (car refresh-parts))
+           (project-id (nth 1 refresh-parts))
+           (managed-project-id (nth 2 refresh-parts)))
+      (unless (and refresh (not (string-empty-p refresh)))
+        (benedict-provider-gemini--credential-error))
+      (let* ((cached (benedict-provider-gemini--cache-get refresh))
+             (cached-expires (plist-get cached :expires))
+             (cached-access (plist-get cached :access))
+             (now (float-time)))
+        ;; Use cached access token if still valid and we have a project
+        (if (and cached-access cached-expires (> cached-expires now)
+                 (or project-id managed-project-id))
+            (list :access cached-access :expires cached-expires :refresh refresh
+                  :project-id (or project-id managed-project-id))
+          ;; Check if stored access token is still valid and we have a project
+          (if (and access expires (> expires now)
+                   (or project-id managed-project-id))
+              (progn
+                (benedict-provider-gemini--cache-store refresh creds)
+                (list :access access :expires expires :refresh refresh
+                      :project-id (or project-id managed-project-id)))
+            ;; Refresh token or load project
+            (let* ((fresh (if (and access expires (> expires now))
+                              (list :access access :expires expires :refresh refresh)
+                            (benedict-provider-gemini--refresh-access-token refresh)))
+                   (next-refresh (or (plist-get fresh :refresh) refresh))
+                   (next-access (plist-get fresh :access))
+                   (next-expires (plist-get fresh :expires)))
+               ;; If we don't have a project ID, try to load one
+               (unless (or project-id managed-project-id)
+                 (let ((managed-project-result (benedict-provider-gemini--load-managed-project next-access)))
+                   (setq managed-project-id (plist-get managed-project-result :project-id))))
+               (benedict-provider-gemini--persist-refresh-token
+                next-refresh next-access next-expires project-id managed-project-id)
+               (benedict-provider-gemini--cache-store next-refresh fresh refresh)
+               (list :access next-access
+                     :expires next-expires
+                     :refresh next-refresh
+                     :project-id (or project-id managed-project-id)))))))))
 
 (defun benedict-provider-gemini--ensure-number (value default)
   "Coerce VALUE into a number, falling back to DEFAULT when needed."
@@ -212,18 +333,6 @@ issuing chat requests."
    ((and (stringp value) (string-match-p "^[0-9.]+$" value))
     (string-to-number value))
    (t default)))
-
-(defun benedict-provider-gemini--update-auth-entry (entry refresh-token)
-  "Update ENTRY's secret to REFRESH-TOKEN, logging failures."
-  (when (and entry refresh-token)
-    (condition-case err
-        (when (fboundp 'auth-source-update)
-          (auth-source-update entry :secret refresh-token)
-          (plist-put entry :secret refresh-token))
-      (error
-       (let ((lgr (benedict-provider-gemini--logger)))
-         (lgr-warn lgr "Failed to update auth-source" :error err)))))
-  entry)
 
 (defun benedict-provider-gemini--debug-buffer-hint (buffer-name)
   "Return user-facing hint referencing BUFFER-NAME.
@@ -284,9 +393,8 @@ Returns the displayed buffer's name."
     (json-parse-string body :object-type 'plist :array-type 'list
                        :null-object nil :false-object :json-false)))
 
-(defun benedict-provider-gemini--refresh-access-token (refresh-token &optional entry)
-  "Return plist (:access :expires :refresh) after refreshing REFRESH-TOKEN.
-ENTRY, when non-nil, is the auth-source entry used for storage."
+(defun benedict-provider-gemini--refresh-access-token (refresh-token)
+  "Return plist (:access :expires :refresh) after refreshing REFRESH-TOKEN."
   (unless (and (stringp refresh-token) (not (string-empty-p refresh-token)))
     (benedict-provider-gemini--credential-error))
   (let* ((payload (benedict-provider-gemini--build-query-string
@@ -303,8 +411,8 @@ ENTRY, when non-nil, is the auth-source entry used for storage."
          (lgr (benedict-provider-gemini--logger)))
     (when (= status 0)
       (if (string-empty-p hint)
-          (error "Gemini token refresh failed before receiving an HTTP status.")
-        (error "Gemini token refresh failed before receiving an HTTP status. %s" hint)))
+          (error "Gemini token refresh failed before receiving an HTTP status")
+        (error "Gemini token refresh failed before receiving an HTTP status: %s" hint)))
     (if (= status 200)
         (let* ((access (plist-get parsed :access_token))
                (expires-in (benedict-provider-gemini--ensure-number
@@ -313,8 +421,6 @@ ENTRY, when non-nil, is the auth-source entry used for storage."
                (expires (+ (float-time) (max 30 (- expires-in 30)))))
           (unless access
             (error "Gemini token response missing access token"))
-          (when (and entry (not (string= new-refresh refresh-token)))
-            (benedict-provider-gemini--update-auth-entry entry new-refresh))
           (lgr-info lgr "Refreshed Gemini access token"
                     :rotated (not (string= new-refresh refresh-token))
                     :expires expires)
@@ -328,6 +434,7 @@ ENTRY, when non-nil, is the auth-source entry used for storage."
                           body
                           "Gemini token refresh failed")))
         (when (and (stringp code) (string= code "invalid_grant"))
+          (benedict-credentials-remove 'gemini 'oauth)
           (error (concat "Gemini refresh token was rejected (invalid_grant). "
                          "Run M-x benedict-provider-gemini-login to reauthenticate.")))
         (error "Gemini token refresh failed (HTTP %s): %s" status message)))))
@@ -362,6 +469,16 @@ ENTRY, when non-nil, is the auth-source entry used for storage."
    ((null value) "")
    (t (format "%s" value))))
 
+(defun benedict-provider-gemini--body-preview (body &optional limit)
+  "Return a truncated preview string for BODY."
+  (let* ((text (benedict-provider-gemini--stringify body))
+         (max (or limit 2000)))
+    (if (> (length text) max)
+        (format "%s… (truncated %d chars)"
+                (substring text 0 max)
+                (- (length text) max))
+      text)))
+
 (defun benedict-provider-gemini--parts-from-text (text)
   "Return Gemini parts vector from TEXT."
   (vector (list (cons "text" text))))
@@ -391,19 +508,22 @@ ENTRY, when non-nil, is the auth-source entry used for storage."
           (push message remainder))))
     (list system (nreverse remainder))))
 
-(defun benedict-provider-gemini--build-body (request)
-  "Return JSON-ready alist for REQUEST."
+(defun benedict-provider-gemini--build-body (request &optional project-id wrap)
+  "Return JSON-ready alist for REQUEST.
+When WRAP is non-nil, wrap the request in a Code Assist-compatible structure
+using PROJECT-ID."
   (let ((messages (plist-get request :messages)))
     (unless (and (listp messages) messages)
       (error "Gemini request requires a non-empty :messages list"))
     (pcase-let* ((`(,system ,content-messages)
-                  (benedict-provider-gemini--extract-system-prompt messages))
+                   (benedict-provider-gemini--extract-system-prompt messages))
                  (model (or (plist-get request :model)
                             benedict-provider-gemini-default-model))
                  (contents (mapcar #'benedict-provider-gemini--serialize-message
                                    content-messages))
                  (body `(("contents" . ,contents))))
-      (push (cons "model" model) body)
+      (unless wrap
+        (push (cons "model" model) body))
       (when system
         (push (cons "systemInstruction"
                     (list (cons "role" "system")
@@ -424,28 +544,41 @@ ENTRY, when non-nil, is the auth-source entry used for storage."
             (when value (push (cons "maxOutputTokens" value) generation))))
         (when generation
           (push (cons "generationConfig" (nreverse generation)) body)))
-      (nreverse body))))
+      (let ((result (nreverse body)))
+        (if wrap
+            `(("project" . ,(or project-id ""))
+              ("model" . ,model)
+              ("request" . ,result))
+          result)))))
 
-(defun benedict-provider-gemini--encode-payload (request)
+(defun benedict-provider-gemini--encode-payload (request &optional project-id wrap)
   "Return encoded JSON payload for REQUEST."
   (encode-coding-string
-   (json-encode (benedict-provider-gemini--build-body request))
+   (json-encode (benedict-provider-gemini--build-body request project-id wrap))
    'utf-8))
 
-(defun benedict-provider-gemini--build-headers (access-token)
-  "Return HTTP headers using ACCESS-TOKEN."
+(defun benedict-provider-gemini--build-headers (access-token &optional wrap)
+  "Return HTTP headers using ACCESS-TOKEN.
+When WRAP is non-nil, include headers required by the Cloud Code Assist API."
   (let ((headers (list (cons "Content-Type" "application/json")
                        (cons "Authorization" (format "Bearer %s" access-token)))))
-    (when (and benedict-provider-gemini-user-agent
-               (not (string-empty-p benedict-provider-gemini-user-agent)))
-      (push (cons "User-Agent" benedict-provider-gemini-user-agent) headers))
+    (if wrap
+        (setq headers (append benedict-provider-gemini-cloud-code-headers headers))
+      (when (and benedict-provider-gemini-user-agent
+                 (not (string-empty-p benedict-provider-gemini-user-agent)))
+        (push (cons "User-Agent" benedict-provider-gemini-user-agent) headers)))
     (nreverse headers)))
 
-(defun benedict-provider-gemini--endpoint-for (model &optional stream)
-  "Return endpoint URL for MODEL, optionally STREAM."
-  (let* ((base (string-remove-suffix "/" benedict-provider-gemini-endpoint))
-         (suffix (if stream ":streamGenerateContent" ":generateContent")))
-    (format "%s/%s%s" base model suffix)))
+(defun benedict-provider-gemini--endpoint-for (model &optional stream wrap)
+  "Return endpoint URL for MODEL, optionally STREAM.
+When WRAP is non-nil, use the Cloud Code Assist endpoint and /v1internal prefix."
+  (if wrap
+      (let* ((base (string-remove-suffix "/" benedict-provider-gemini-cloud-code-endpoint))
+             (suffix (if stream ":streamGenerateContent" ":generateContent")))
+        (format "%s/v1internal%s" base suffix))
+    (let* ((base (string-remove-suffix "/" benedict-provider-gemini-endpoint))
+           (suffix (if stream ":streamGenerateContent" ":generateContent")))
+      (format "%s/%s%s" base model suffix))))
 
 (defun benedict-provider-gemini--parts->text (parts)
   "Concatenate Gemini PARTS into a single string."
@@ -461,14 +594,11 @@ ENTRY, when non-nil, is the auth-source entry used for storage."
   "Return normalized usage plist from METADATA."
   (when metadata
     (let (result)
-      (when-let ((prompt (or (plist-get metadata :promptTokenCount
-                              (alist-get "promptTokenCount" metadata nil nil #'string=)))))
+      (when-let ((prompt (plist-get metadata :promptTokenCount)))
         (setq result (plist-put result :prompt prompt)))
-      (when-let ((completion (or (plist-get metadata :candidatesTokenCount)
-                                 (alist-get "candidatesTokenCount" metadata nil nil #'string=))))
+      (when-let ((completion (plist-get metadata :candidatesTokenCount)))
         (setq result (plist-put result :completion completion)))
-      (when-let ((total (or (plist-get metadata :totalTokenCount)
-                            (alist-get "totalTokenCount" metadata nil nil #'string=))))
+      (when-let ((total (plist-get metadata :totalTokenCount)))
         (setq result (plist-put result :total total)))
       result)))
 
@@ -476,14 +606,17 @@ ENTRY, when non-nil, is the auth-source entry used for storage."
   "Handle successful BODY for CONTEXT."
   (condition-case err
       (let* ((parsed (benedict-provider-gemini--parse-json body))
-             (candidates (plist-get parsed :candidates))
+             ;; If the response is wrapped (Cloud Code Assist), the actual Gemini
+             ;; response is under the "response" key.
+             (effective (or (plist-get parsed :response) parsed))
+             (candidates (plist-get effective :candidates))
              (first (car candidates))
              (content (and first (plist-get first :content)))
              (parts (or (and content (plist-get content :parts))
                         (plist-get first :parts)))
              (text (benedict-provider-gemini--parts->text parts))
              (usage (benedict-provider-gemini--usage-from-metadata
-                     (plist-get parsed :usageMetadata)))
+                     (plist-get effective :usageMetadata)))
              (message (list :role 'assistant :content text))
              (request-id (plist-get context :request-id))
              (start (plist-get context :start-time))
@@ -493,13 +626,19 @@ ENTRY, when non-nil, is the auth-source entry used for storage."
                            :provider 'gemini
                            :usage usage
                            :latency latency
-                           :raw parsed)))
-        (let ((lgr (benedict-provider-gemini--logger)))
-          (lgr-info lgr "Gemini completion"
-                    :request-id request-id
-                    :latency latency
-                    :empty-response (string-empty-p text)))
-        (if (functionp (plist-get context :on-complete))
+                           :raw effective)))
+         (let ((lgr (benedict-provider-gemini--logger)))
+           (lgr-info lgr "Gemini completion"
+                     :request-id request-id
+                     :latency latency
+                     :empty-response (if (string-empty-p text) "yes" "no"))
+           (lgr-debug lgr "Gemini HTTP response"
+                      :request-id request-id
+                      :latency latency
+                      :model (plist-get context :model)
+                      :empty-response (if (string-empty-p text) "yes" "no")
+                      :body-preview (benedict-provider-gemini--body-preview body)))
+         (if (functionp (plist-get context :on-complete))
             (funcall (plist-get context :on-complete) result)
           (when (functionp (plist-get context :on-success))
             (funcall (plist-get context :on-success) result)))
@@ -534,18 +673,22 @@ ENTRY, when non-nil, is the auth-source entry used for storage."
          (lgr (benedict-provider-gemini--logger))
          (message-details (and body (benedict-provider-gemini--extract-error-message body)))
          (payload (list :type (or type 'network)
-                        :provider 'gemini
-                        :message (or (plist-get message-details :message)
-                                     (plist-get err :message)
-                                     stderr
-                                     "Gemini request failed")
-                        :status (plist-get message-details :status)
-                        :retryable nil
-                        :body body)))
+                         :provider 'gemini
+                         :message (or (plist-get message-details :message)
+                                      (plist-get err :message)
+                                      stderr
+                                      "Gemini request failed")
+                         :status (or (plist-get message-details :status) :json-false)
+                         :retryable :json-false
+                         :body body)))
     (lgr-error lgr "Gemini request failed"
                :request-id request-id
-               :type type
-               :message (plist-get payload :message))
+               :type (if type (symbol-name type) "unknown")
+               :message (plist-get payload :message)
+               :status (plist-get payload :status))
+    (lgr-debug lgr "Gemini request failure detail"
+               :request-id request-id
+               :body-preview (benedict-provider-gemini--body-preview body))
     (benedict-provider-gemini--emit-error context payload)))
 
 (cl-defun benedict-provider-gemini--send
@@ -554,24 +697,38 @@ ENTRY, when non-nil, is the auth-source entry used for storage."
 ON-SUCCESS/ON-ERROR/ON-COMPLETE mirror `benedict-provider-dispatch'."
   (let* ((credential (benedict-provider-gemini--resolve-credential))
          (model (or (plist-get request :model) benedict-provider-gemini-default-model))
-         (payload (benedict-provider-gemini--encode-payload (plist-put (copy-sequence request)
-                                                                       :model model)))
+         (wrap (eq benedict-provider-gemini-auth-method 'oauth))
+         (project-id (plist-get credential :project-id))
+         (payload (benedict-provider-gemini--encode-payload
+                   (plist-put (copy-sequence request) :model model)
+                   project-id wrap))
          (request-id (or (plist-get request :request-id)
                          (benedict-provider-gemini--make-request-id)))
          (start-time (current-time))
-         (url (benedict-provider-gemini--endpoint-for model nil))
-         (headers (benedict-provider-gemini--build-headers (plist-get credential :access)))
+         (url (benedict-provider-gemini--endpoint-for model nil wrap))
+         (headers (benedict-provider-gemini--build-headers (plist-get credential :access) wrap))
          (context (list :request-id request-id
                         :model model
                         :start-time start-time
                         :on-success on-success
                         :on-error on-error
                         :on-complete on-complete)))
-    (let ((lgr (benedict-provider-gemini--logger)))
-      (lgr-debug lgr "Gemini request"
+    (let ((lgr (benedict-provider-gemini--logger))
+          (redacted-headers (benedict-provider-gemini--redact-headers headers)))
+      (lgr-debug lgr "Gemini HTTP request"
                  :request-id request-id
+                 :url url
                  :model model
-                 :headers (benedict-provider-gemini--redact-headers headers)))
+                 :auth-method (symbol-name benedict-provider-gemini-auth-method)
+                 :wrap (if wrap "yes" "no")
+                 :project-id project-id
+                 :headers (let (result)
+                            (dolist (h redacted-headers)
+                              (let* ((name (car h))
+                                     (sym (if (symbolp name) name (intern (format ":%s" name)))))
+                                (setq result (plist-put result sym (cdr h)))))
+                            result)
+                 :body-preview (benedict-provider-gemini--body-preview payload)))
     (benedict-http-request
      url
      :method "POST"
@@ -607,16 +764,16 @@ ON-SUCCESS/ON-ERROR/ON-COMPLETE mirror `benedict-provider-dispatch'."
         (error "Gemini callback URL missing code/state"))
       (let ((decoded (benedict-provider-gemini--decode-state state-param)))
         (unless (and decoded (equal (plist-get decoded :verifier) verifier))
-          (error "OAuth state mismatch; aborting.")))
-      (let* ((tokens (benedict-provider-gemini--exchange-authorization-code code verifier))
-             (refresh (plist-get tokens :refresh))
-             (access (plist-get tokens :access))
-             (expires (plist-get tokens :expires)))
-        (benedict-provider-gemini--persist-refresh-token refresh)
-        (benedict-provider-gemini--cache-store refresh (list :access access :expires expires))
-        (message "Gemini refresh token stored for %s/%s"
-                 benedict-provider-gemini-auth-source-host
-                 benedict-provider-gemini-auth-source-user)))))
+          (error "OAuth state mismatch; aborting"))
+       (let* ((tokens (benedict-provider-gemini--exchange-authorization-code code verifier))
+              (refresh (plist-get tokens :refresh))
+              (access (plist-get tokens :access))
+              (expires (plist-get tokens :expires))
+              (managed-project-result (benedict-provider-gemini--load-managed-project access))
+              (managed-project-id (plist-get managed-project-result :project-id)))
+         (benedict-provider-gemini--persist-refresh-token refresh access expires nil managed-project-id)
+         (benedict-provider-gemini--cache-store refresh (list :access access :expires expires))
+         (message "Gemini refresh token stored in %s" (benedict-credentials--file)))))))
 
 (defun benedict-provider-gemini--generate-verifier ()
   "Return a freshly generated PKCE verifier string."
@@ -691,8 +848,8 @@ ON-SUCCESS/ON-ERROR/ON-COMPLETE mirror `benedict-provider-dispatch'."
          (parsed (benedict-provider-gemini--parse-json body)))
     (when (= status 0)
       (if (string-empty-p hint)
-          (error "Gemini login failed before receiving an HTTP status.")
-        (error "Gemini login failed before receiving an HTTP status. %s" hint)))
+          (error "Gemini login failed before receiving an HTTP status")
+        (error "Gemini login failed before receiving an HTTP status: %s" hint)))
     (unless (= status 200)
       (let* ((message (or (plist-get parsed :error_description)
                           body
@@ -711,19 +868,30 @@ ON-SUCCESS/ON-ERROR/ON-COMPLETE mirror `benedict-provider-dispatch'."
             :expires (+ (float-time) (max 30 (- expires-in 30)))))))
 
 
-(defun benedict-provider-gemini--persist-refresh-token (refresh-token)
-  "Persist REFRESH-TOKEN into auth-source."
-  (let ((entry (benedict-provider-gemini--auth-source-entry)))
-    (if entry
-        (benedict-provider-gemini--update-auth-entry entry refresh-token)
-      (if (fboundp 'auth-source-add)
-          (auth-source-add :host benedict-provider-gemini-auth-source-host
-                           :user benedict-provider-gemini-auth-source-user
-                           :port benedict-provider-gemini-auth-source-port
-                           :secret refresh-token
-                           :create t)
-        (error (concat "Cannot store Gemini refresh token automatically. "
-                       "Please add it to auth-source manually."))))))
+(defun benedict-provider-gemini--parse-refresh (refresh)
+  "Split REFRESH string into (REFRESH-TOKEN PROJECT-ID MANAGED-PROJECT-ID)."
+  (let ((parts (mapcar (lambda (x) (if (string= x "") nil x))
+                       (split-string (or refresh "") "|"))))
+    (list (nth 0 parts)
+          (nth 1 parts)
+          (nth 2 parts))))
+
+(defun benedict-provider-gemini--format-refresh (refresh-token &optional project-id managed-project-id)
+  "Serialize REFRESH-TOKEN and project IDs into a packed string."
+  (if (or project-id managed-project-id)
+      (format "%s|%s|%s"
+              (or refresh-token "")
+              (or project-id "")
+              (or managed-project-id ""))
+    (or refresh-token "")))
+
+(defun benedict-provider-gemini--persist-refresh-token (refresh access expires &optional project-id managed-project-id)
+  "Persist REFRESH token and related ACCESS and EXPIRES metadata.
+Optional PROJECT-ID and MANAGED-PROJECT-ID are packed into the refresh string."
+  (let* ((entry (list :refresh (benedict-provider-gemini--format-refresh refresh project-id managed-project-id)
+                      :access access
+                      :expires expires)))
+    (benedict-credentials-set 'gemini 'oauth entry)))
 
 (benedict-provider-register
  (benedict-provider--create

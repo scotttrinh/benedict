@@ -16,6 +16,7 @@
 (require 'benedict-provider)
 (require 'benedict-tools)
 (require 'benedict-http)
+(require 'benedict-credentials)
 
 (defgroup benedict-provider-openrouter nil
   "Settings for the Benedict OpenRouter provider."
@@ -834,13 +835,15 @@ Returns non-nil when a delta was dispatched."
                   :request-id (plist-get context :request-id)
                   :code code
                   :message message
-                  :retrying t)
+                  :retrying t
+                  :body body)
       (lgr-error lgr "HTTP error"
                  :status status-code
                  :request-id (plist-get context :request-id)
                  :code code
                  :message message
-                 :retrying nil)
+                 :retrying nil
+                 :body body)
       (benedict-provider-openrouter--emit-error
        context (list :type 'http :status status-code :code code :message message
                      :retryable retryable :body body)))))
@@ -1214,36 +1217,15 @@ When STREAM is non-nil, include the \"stream\": true flag in the payload."
 
 (defun benedict-provider-openrouter--resolve-credential ()
   "Return plist describing the resolved credential."
-  (or (benedict-provider-openrouter--auth-source-credential)
-      (benedict-provider-openrouter--env-credential)
-      (error (concat "OpenRouter API key missing. "
-                     "Configure auth-source for host %s or set %s.")
-             (benedict-provider-openrouter--host)
-             benedict-provider-openrouter-env-var)))
-
-(defun benedict-provider-openrouter--auth-source-credential ()
-  "Return auth-source credential plist when available."
-  (when (require 'auth-source nil t)
-    (let* ((host (benedict-provider-openrouter--host))
-           (search-args (list :host host :max 1 :require '(:secret)))
-           (search-args (if benedict-provider-openrouter-auth-source-user
-                            (append search-args (list :user benedict-provider-openrouter-auth-source-user))
-                          search-args))
-           (entry (car (apply #'auth-source-search search-args))))
-      (when entry
-        (let* ((secret (plist-get entry :secret))
-               (token (cond
-                       ((functionp secret) (funcall secret))
-                       ((stringp secret) secret)
-                       (t nil))))
-          (when (and (stringp token) (not (string-empty-p token)))
-            (list :token token :source 'auth-source :entry entry)))))))
-
-(defun benedict-provider-openrouter--env-credential ()
-  "Return env-based credential plist when present."
-  (let ((token (getenv benedict-provider-openrouter-env-var)))
-    (when (and (stringp token) (not (string-empty-p token)))
-      (list :token token :source 'env))))
+  (or (benedict-credentials-resolve-api-key
+       'openrouter
+       :env-var benedict-provider-openrouter-env-var
+       :auth-source-params (list :host (benedict-provider-openrouter--host)
+                                 :user benedict-provider-openrouter-auth-source-user))
+      (error (benedict-credentials-error-message
+              'openrouter
+              benedict-provider-openrouter-env-var
+              (benedict-provider-openrouter--host)))))
 
 (defun benedict-provider-openrouter--host ()
   "Extract host from the configured endpoint."

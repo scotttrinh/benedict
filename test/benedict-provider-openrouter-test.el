@@ -198,5 +198,18 @@
     (should (equal arguments expected-json))))
 
 
+(ert-deftest benedict-provider-openrouter-resolve-from-file ()
+  "OpenRouter resolves credentials from the filesystem store."
+  (let ((temp-dir (make-temp-file "benedict-test-" t)))
+    (unwind-protect
+        (cl-letf (((symbol-function 'xdg-config-home) (lambda () temp-dir))
+                  ((symbol-function 'getenv) (lambda (_) nil))
+                  ((symbol-function 'auth-source-search) (lambda (&rest _) nil)))
+          (benedict-credentials-set 'openrouter 'api '(:token "file-token-123"))
+          (let ((cred (benedict-provider-openrouter--resolve-credential)))
+            (should (equal (plist-get cred :token) "file-token-123"))
+            (should (eq (plist-get cred :source) 'file))))
+      (delete-directory temp-dir t))))
+
 (provide 'benedict-provider-openrouter-test)
 ;;; benedict-provider-openrouter-test.el ends here

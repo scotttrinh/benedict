@@ -17,6 +17,7 @@
 (require 'benedict-provider)
 (require 'benedict-tools)
 (require 'benedict-http)
+(require 'benedict-credentials)
 
 ;; Temporary compatibility layer for old logging calls
 ;; TODO: Replace all call sites with direct lgr calls
@@ -249,7 +250,6 @@ When streaming is enabled, callbacks receive incremental deltas via curl."
      :request-id (plist-get context :request-id)
      :attempt (plist-get context :attempt)
      :endpoint benedict-provider-vercel-endpoint
-     :headers (benedict-provider-vercel--redact-headers headers)
      :body payload
      :body-bytes (and payload (string-bytes payload))
      :credential-source (plist-get (plist-get context :credential) :source))
@@ -868,7 +868,8 @@ Returns non-nil when a delta was dispatched."
          :status status-code
          :code code
          :message message
-         :retry t)
+         :retry t
+         :body body)
       (benedict-provider-log
        'vercel 'error :http-error
        :request-id (plist-get context :request-id)
@@ -876,7 +877,8 @@ Returns non-nil when a delta was dispatched."
        :status status-code
        :code code
        :message message
-       :retry nil)
+       :retry nil
+       :body body)
       (benedict-provider-vercel--emit-error
        context (list :type 'http :status status-code :code code :message message
                      :retryable retryable :body body)))))
@@ -1252,36 +1254,15 @@ When STREAM is non-nil, include the \"stream\": true flag in the payload."
 
 (defun benedict-provider-vercel--resolve-credential ()
   "Return plist describing the resolved credential."
-  (or (benedict-provider-vercel--auth-source-credential)
-      (benedict-provider-vercel--env-credential)
-      (error (concat "Vercel API key missing. "
-                     "Configure auth-source for host %s or set %s.")
-             (benedict-provider-vercel--host)
-             benedict-provider-vercel-env-var)))
-
-(defun benedict-provider-vercel--auth-source-credential ()
-  "Return auth-source credential plist when available."
-  (when (require 'auth-source nil t)
-    (let* ((host (benedict-provider-vercel--host))
-           (search-args (list :host host :max 1 :require '(:secret)))
-           (search-args (if benedict-provider-vercel-auth-source-user
-                            (append search-args (list :user benedict-provider-vercel-auth-source-user))
-                          search-args))
-           (entry (car (apply #'auth-source-search search-args))))
-      (when entry
-        (let* ((secret (plist-get entry :secret))
-               (token (cond
-                       ((functionp secret) (funcall secret))
-                       ((stringp secret) secret)
-                       (t nil))))
-          (when (and (stringp token) (not (string-empty-p token)))
-            (list :token token :source 'auth-source :entry entry)))))))
-
-(defun benedict-provider-vercel--env-credential ()
-  "Return env-based credential plist when present."
-  (let ((token (getenv benedict-provider-vercel-env-var)))
-    (when (and (stringp token) (not (string-empty-p token)))
-      (list :token token :source 'env))))
+  (or (benedict-credentials-resolve-api-key
+       'vercel
+       :env-var benedict-provider-vercel-env-var
+       :auth-source-params (list :host (benedict-provider-vercel--host)
+                                 :user benedict-provider-vercel-auth-source-user))
+      (error (benedict-credentials-error-message
+              'vercel
+              benedict-provider-vercel-env-var
+              (benedict-provider-vercel--host)))))
 
 (defun benedict-provider-vercel--host ()
   "Extract host from the configured endpoint."

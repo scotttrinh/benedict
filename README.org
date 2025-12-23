@@ -8,6 +8,36 @@ Benedict is an Emacs package that brings a truly native Emacs experience for int
 
 Status: alpha, functional. This README describes the core vision and currently implemented features. See ROADMAP.org for what's next.
 
+* Credential Management
+
+Benedict centralizes credential resolution through a shared, filesystem-backed store, while maintaining backward compatibility with environment variables and `auth-source`.
+
+** Preferred Method: Filesystem Store
+Benedict uses an XDG-compliant path (typically =~/.config/benedict/auth.json=) to store provider credentials. This file is restricted to the current user (permissions =600=).
+
+Example =auth.json= structure:
+#+begin_src json
+{
+  "openrouter": { "api": { "token": "sk-or-..." } },
+  "vercel": { "api": { "token": "vcl-..." } },
+  "gemini": {
+    "oauth": {
+      "refresh": "<refresh-token>|<project-id>",
+      "access": "ya29...",
+      "expires": 1734556800
+    }
+  }
+}
+#+end_src
+
+** Fallbacks and Precedence
+By default, Benedict consults sources in the following order:
+1. *Environment Variables*: Ideal for temporary overrides (e.g., =OPENROUTER_API_KEY=).
+2. *Filesystem Store*: The preferred persistent storage (=auth.json=).
+3. *auth-source*: Legacy support for =~/.authinfo=, =~/.authinfo.gpg=, etc.
+
+You can customize this order via =benedict-credentials-sources=.
+
 * Quick Start (Doom Emacs)
 
 The snippet below is an annotated, copy‑pasteable Doom Emacs setup. Drop it into =~/.config/doom/config.el=, then run =doom sync= (if you wired Benedict via =packages.el=) or reload Doom.
@@ -79,10 +109,13 @@ The snippet below is an annotated, copy‑pasteable Doom Emacs setup. Drop it in
 
 ;; OpenRouter credentials
 ;;
-;; Preferred: auth-source (~/.authinfo.gpg, ~/.authinfo, or secrets backend)
+;; Preferred: Filesystem store (~/.config/benedict/auth.json)
+;;   See "Credential Management" section for details.
+;;
+;; Fallback 1: auth-source (~/.authinfo.gpg, ~/.authinfo, or secrets backend)
 ;;   machine openrouter.ai login openrouter password sk-or-1234567890abcdef
 ;;
-;; Fallback: environment variable (default name: OPENROUTER_API_KEY)
+;; Fallback 2: environment variable (default name: OPENROUTER_API_KEY)
 ;;   export OPENROUTER_API_KEY="sk-or-1234567890abcdef"
 ;;
 ;; You usually do not need to change these, but they are configurable:
@@ -292,6 +325,8 @@ All of these live under the Customize group =benedict-provider-vercel=.
 - =benedict-provider-vercel-retry-backoff-seconds= :: Base delay in seconds for exponential retry backoff (default: =0.5=).
 - =benedict-provider-vercel-env-var= :: Name of the environment variable that carries your Vercel API key (default: =AI_GATEWAY_API_KEY=).
 - =benedict-provider-vercel-auth-source-user= :: =auth-source= username used when looking up Vercel credentials (default: ="vercel"=; set to =nil= to skip matching on user).
+
+For all providers, Benedict prefers the filesystem store (~/.config/benedict/auth.json); see [[*Credential Management][Credential Management]] for details.
 - =benedict-provider-vercel-referer= :: Referer header sent with requests (default points at the GitHub repo).
 - =benedict-provider-vercel-app-name= :: Human-readable app name sent via =X-Title= (default: ="Benedict"=).
 - =benedict-provider-vercel-enable-streaming= :: When non-nil, use curl-based streaming when available (default: =t=).
