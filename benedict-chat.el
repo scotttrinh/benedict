@@ -341,6 +341,9 @@ streaming updates stay stable."
   "Attach SECTION metadata to KIND and ITEM."
   (when section
     (oset section type kind)
+    (when-let ((end (ignore-errors (oref section end))))
+      (when (markerp end)
+        (set-marker-insertion-type end t)))
     (when item
       (oset section value item))
     (when (and item (plistp item))
@@ -1560,7 +1563,7 @@ insertion into a chat buffer."
 (defvar-local benedict-chat--has-rendered-block nil
   "Non-nil once a message/tool block has been rendered in this chat buffer.")
 
-(defun benedict-chat--maybe-insert-item-gap (buffer)
+(defun benedict-chat--maybe-insert-item-gap (buffer &optional pos)
   "Insert a blank line in BUFFER before rendering the next chat block.
 
 This keeps message/tool blocks visually separated while remaining compatible
@@ -1568,7 +1571,7 @@ with marker-backed streaming inserts."
   (with-current-buffer buffer
     (when benedict-chat--has-rendered-block
       (let ((inhibit-read-only t))
-        (goto-char (point-max))
+        (goto-char (or pos (point-max)))
         (let* ((end (point))
                (start (save-excursion
                         (skip-chars-backward "\n")
@@ -1674,8 +1677,10 @@ This does not affect provider message history."
           (plist-put item :parent-section parent))
         (let ((inhibit-read-only t))
           (if parent
-              (benedict-chat--with-parent-section parent item
-                (benedict-chat--render-thinking-item buffer item))
+              (let ((end-pos (benedict-chat--section-end-position parent)))
+                (benedict-chat--maybe-insert-item-gap buffer end-pos)
+                (benedict-chat--with-parent-section parent item
+                  (benedict-chat--render-thinking-item buffer item)))
             (goto-char (point-max))
             (benedict-chat--maybe-insert-item-gap buffer)
             (benedict-chat--with-section item
@@ -1996,8 +2001,10 @@ Also validates and normalizes :actions if present."
           (plist-put item :parent-section parent))
         (let ((inhibit-read-only t))
           (if parent
-              (benedict-chat--with-parent-section parent item
-                (benedict-chat--render-tool-item buffer item))
+              (let ((end-pos (benedict-chat--section-end-position parent)))
+                (benedict-chat--maybe-insert-item-gap buffer end-pos)
+                (benedict-chat--with-parent-section parent item
+                  (benedict-chat--render-tool-item buffer item)))
             (goto-char (point-max))
             (benedict-chat--maybe-insert-item-gap buffer)
             (benedict-chat--with-section item

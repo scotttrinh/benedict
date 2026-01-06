@@ -39,7 +39,7 @@ Expand/adjust tests to capture the ordering regression, ensuring tests fail on c
     ```
 ### Success Criteria
 #### Automated Verification
-- [ ] `nix run .#test -- test/<chat-render-test>.el` (new/updated tests fail before fix)
+- [x] `nix run .#test -- test/benedict-chat-integration-test.el` (new/updated tests fail before fix)
 #### Manual Verification
 - [ ] Open a chat buffer, send multiple prompts, and confirm earlier messages render above later ones with the newest at the bottom.
 - [ ] Stream a response and confirm the in-flight message grows in place without moving earlier sections.
@@ -56,7 +56,7 @@ Identify why new sections insert before older ones (likely stale or incorrect se
     ```
 ### Success Criteria
 #### Automated Verification
-- [ ] Regression tests from Phase 1 now pass.
+- [x] Regression tests from Phase 1 now pass.
 #### Manual Verification
 - [ ] Multiple sequential messages append in correct order in a fresh chat buffer.
 

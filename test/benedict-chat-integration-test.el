@@ -325,5 +325,84 @@
                       (marker-position tool-start))
                      "\n\n"))))))))
 
+(ert-deftest-async benedict-chat-integration-agent-run-preserves-ordering (done)
+  "Streaming agent runs keep user, assistant, thinking, and tool blocks ordered."
+  (benedict-test-with-bindings done
+      ((benedict-provider 'fake)
+       (benedict-provider-fake-latency-seconds 0.01)
+       (benedict-provider-fake-streaming-chunk-delay 0.01)
+       (benedict-provider-fake-script
+        (list
+         (list :type 'success
+               :content "Final response"
+               :chunks (list "Final " "response")
+               :thinking (list (list :id "benedict-thinking-1-stream"
+                                     :type "reasoning.text"
+                                     :chunks (list "Thinking " "chunk")))
+               :tool-calls (list (list :id "call-1"
+                                       :name 'demo-tool
+                                       :arguments '(:foo "bar"))))))
+       ((symbol-function benedict-tool-invoke)
+        (lambda (&rest _args) "Tool output"))
+       ((symbol-function benedict-chat--loop-step) (lambda (&rest _args) nil)))
+    (let ((buffer (generate-new-buffer "*Benedict Agent Ordering*")))
+      (unwind-protect
+          (with-current-buffer buffer
+            (benedict-chat-mode)
+            (benedict-chat--init-buffer)
+            (benedict-chat-send-prompt "User prompt")
+            (let ((deadline (+ (float-time) 1.0)))
+              (while (and benedict-chat--pending-request
+                          (< (float-time) deadline))
+                (accept-process-output nil 0.01)))
+            (should-not benedict-chat--pending-request)
+            (cl-labels ((find-pos (needle)
+                          (save-excursion
+                            (goto-char (point-min))
+                            (when (search-forward needle nil t)
+                              (- (point) (length needle))))))
+              (let ((user-pos (find-pos "User prompt"))
+                    (assistant-pos (find-pos "Final response"))
+                    (thinking-pos (find-pos "Thinking chunk"))
+                    (tool-header-pos (find-pos "demo-tool"))
+                    (tool-output-pos (find-pos "Tool output")))
+                (should user-pos)
+                (should assistant-pos)
+                (should thinking-pos)
+                (should tool-header-pos)
+                (should tool-output-pos)
+                (should (< user-pos assistant-pos))
+                (should (< assistant-pos thinking-pos))
+                (should (< thinking-pos tool-header-pos))
+                (should (< tool-header-pos tool-output-pos)))))
+        (when (buffer-live-p buffer)
+          (kill-buffer buffer)))
+      (funcall done))))
+
+(ert-deftest benedict-chat-section-end-marker-advances ()
+  "Parent section end markers should advance as new blocks are inserted."
+  (let ((benedict-provider 'fake)
+        (benedict-provider-fake-script nil))
+    (with-temp-buffer
+      (rename-buffer "*Benedict Section End Integration*" t)
+      (benedict-chat-mode)
+      (benedict-chat--init-buffer)
+      (let* ((root benedict-chat--conversation-section)
+             (root-end (and root (ignore-errors (oref root end))))
+             (after-first nil))
+        (should (benedict-chat--section-p root))
+        (should (markerp root-end))
+        (let ((initial (marker-position root-end)))
+          (benedict-chat--record-message
+           (current-buffer)
+           (list :role 'user :content "first" :time (current-time)))
+          (setq after-first (marker-position root-end))
+          (should (< initial after-first))
+          (benedict-chat--record-message
+           (current-buffer)
+           (list :role 'assistant :content "second" :time (current-time)))
+          (let ((after-second (marker-position root-end)))
+            (should (< after-first after-second))))))))
+
 (provide 'test/benedict-chat-integration-test)
 ;;; benedict-chat-integration-test.el ends here
