@@ -164,7 +164,7 @@
                                         :tool-folded nil)))
     (with-temp-buffer
       (let ((inhibit-read-only nil))
-        (benedict-chat--render-tool-item item)
+        (benedict-chat--render-tool-item (current-buffer) item)
         (should (buffer-live-p (current-buffer)))
         (let ((text (buffer-string)))
           (should (string-match "Test Tool" text)))))))
@@ -182,7 +182,7 @@
                                         :tool-folded nil)))
     (with-temp-buffer
       (let ((inhibit-read-only nil))
-        (benedict-chat--render-tool-item item)
+        (benedict-chat--render-tool-item (current-buffer) item)
         (should (buffer-live-p (current-buffer)))))))
 
 (ert-deftest benedict-tool-actions--multiple-actions-render ()
@@ -201,7 +201,7 @@
                                         :tool-folded nil)))
     (with-temp-buffer
       (let ((inhibit-read-only nil))
-        (benedict-chat--render-tool-item item)
+        (benedict-chat--render-tool-item (current-buffer) item)
         (let ((text (buffer-string)))
           (should (string-match "Action 1" text))
           (should (string-match "Action 2" text))

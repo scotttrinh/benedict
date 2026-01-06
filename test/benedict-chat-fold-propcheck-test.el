@@ -58,7 +58,7 @@
                         :tool-call (list :name 'prop-toggle)
                         :content body
                         :tool-folded initial-folded)))
-        (benedict-chat--render-tool-item item)
+        (benedict-chat--render-tool-item (current-buffer) item)
         (dotimes (_ toggle-count)
           ;; Toggle from the header to mirror user interactions.
           (goto-char (plist-get item :header-start))
@@ -78,7 +78,7 @@
                         :tool-call (list :name 'prop-rewrite)
                         :content body
                         :tool-folded t)))
-        (benedict-chat--render-tool-item item)
+        (benedict-chat--render-tool-item (current-buffer) item)
         (when reverse-markers
           (let ((start (plist-get item :content-start))
                 (end (plist-get item :content-end)))
@@ -107,7 +107,7 @@ Simulates the manual symptom: header shows folded but text remains visible."
                       :tool-call (list :name 'prop-clobber)
                       :content "Body"
                       :tool-folded t)))
-      (benedict-chat--render-tool-item item)
+      (benedict-chat--render-tool-item (current-buffer) item)
       ;; Toggle once through the UI path to mimic real interaction.
       (goto-char (plist-get item :header-start))
       (benedict-chat-tool-toggle) ;; open

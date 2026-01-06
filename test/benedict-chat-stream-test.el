@@ -36,7 +36,7 @@
     (let* ((message (list :role 'assistant :content ""))
            (item (list :kind 'message :message message)))
       (plist-put message :item item)
-      (benedict-chat--render-message-item item "[ASSISTANT] streaming" "")
+      (benedict-chat--render-message-item (current-buffer) item "[ASSISTANT] streaming" "")
       (benedict-chat--stream-init (current-buffer) item)
       (benedict-chat--stream-insert-delta benedict-stream-state "Hi")
       (should (string-match-p "Hi" (buffer-string)))

@@ -148,41 +148,42 @@ MESSAGE must contain :role and :content."
                         'benedict-region-kind 'body))
     (insert (propertize "\n" 'benedict-region-kind 'header))))
 
-(defun benedict-chat--render-message-item (item header content)
-  "Render chat message ITEM with HEADER and CONTENT at point.
+(defun benedict-chat--render-message-item (buffer item header content)
+  "Render chat message ITEM with HEADER and CONTENT in BUFFER.
 Sets markers in ITEM for :start, :header-start, :header-end,
 :content-start, :content-end, and :end.
 
 HEADER should be a single line string without a trailing newline.
 CONTENT may include newlines and will be marked as a body region."
-  (let ((start (point-marker))
-        (inhibit-read-only t))
-    ;; Header
-    (let ((header-start (point-marker)))
-      (let ((header-beg (point)))
-        (insert header)
-        (add-text-properties header-beg (point)
-                             (list 'benedict-region-kind 'header
-                                   'benedict-chat-item item)))
-      (insert (propertize "\n" 'benedict-region-kind 'header))
-      (set-marker-insertion-type header-start t)
-      (plist-put item :header-start header-start)
-      (plist-put item :header-end (copy-marker (1- (point)) t)))
+  (with-current-buffer buffer
+    (let ((start (point-marker))
+          (inhibit-read-only t))
+      ;; Header
+      (let ((header-start (point-marker)))
+        (let ((header-beg (point)))
+          (insert header)
+          (add-text-properties header-beg (point)
+                               (list 'benedict-region-kind 'header
+                                     'benedict-chat-item item)))
+        (insert (propertize "\n" 'benedict-region-kind 'header))
+        (set-marker-insertion-type header-start t)
+        (plist-put item :header-start header-start)
+        (plist-put item :header-end (copy-marker (1- (point)) t)))
 
-    ;; Body
-    (let ((content-start (point-marker)))
-      (insert (propertize (or content "")
-                          'face nil
-                          'benedict-region-kind 'body))
-      (insert (propertize "\n" 'benedict-region-kind 'header))
-      (set-marker-insertion-type content-start nil)
-      (plist-put item :content-start content-start)
-      ;; End marker sits before the sentinel newline, enabling stream appends.
-      (plist-put item :content-end (copy-marker (1- (point)) t)))
+      ;; Body
+      (let ((content-start (point-marker)))
+        (insert (propertize (or content "")
+                            'face nil
+                            'benedict-region-kind 'body))
+        (insert (propertize "\n" 'benedict-region-kind 'header))
+        (set-marker-insertion-type content-start nil)
+        (plist-put item :content-start content-start)
+        ;; End marker sits before the sentinel newline, enabling stream appends.
+        (plist-put item :content-end (copy-marker (1- (point)) t)))
 
-    (set-marker-insertion-type start t)
-    (plist-put item :start start)
-    (plist-put item :end (copy-marker (1- (point)) t))))
+      (set-marker-insertion-type start t)
+      (plist-put item :start start)
+      (plist-put item :end (copy-marker (1- (point)) t)))))
 
 (defun benedict-chat--update-message-header (item header)
   "Refresh ITEM header text to HEADER."
@@ -262,42 +263,43 @@ the inserted text.  When KIND is `body', also runs `font-lock-flush' and
                   (font-lock-flush start end)
                   (font-lock-ensure start end))))))))))
 
-(defun benedict-chat--render-thinking-item (item)
-  "Render thinking ITEM at point.
+(defun benedict-chat--render-thinking-item (buffer item)
+  "Render thinking ITEM in BUFFER.
 ITEM should include optional :header string and :content text."
-  (let* ((header (or (plist-get item :header)
-                     (benedict-chat--format-thinking-header item)))
-         (content (or (plist-get item :content) ""))
-         (start (point-marker))
-         (inhibit-read-only t))
-    (let ((header-start (point-marker)))
-      (let ((header-beg (point)))
-        (insert header)
-        (add-text-properties header-beg (point)
-                             (list 'benedict-region-kind 'header
-                                   'benedict-chat-item item
-                                   'face 'benedict-chat-header)))
-      (insert (propertize "\n" 'benedict-region-kind 'header))
-      (set-marker-insertion-type header-start t)
-      (plist-put item :header-start header-start)
-      (plist-put item :header-end (copy-marker (1- (point)) t)))
+  (with-current-buffer buffer
+    (let* ((header (or (plist-get item :header)
+                       (benedict-chat--format-thinking-header item)))
+           (content (or (plist-get item :content) ""))
+           (start (point-marker))
+           (inhibit-read-only t))
+      (let ((header-start (point-marker)))
+        (let ((header-beg (point)))
+          (insert header)
+          (add-text-properties header-beg (point)
+                               (list 'benedict-region-kind 'header
+                                     'benedict-chat-item item
+                                     'face 'benedict-chat-header)))
+        (insert (propertize "\n" 'benedict-region-kind 'header))
+        (set-marker-insertion-type header-start t)
+        (plist-put item :header-start header-start)
+        (plist-put item :header-end (copy-marker (1- (point)) t)))
 
-    (let ((content-start (point-marker)))
-      (set-marker-insertion-type content-start nil)
-      (let ((body-beg (point)))
-        (insert (propertize content
-                            'benedict-region-kind 'thinking
-                            'benedict-chat-item item
-                            'face 'benedict-chat-thinking))
-        (insert (propertize "\n" 'benedict-region-kind 'thinking))
-        (add-text-properties body-beg (1- (point))
-                             '(benedict-region-kind thinking)))
-      (plist-put item :content-start content-start)
-      (plist-put item :content-end (copy-marker (1- (point)) t)))
+      (let ((content-start (point-marker)))
+        (set-marker-insertion-type content-start nil)
+        (let ((body-beg (point)))
+          (insert (propertize content
+                              'benedict-region-kind 'thinking
+                              'benedict-chat-item item
+                              'face 'benedict-chat-thinking))
+          (insert (propertize "\n" 'benedict-region-kind 'thinking))
+          (add-text-properties body-beg (1- (point))
+                               '(benedict-region-kind thinking)))
+        (plist-put item :content-start content-start)
+        (plist-put item :content-end (copy-marker (1- (point)) t)))
 
-    (set-marker-insertion-type start t)
-    (plist-put item :start start)
-    (plist-put item :end (copy-marker (1- (point)) t))))
+      (set-marker-insertion-type start t)
+      (plist-put item :start start)
+      (plist-put item :end (copy-marker (1- (point)) t)))))
 
 (defun benedict-chat--format-thinking-header (item)
   "Return formatted header string for thinking ITEM."
@@ -455,58 +457,59 @@ insert-after markers to work without swallowing subsequent blocks."
                                      'benedict-chat-action handler
                                      'follow-link t)))))))))
 
-(defun benedict-chat--render-tool-item (item)
-   "Render tool ITEM at point.
+(defun benedict-chat--render-tool-item (buffer item)
+   "Render tool ITEM in BUFFER.
  Uses the 'Sentinel Pattern': regions exclude the trailing newline to allow
  insert-after markers to work without swallowing subsequent blocks."
-  (let ((start (point-marker))
-        (inhibit-read-only t))
-    ;; start marker stays type nil during insertion, will be set to t at end
-     
-     ;; Header
-     (let ((header-start (point-marker))
-           (header-text (benedict-chat--format-tool-header item)))
-       (let ((header-beg (point)))
-         (insert header-text)
-         (add-text-properties header-beg (point)
-                              (list 'benedict-region-kind 'header
-                                    'benedict-chat-item item
-                                    'keymap benedict-chat-tool-toggle-map
-                                    'mouse-face 'highlight)))
-       ;; Render action buttons on the same line as header
-       (benedict-chat--render-tool-actions item)
-       ;; Sentinel newline
-       (insert (propertize "\n" 'benedict-region-kind 'header))
+  (with-current-buffer buffer
+    (let ((start (point-marker))
+          (inhibit-read-only t))
+      ;; start marker stays type nil during insertion, will be set to t at end
+      
+      ;; Header
+      (let ((header-start (point-marker))
+            (header-text (benedict-chat--format-tool-header item)))
+        (let ((header-beg (point)))
+          (insert header-text)
+          (add-text-properties header-beg (point)
+                               (list 'benedict-region-kind 'header
+                                     'benedict-chat-item item
+                                     'keymap benedict-chat-tool-toggle-map
+                                     'mouse-face 'highlight)))
+        ;; Render action buttons on the same line as header
+        (benedict-chat--render-tool-actions item)
+        ;; Sentinel newline
+        (insert (propertize "\n" 'benedict-region-kind 'header))
 
-       (set-marker-insertion-type header-start t)
-       (plist-put item :header-start header-start)
-       
-       ;; Header end excludes sentinel
-       (plist-put item :header-end (copy-marker (1- (point)) t)))
-     
-     ;; Body
-    (let ((content-start (point-marker)))
-      (set-marker-insertion-type content-start nil)
-      (insert (propertize (or (plist-get item :content) "")
-                          'benedict-region-kind 'tool-ui))
-      ;; Sentinel newline
-      (insert (propertize "\n" 'benedict-region-kind 'tool-ui))
+        (set-marker-insertion-type header-start t)
+        (plist-put item :header-start header-start)
+        
+        ;; Header end excludes sentinel
+        (plist-put item :header-end (copy-marker (1- (point)) t)))
+      
+      ;; Body
+      (let ((content-start (point-marker)))
+        (set-marker-insertion-type content-start nil)
+        (insert (propertize (or (plist-get item :content) "")
+                            'benedict-region-kind 'tool-ui))
+        ;; Sentinel newline
+        (insert (propertize "\n" 'benedict-region-kind 'tool-ui))
 
-      (plist-put item :content-start content-start)
+        (plist-put item :content-start content-start)
 
-      ;; Content end excludes sentinel
-      (plist-put item :content-end (copy-marker (1- (point)) t))
-     
-     (set-marker-insertion-type start t)
-     (plist-put item :start start)
-     
-     ;; Item end excludes sentinel (which is the content's sentinel here)
-     (plist-put item :end (copy-marker (1- (point)) t))
-     
-     ;; Initial visibility
-     (unless (benedict-chat-render--ui-active-p)
-       (benedict-chat-fold-ensure-tool item))
-     (benedict-chat--update-tool-visibility item))))
+        ;; Content end excludes sentinel
+        (plist-put item :content-end (copy-marker (1- (point)) t))
+        
+        (set-marker-insertion-type start t)
+        (plist-put item :start start)
+        
+        ;; Item end excludes sentinel (which is the content's sentinel here)
+        (plist-put item :end (copy-marker (1- (point)) t))
+        
+        ;; Initial visibility
+        (unless (benedict-chat-render--ui-active-p)
+          (benedict-chat-fold-ensure-tool item))
+        (benedict-chat--update-tool-visibility item)))))
 
 (defun benedict-chat--update-tool-header (item)
    "Refresh the header text for ITEM."

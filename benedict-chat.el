@@ -28,6 +28,9 @@
   "List of chat message plists (newest first).
 Each entry includes :role, :content, :time, optional :metadata, and UI state.")
 
+(defvar-local benedict-chat--buffer nil
+  "Stable reference to the chat buffer.")
+
 (defvar-local benedict-chat--pending-request nil
   "Opaque handle representing an in-flight provider request.")
 
@@ -391,7 +394,9 @@ Prompts the user to authorize extensions when limits are reached."
         ;; Check constraints
         (when (benedict-chat--check-loop-constraints)
           (setq benedict-chat--loop-turn-count (1+ benedict-chat--loop-turn-count))
-          (benedict-chat--start-dispatch (benedict-chat--build-request)))))))
+          (benedict-chat--start-dispatch
+           (or benedict-chat--buffer (current-buffer))
+           (benedict-chat--build-request)))))))
 
 ;; -------------------------------------------------------------------
 ;; Flywire Session Management
@@ -606,10 +611,16 @@ Resolution order: buffer override → profile :provider → global `benedict-pro
 (defun benedict-chat--resolve-chat-buffer ()
   "Return the active chat buffer associated with the current context."
   (cond
-   ((derived-mode-p 'benedict-chat-mode) (current-buffer))
+   ((derived-mode-p 'benedict-chat-mode)
+    (let ((buffer (or benedict-chat--buffer (current-buffer))))
+      (when (buffer-live-p buffer)
+        buffer)))
    ((and (boundp 'benedict-chat-compose--chat-buffer)
          (buffer-live-p benedict-chat-compose--chat-buffer))
-    benedict-chat-compose--chat-buffer)
+    (with-current-buffer benedict-chat-compose--chat-buffer
+      (let ((buffer (or benedict-chat--buffer benedict-chat-compose--chat-buffer)))
+        (when (buffer-live-p buffer)
+          buffer))))
    (t nil)))
 
 (defun benedict-chat-choose-profile ()
@@ -1140,67 +1151,71 @@ insertion into a chat buffer."
         (when (markerp end)
           (goto-char (marker-position end)))))))
 
-(defun benedict-chat--replace-message-content (message content)
-  "Replace MESSAGE content in the buffer with CONTENT."
-  (when-let ((item (plist-get message :item)))
-    (benedict-chat-render--set-item-content item content 'body)))
+(defun benedict-chat--replace-message-content (buffer message content)
+  "Replace MESSAGE content in BUFFER with CONTENT."
+  (with-current-buffer buffer
+    (when-let ((item (plist-get message :item)))
+      (benedict-chat-render--set-item-content item content 'body))))
 
 (defvar-local benedict-chat--has-rendered-block nil
   "Non-nil once a message/tool block has been rendered in this chat buffer.")
 
-(defun benedict-chat--maybe-insert-item-gap ()
-  "Insert a blank line before rendering the next chat block.
+(defun benedict-chat--maybe-insert-item-gap (buffer)
+  "Insert a blank line in BUFFER before rendering the next chat block.
 
 This keeps message/tool blocks visually separated while remaining compatible
 with marker-backed streaming inserts."
-  (when benedict-chat--has-rendered-block
-    (let ((inhibit-read-only t))
-      (goto-char (point-max))
-      (let* ((end (point))
-             (start (save-excursion
-                      (skip-chars-backward "\n")
-                      (point)))
-             (trailing-newlines (- end start))
-             (needed (max 0 (- 2 trailing-newlines))))
-        (when (> needed 0)
-          (insert (propertize (make-string needed ?\n)
-                              'benedict-region-kind 'header)))))))
+  (with-current-buffer buffer
+    (when benedict-chat--has-rendered-block
+      (let ((inhibit-read-only t))
+        (goto-char (point-max))
+        (let* ((end (point))
+               (start (save-excursion
+                        (skip-chars-backward "\n")
+                        (point)))
+               (trailing-newlines (- end start))
+               (needed (max 0 (- 2 trailing-newlines))))
+          (when (> needed 0)
+            (insert (propertize (make-string needed ?\n)
+                                'benedict-region-kind 'header))))))))
 
-(defun benedict-chat--render-message (message)
-  "Render MESSAGE into the current chat buffer.
+(defun benedict-chat--render-message (buffer message)
+  "Render MESSAGE into BUFFER.
 Assistant messages are rendered as marker-backed items."
-  (setq message (benedict-chat--ensure-message-kind message))
-  (let* ((role (benedict-chat--normalize-role (plist-get message :role)))
-         (metadata (plist-get message :metadata))
-         (content (or (plist-get message :display-content)
-                      (plist-get message :content)
-                      ""))
-         (inhibit-read-only t))
-    (goto-char (point-max))
-    (benedict-chat--maybe-insert-item-gap)
-    (pcase role
-      ('assistant
-       (let* ((item (benedict-chat--make-item
-                     'message
-                     :role role
-                     :metadata metadata
-                     :message message)))
-         (plist-put message :item item)
-         (benedict-chat--track-item item)
-         (benedict-chat-ui--with-section item
-           (benedict-chat--render-message-item
-            item
-            (benedict-chat--message-header-string message nil)
-            content))
+  (with-current-buffer buffer
+    (setq message (benedict-chat--ensure-message-kind message))
+    (let* ((role (benedict-chat--normalize-role (plist-get message :role)))
+           (metadata (plist-get message :metadata))
+           (content (or (plist-get message :display-content)
+                        (plist-get message :content)
+                        ""))
+           (inhibit-read-only t))
+      (goto-char (point-max))
+      (benedict-chat--maybe-insert-item-gap buffer)
+      (pcase role
+        ('assistant
+         (let* ((item (benedict-chat--make-item
+                       'message
+                       :role role
+                       :metadata metadata
+                       :message message)))
+           (plist-put message :item item)
+           (benedict-chat--track-item item)
+           (benedict-chat-ui--with-section item
+             (benedict-chat--render-message-item
+              buffer
+              item
+              (benedict-chat--message-header-string message nil)
+              content))
+           (setq benedict-chat--has-rendered-block t)
+           item))
+        (_
+         (when (eq role 'user)
+           (benedict-chat-ui--begin-turn))
+         (benedict-chat-ui--with-section message
+           (benedict-chat--insert-message message))
          (setq benedict-chat--has-rendered-block t)
-         item))
-      (_
-       (when (eq role 'user)
-         (benedict-chat-ui--begin-turn))
-       (benedict-chat-ui--with-section message
-         (benedict-chat--insert-message message))
-       (setq benedict-chat--has-rendered-block t)
-       nil))))
+         nil)))))
 
 (defun benedict-chat--history-store (message)
   "Persist MESSAGE in buffer history without rendering."
@@ -1208,10 +1223,11 @@ Assistant messages are rendered as marker-backed items."
   (push message benedict-chat--messages)
   message)
 
-(defun benedict-chat--record-message (message)
-  "Persist MESSAGE in buffer history and render it."
-  (setq message (benedict-chat--history-store message))
-  (benedict-chat--render-message message)
+(defun benedict-chat--record-message (buffer message)
+  "Persist MESSAGE in BUFFER history and render it."
+  (with-current-buffer buffer
+    (setq message (benedict-chat--history-store message)))
+  (benedict-chat--render-message buffer message)
   message)
 
 (defun benedict-chat--thinking-header-text (item)
@@ -1239,38 +1255,39 @@ Assistant messages are rendered as marker-backed items."
     (when-let ((item (benedict-chat--last-assistant-item)))
       (plist-get item :section))))
 
-(defun benedict-chat--record-thinking (content metadata &rest properties)
-  "Record a thinking block with CONTENT and METADATA.  PROPERTIES describe additional block hints.
+(defun benedict-chat--record-thinking (buffer content metadata &rest properties)
+  "Record a thinking block with CONTENT and METADATA in BUFFER.  PROPERTIES describe additional block hints.
 This does not affect provider message history."
-  (let* ((item (apply #'benedict-chat--make-item
-                      'thinking
-                      :metadata metadata
-                      :content (or content "")
-                      properties))
-         (header (or (plist-get item :header)
-                     (benedict-chat--thinking-header-text item))))
-    (plist-put item :header header)
-    (unless (plist-member item :thinking-folded)
-      (plist-put item :thinking-folded t))
-    (benedict-chat--track-item item)
-    (let ((parent (benedict-chat--current-assistant-section)))
-      (when parent
-        (plist-put item :parent-section parent))
-      (let ((inhibit-read-only t))
-        (if parent
-            (benedict-chat-ui--with-parent-section parent item
-              (benedict-chat--render-thinking-item item))
-          (goto-char (point-max))
-          (benedict-chat--maybe-insert-item-gap)
-          (benedict-chat-ui--with-section item
-            (benedict-chat--render-thinking-item item)))))
-    (setq benedict-chat--has-rendered-block t)
-    (if (benedict-chat-render--ui-active-p)
-        (benedict-chat-ui--set-section-folded
-         (plist-get item :section)
-         (plist-get item :thinking-folded))
-      (benedict-chat--prepare-thinking-block item))
-    item))
+  (with-current-buffer buffer
+    (let* ((item (apply #'benedict-chat--make-item
+                        'thinking
+                        :metadata metadata
+                        :content (or content "")
+                        properties))
+           (header (or (plist-get item :header)
+                       (benedict-chat--thinking-header-text item))))
+      (plist-put item :header header)
+      (unless (plist-member item :thinking-folded)
+        (plist-put item :thinking-folded t))
+      (benedict-chat--track-item item)
+      (let ((parent (benedict-chat--current-assistant-section)))
+        (when parent
+          (plist-put item :parent-section parent))
+        (let ((inhibit-read-only t))
+          (if parent
+              (benedict-chat-ui--with-parent-section parent item
+                (benedict-chat--render-thinking-item buffer item))
+            (goto-char (point-max))
+            (benedict-chat--maybe-insert-item-gap buffer)
+            (benedict-chat-ui--with-section item
+              (benedict-chat--render-thinking-item buffer item)))))
+      (setq benedict-chat--has-rendered-block t)
+      (if (benedict-chat-render--ui-active-p)
+          (benedict-chat-ui--set-section-folded
+           (plist-get item :section)
+           (plist-get item :thinking-folded))
+        (benedict-chat--prepare-thinking-block item))
+      item)))
 
 (defun benedict-chat--message-history ()
   "Return messages in chronological order."
@@ -1505,23 +1522,24 @@ Also validates and normalizes :actions if present."
   "Return the body text for UI."
   (or (plist-get ui :body) ""))
 
-(defun benedict-chat--refresh-tool-block (item)
-  "Refresh ITEM header and content when UI or metadata change."
-  (let ((ui (plist-get item :ui)))
-    (condition-case content-err
-        (let ((body-str (benedict-chat--tool-ui-body-string ui)))
-          (condition-case write-err
-              (benedict-chat-render--set-item-content item body-str 'tool-ui)
-            (error
-             (error "Failed to write message content: %s" (error-message-string write-err)))))
-      (error
-       (error "Failed to build tool UI body: %s" (error-message-string content-err))))
-    (condition-case nil
-        (benedict-chat--update-tool-header item)
-      (error))
-    (condition-case nil
-        (benedict-chat--update-tool-visibility item)
-      (error))))
+(defun benedict-chat--refresh-tool-block (buffer item)
+  "Refresh ITEM header and content in BUFFER when UI or metadata change."
+  (with-current-buffer buffer
+    (let ((ui (plist-get item :ui)))
+      (condition-case content-err
+          (let ((body-str (benedict-chat--tool-ui-body-string ui)))
+            (condition-case write-err
+                (benedict-chat-render--set-item-content item body-str 'tool-ui)
+              (error
+               (error "Failed to write message content: %s" (error-message-string write-err)))))
+        (error
+         (error "Failed to build tool UI body: %s" (error-message-string content-err))))
+      (condition-case nil
+          (benedict-chat--update-tool-header item)
+        (error))
+      (condition-case nil
+          (benedict-chat--update-tool-visibility item)
+        (error)))))
 
 (defun benedict-chat--update-thinking-visibility (item)
   "Apply ITEM thinking folded state using the active UI backend."
@@ -1652,57 +1670,59 @@ Also validates and normalizes :actions if present."
                  payload))
      "\n")))
 
-(defun benedict-chat--record-tool-block (call metadata &optional ui)
-  "Insert a tool block for CALL using METADATA and optional UI."
-  (let* ((initial-ui (benedict-chat--normalize-tool-ui
-                      call
-                      (plist-get metadata :status)
-                      ui
-                      (benedict-chat--tool-call-content call)))
-         (item (benedict-chat--make-item 'tool
-                                         :tool-call call
-                                         :metadata metadata
-                                         :ui initial-ui
-                                         :content (benedict-chat--tool-ui-body-string initial-ui)
-                                         :tool-folded t)))
-    (benedict-chat--track-item item)
-    (let ((parent (benedict-chat--current-assistant-section)))
-      (when parent
-        (plist-put item :parent-section parent))
-      (let ((inhibit-read-only t))
-        (if parent
-            (benedict-chat-ui--with-parent-section parent item
-              (benedict-chat--render-tool-item item))
-          (goto-char (point-max))
-          (benedict-chat--maybe-insert-item-gap)
-          (benedict-chat-ui--with-section item
-            (benedict-chat--render-tool-item item)))))
-    (setq benedict-chat--has-rendered-block t)
-    item))
+(defun benedict-chat--record-tool-block (buffer call metadata &optional ui)
+  "Insert a tool block for CALL using METADATA and optional UI in BUFFER."
+  (with-current-buffer buffer
+    (let* ((initial-ui (benedict-chat--normalize-tool-ui
+                        call
+                        (plist-get metadata :status)
+                        ui
+                        (benedict-chat--tool-call-content call)))
+           (item (benedict-chat--make-item 'tool
+                                           :tool-call call
+                                           :metadata metadata
+                                           :ui initial-ui
+                                           :content (benedict-chat--tool-ui-body-string initial-ui)
+                                           :tool-folded t)))
+      (benedict-chat--track-item item)
+      (let ((parent (benedict-chat--current-assistant-section)))
+        (when parent
+          (plist-put item :parent-section parent))
+        (let ((inhibit-read-only t))
+          (if parent
+              (benedict-chat-ui--with-parent-section parent item
+                (benedict-chat--render-tool-item buffer item))
+            (goto-char (point-max))
+            (benedict-chat--maybe-insert-item-gap buffer)
+            (benedict-chat-ui--with-section item
+              (benedict-chat--render-tool-item buffer item)))))
+      (setq benedict-chat--has-rendered-block t)
+      item)))
 
-(defun benedict-chat--update-tool-block (item metadata ui fallback)
-  "Update ITEM with METADATA and UI; FALLBACK is used for missing body text."
-  (let* ((call (plist-get item :tool-call))
-         (status (plist-get metadata :status)))
-    (message "[Benedict] Updating tool block: status=%s, ui=%S, fallback=%S" 
-             status (type-of ui) (type-of fallback))
-    (condition-case norm-err
-        (let ((normalized (benedict-chat--normalize-tool-ui
-                           call
-                           status
-                           ui
-                           fallback)))
-          (message "[Benedict] Normalized UI: %S" (type-of normalized))
-          (plist-put item :metadata metadata)
-          (plist-put item :ui normalized)
-          (let ((body-str (benedict-chat--tool-ui-body-string normalized)))
-            (message "[Benedict] Tool body string: %S" (type-of body-str))
-            (plist-put item :content body-str))
-          (message "[Benedict] Calling refresh-tool-block")
-          (benedict-chat--refresh-tool-block item))
-      (error
-       (message "[Benedict] ERROR normalizing tool UI: %S" norm-err)
-       (error "Failed to update tool block: %s" (error-message-string norm-err))))))
+(defun benedict-chat--update-tool-block (buffer item metadata ui fallback)
+  "Update ITEM with METADATA and UI in BUFFER; FALLBACK is used for missing body text."
+  (with-current-buffer buffer
+    (let* ((call (plist-get item :tool-call))
+           (status (plist-get metadata :status)))
+      (message "[Benedict] Updating tool block: status=%s, ui=%S, fallback=%S" 
+               status (type-of ui) (type-of fallback))
+      (condition-case norm-err
+          (let ((normalized (benedict-chat--normalize-tool-ui
+                             call
+                             status
+                             ui
+                             fallback)))
+            (message "[Benedict] Normalized UI: %S" (type-of normalized))
+            (plist-put item :metadata metadata)
+            (plist-put item :ui normalized)
+            (let ((body-str (benedict-chat--tool-ui-body-string normalized)))
+              (message "[Benedict] Tool body string: %S" (type-of body-str))
+              (plist-put item :content body-str))
+            (message "[Benedict] Calling refresh-tool-block")
+            (benedict-chat--refresh-tool-block buffer item))
+        (error
+         (message "[Benedict] ERROR normalizing tool UI: %S" norm-err)
+         (error "Failed to update tool block: %s" (error-message-string norm-err)))))))
 
 (defun benedict-chat--normalize-tool-id (tool-id)
   "Return TOOL-ID coerced into a symbol."
@@ -1758,66 +1778,67 @@ RAW, when non-nil, is attached for debugging/forwarding."
       (plist-put entry :raw raw))
     entry))
 
-(defun benedict-chat--invoke-tool-call (call metadata item)
-  "Execute CALL (plist) using METADATA and update ITEM."
-  (let* ((tool-id (benedict-chat--normalize-tool-id
-                   (or (plist-get call :name) (plist-get call :tool))))
-         (arguments (or (plist-get call :arguments) nil))
-         (status 'success)
-         (output nil))
-    (message "[Benedict] Invoking tool: %s with args: %S" tool-id arguments)
-    (condition-case err
-        (progn
-          (message "[Benedict] Tool invocation started for %s" tool-id)
-          (setq output (benedict-tool-invoke tool-id arguments))
-          (message "[Benedict] Tool %s returned successfully: %S" tool-id (type-of output)))
-      (error
-       (setq status 'failure)
-       (message "[Benedict] Tool %s failed with error: %S (type: %s)" 
-                tool-id err (type-of err))
-       (message "[Benedict] Error details: %s" (error-message-string err))
-       (let* ((details (benedict-chat--tool-error-details tool-id call arguments err))
-              (summary (benedict-chat--tool-error-summary tool-id details))
-              (json (benedict-chat--tool-error-json details))
-              (ui-body (benedict-chat--tool-error-ui-body summary details)))
-         (setq output (list :text (string-join (list summary json) "\n\n")
-                            :ui (list :body ui-body)
-                            :raw details)))))
-    (message "[Benedict] Normalizing tool output for %s" tool-id)
-    (let* ((normalized-output (benedict-chat--normalize-tool-output output))
-           (text (plist-get normalized-output :text))
-           (ui (plist-get normalized-output :ui))
-           (raw (plist-get normalized-output :raw))
-           (result-metadata (benedict-chat--tool-call-metadata tool-id call status metadata)))
-      (message "[Benedict] Normalized output: text=%s, ui=%S" (type-of text) (type-of ui))
-      (when (and (eq status 'failure) raw)
-        (plist-put result-metadata :error raw))
-      (when item
-        (message "[Benedict] Updating tool block for %s" tool-id)
-        (condition-case block-err
-            (benedict-chat--update-tool-block
-             item result-metadata ui
-             (benedict-chat--tool-result-content call text))
-          (error
-           (message "[Benedict] ERROR updating tool block: %S" block-err))))
-      (message "[Benedict] Storing tool result for %s" tool-id)
-      (condition-case hist-err
-          (benedict-chat--history-store
-           (benedict-chat--tool-result-history-entry tool-id call text result-metadata raw))
+(defun benedict-chat--invoke-tool-call (buffer call metadata item)
+  "Execute CALL (plist) using METADATA and update ITEM in BUFFER."
+  (with-current-buffer buffer
+    (let* ((tool-id (benedict-chat--normalize-tool-id
+                     (or (plist-get call :name) (plist-get call :tool))))
+           (arguments (or (plist-get call :arguments) nil))
+           (status 'success)
+           (output nil))
+      (message "[Benedict] Invoking tool: %s with args: %S" tool-id arguments)
+      (condition-case err
+          (progn
+            (message "[Benedict] Tool invocation started for %s" tool-id)
+            (setq output (benedict-tool-invoke tool-id arguments))
+            (message "[Benedict] Tool %s returned successfully: %S" tool-id (type-of output)))
         (error
-         (message "[Benedict] ERROR storing tool result: %S" hist-err))))))
+         (setq status 'failure)
+         (message "[Benedict] Tool %s failed with error: %S (type: %s)" 
+                  tool-id err (type-of err))
+         (message "[Benedict] Error details: %s" (error-message-string err))
+         (let* ((details (benedict-chat--tool-error-details tool-id call arguments err))
+                (summary (benedict-chat--tool-error-summary tool-id details))
+                (json (benedict-chat--tool-error-json details))
+                (ui-body (benedict-chat--tool-error-ui-body summary details)))
+           (setq output (list :text (string-join (list summary json) "\n\n")
+                              :ui (list :body ui-body)
+                              :raw details)))))
+      (message "[Benedict] Normalizing tool output for %s" tool-id)
+      (let* ((normalized-output (benedict-chat--normalize-tool-output output))
+             (text (plist-get normalized-output :text))
+             (ui (plist-get normalized-output :ui))
+             (raw (plist-get normalized-output :raw))
+             (result-metadata (benedict-chat--tool-call-metadata tool-id call status metadata)))
+        (message "[Benedict] Normalized output: text=%s, ui=%S" (type-of text) (type-of ui))
+        (when (and (eq status 'failure) raw)
+          (plist-put result-metadata :error raw))
+        (when item
+          (message "[Benedict] Updating tool block for %s" tool-id)
+          (condition-case block-err
+              (benedict-chat--update-tool-block
+               buffer item result-metadata ui
+               (benedict-chat--tool-result-content call text))
+            (error
+             (message "[Benedict] ERROR updating tool block: %S" block-err))))
+        (message "[Benedict] Storing tool result for %s" tool-id)
+        (condition-case hist-err
+            (benedict-chat--history-store
+             (benedict-chat--tool-result-history-entry tool-id call text result-metadata raw))
+          (error
+           (message "[Benedict] ERROR storing tool result: %S" hist-err)))))))
 
-(defun benedict-chat--process-tool-calls (message tool-calls metadata)
-  "Render TOOL-CALLS for MESSAGE and execute each tool using METADATA."
+(defun benedict-chat--process-tool-calls (buffer message tool-calls metadata)
+  "Render TOOL-CALLS for MESSAGE and execute each tool using METADATA in BUFFER."
   (let (normalized-calls)
     (dolist (call tool-calls)
       (let* ((tool-id (benedict-chat--normalize-tool-id (or (plist-get call :name)
                                                             (plist-get call :tool))))
              (normalized (plist-put (copy-sequence call) :name tool-id))
              (call-metadata (benedict-chat--tool-call-metadata tool-id normalized 'in-progress metadata))
-             (item (benedict-chat--record-tool-block normalized call-metadata)))
+             (item (benedict-chat--record-tool-block buffer normalized call-metadata)))
         (push normalized normalized-calls)
-        (benedict-chat--invoke-tool-call normalized metadata item)))
+        (benedict-chat--invoke-tool-call buffer normalized metadata item)))
     (plist-put message :tool-calls (nreverse normalized-calls))))
 
 ;; -------------------------------------------------------------------
@@ -1934,65 +1955,66 @@ RAW, when non-nil, is attached for debugging/forwarding."
     (delq nil (mapcar #'benedict-chat--normalize-thinking-entry thinking)))
    (t nil)))
 
-(defun benedict-chat--ensure-thinking-item (detail metadata)
-  "Return the thinking item associated with DETAIL and METADATA, creating it if needed."
+(defun benedict-chat--ensure-thinking-item (buffer detail metadata)
+  "Return the thinking item associated with DETAIL and METADATA in BUFFER, creating it if needed."
   (let* ((id (or (plist-get detail :id)
                  (benedict-chat--next-thinking-temp-id)))
          (item (benedict-chat--lookup-thinking-item id)))
     (unless item
       (let ((label (benedict-chat--thinking-label-from-type (plist-get detail :type)))
             (meta (plist-put (copy-sequence metadata) :thinking t)))
-        (setq item (benedict-chat--record-thinking "" meta
+        (setq item (benedict-chat--record-thinking buffer "" meta
                                                    :thinking-id id
                                                    :thinking-label label
                                                    :thinking-type (plist-get detail :type)))
         (benedict-chat--register-thinking-item id item)))
     item))
 
-(defun benedict-chat--write-thinking-content (item text replace)
-  "Insert TEXT into ITEM's content region.
+(defun benedict-chat--write-thinking-content (buffer item text replace)
+  "Insert TEXT into ITEM's content region in BUFFER.
 When REPLACE is non-nil, replace the entire block contents."
-  (let ((payload (or text "")))
-    (cond
-     (replace
-      (benedict-chat-render--set-item-content item payload 'thinking))
-     ((and payload (not (string-empty-p payload)))
-      (benedict-chat-render--append-item-content item payload 'thinking)))
-    (when-let ((start (plist-get item :content-start))
-               (end (plist-get item :content-end)))
-      (when (and (markerp start) (markerp end)
-                 (marker-buffer start) (marker-buffer end)
-                 (marker-position start) (marker-position end))
-        (with-current-buffer (marker-buffer start)
-          (let ((inhibit-read-only t)
-                (start-pos (marker-position start))
-                (end-pos (marker-position end)))
-            (add-text-properties start-pos end-pos
-                                 '(face benedict-chat-thinking))
-            (plist-put item :content
-                       (buffer-substring-no-properties start-pos end-pos))))))
-    (benedict-chat--update-thinking-overlay item)
-    (benedict-chat--update-thinking-visibility item)))
+  (with-current-buffer buffer
+    (let ((payload (or text "")))
+      (cond
+       (replace
+        (benedict-chat-render--set-item-content item payload 'thinking))
+       ((and payload (not (string-empty-p payload)))
+        (benedict-chat-render--append-item-content item payload 'thinking)))
+      (when-let ((start (plist-get item :content-start))
+                 (end (plist-get item :content-end)))
+        (when (and (markerp start) (markerp end)
+                   (marker-buffer start) (marker-buffer end)
+                   (marker-position start) (marker-position end))
+          (with-current-buffer (marker-buffer start)
+            (let ((inhibit-read-only t)
+                  (start-pos (marker-position start))
+                  (end-pos (marker-position end)))
+              (add-text-properties start-pos end-pos
+                                   '(face benedict-chat-thinking))
+              (plist-put item :content
+                         (buffer-substring-no-properties start-pos end-pos))))))
+      (benedict-chat--update-thinking-overlay item)
+      (benedict-chat--update-thinking-visibility item))))
 
-(defun benedict-chat--append-thinking-content (item text)
-  "Append TEXT to ITEM's content."
+(defun benedict-chat--append-thinking-content (buffer item text)
+  "Append TEXT to ITEM's content in BUFFER."
   (when (and text (not (string-empty-p text)))
-    (benedict-chat--write-thinking-content item text nil)))
+    (benedict-chat--write-thinking-content buffer item text nil)))
 
-(defun benedict-chat--replace-thinking-content (item text)
-  "Replace ITEM content with TEXT."
-  (benedict-chat--write-thinking-content item text t))
+(defun benedict-chat--replace-thinking-content (buffer item text)
+  "Replace ITEM content with TEXT in BUFFER."
+  (benedict-chat--write-thinking-content buffer item text t))
 
-(defun benedict-chat--display-thinking-detail (detail metadata &optional append)
-  "Render DETAIL using METADATA. APPEND when streaming, replace otherwise."
+(defun benedict-chat--display-thinking-detail (buffer detail metadata &optional append)
+  "Render DETAIL using METADATA in BUFFER. APPEND when streaming, replace otherwise."
   (let* ((normalized (benedict-chat--normalize-thinking-entry detail))
          (item (and normalized
-                    (benedict-chat--ensure-thinking-item normalized metadata)))
+                    (benedict-chat--ensure-thinking-item buffer normalized metadata)))
          (text (and normalized (benedict-chat--thinking-detail-text normalized))))
     (when item
       (if append
-          (benedict-chat--append-thinking-content item text)
-        (benedict-chat--replace-thinking-content item text)))))
+          (benedict-chat--append-thinking-content buffer item text)
+        (benedict-chat--replace-thinking-content buffer item text)))))
 
 (defun benedict-chat--collect-delta-reasoning-details (payload)
   "Extract reasoning details from streaming PAYLOAD."
@@ -2063,10 +2085,11 @@ When REPLACE is non-nil, replace the entire block contents."
 ;; -------------------------------------------------------------------
 ;; Streaming assistant message helpers
 
-(defun benedict-chat--streaming-reset ()
-  "Clear any active streaming message state."
-  (setq benedict-chat--streaming-message nil)
-  (benedict-chat--stream-init (current-buffer)))
+(defun benedict-chat--streaming-reset (buffer)
+  "Clear any active streaming message state in BUFFER."
+  (with-current-buffer buffer
+    (setq benedict-chat--streaming-message nil)
+    (benedict-chat--stream-init buffer)))
 
 (defun benedict-chat--streaming-merge-metadata (payload)
   "Return merged metadata for PAYLOAD and existing streaming state."
@@ -2091,74 +2114,77 @@ When REPLACE is non-nil, replace the entire block contents."
         (plist-put item :metadata metadata)
         (benedict-chat--refresh-message-header item)))))
 
-(defun benedict-chat--streaming-ensure-message (payload)
-  "Ensure a placeholder assistant message exists for PAYLOAD."
-  (unless (plist-get benedict-chat--streaming-message :message)
-    (let* ((metadata (benedict-chat--metadata
-                      :provider (plist-get payload :provider)
-                      :model (plist-get payload :model)))
-           (record (list :role 'assistant
-                         :content ""
-                         :display-content nil
-                         :time (current-time)
-                         :metadata metadata)))
-      (setq record (benedict-chat--record-message record))
-      (setq benedict-chat--streaming-message
-            (list :message record
-                  :content ""
-                  :metadata metadata))))
-  (benedict-chat--streaming-apply-metadata payload)
-  (plist-get benedict-chat--streaming-message :message))
+(defun benedict-chat--streaming-ensure-message (buffer payload)
+  "Ensure a placeholder assistant message exists for PAYLOAD in BUFFER."
+  (with-current-buffer buffer
+    (unless (plist-get benedict-chat--streaming-message :message)
+      (let* ((metadata (benedict-chat--metadata
+                        :provider (plist-get payload :provider)
+                        :model (plist-get payload :model)))
+             (record (list :role 'assistant
+                           :content ""
+                           :display-content nil
+                           :time (current-time)
+                           :metadata metadata)))
+        (setq record (benedict-chat--record-message buffer record))
+        (setq benedict-chat--streaming-message
+              (list :message record
+                    :content ""
+                    :metadata metadata))))
+    (benedict-chat--streaming-apply-metadata payload)
+    (plist-get benedict-chat--streaming-message :message)))
 
-(defun benedict-chat--streaming-append-text (payload text)
-  "Append TEXT for PAYLOAD to the streaming assistant message."
+(defun benedict-chat--streaming-append-text (buffer payload text)
+  "Append TEXT for PAYLOAD to the streaming assistant message in BUFFER."
   (when (and text (> (length text) 0))
-    (when-let ((message (benedict-chat--streaming-ensure-message payload)))
+    (when-let ((message (benedict-chat--streaming-ensure-message buffer payload)))
       (let* ((state benedict-chat--streaming-message)
              (current (or (plist-get state :content) ""))
              (updated (concat current text)))
         (setq state (plist-put state :content updated))
         (setq benedict-chat--streaming-message state)
-        (benedict-chat--replace-message-content message updated)))))
+        (benedict-chat--replace-message-content buffer message updated)))))
 
-(defun benedict-chat--complete-streaming-message (metadata content display-content empty-response)
-  "Finalize the streaming assistant message with METADATA and CONTENT.
+(defun benedict-chat--complete-streaming-message (buffer metadata content display-content empty-response)
+  "Finalize the streaming assistant message in BUFFER with METADATA and CONTENT.
 DISPLAY-CONTENT replaces the visible text when EMPTY-RESPONSE is non-nil."
-  (when-let ((message (plist-get benedict-chat--streaming-message :message)))
-    (let* ((state benedict-chat--streaming-message)
-           (fallback (or (plist-get state :content) ""))
-           (actual (or content fallback ""))
-           (visible (if empty-response
-                        (or display-content actual)
-                      actual)))
-      (benedict-chat--replace-message-content message visible)
-      (plist-put message :content actual)
-      (if empty-response
-          (plist-put message :display-content visible)
-        (plist-put message :display-content nil))
-      (plist-put message :metadata metadata)
-      (plist-put message :time (current-time))
-      (when-let ((item (plist-get message :item)))
-        (plist-put item :metadata metadata)
-        (benedict-chat--refresh-message-header item))))
-  (benedict-chat--streaming-reset))
-
-(defun benedict-chat--fail-streaming-message (content metadata)
-  "Replace the streaming message with error CONTENT and METADATA.
-Returns non-nil when an active streaming entry handled the error."
-  (let ((handled nil))
+  (with-current-buffer buffer
     (when-let ((message (plist-get benedict-chat--streaming-message :message)))
-      (setq handled t)
-      (benedict-chat--replace-message-content message content)
-      (plist-put message :content content)
-      (plist-put message :display-content nil)
-      (plist-put message :metadata metadata)
-      (plist-put message :time (current-time))
-      (when-let ((item (plist-get message :item)))
-        (plist-put item :metadata metadata)
-        (benedict-chat--refresh-message-header item)))
-    (benedict-chat--streaming-reset)
-    handled))
+      (let* ((state benedict-chat--streaming-message)
+             (fallback (or (plist-get state :content) ""))
+             (actual (or content fallback ""))
+             (visible (if empty-response
+                          (or display-content actual)
+                        actual)))
+        (benedict-chat--replace-message-content buffer message visible)
+        (plist-put message :content actual)
+        (if empty-response
+            (plist-put message :display-content visible)
+          (plist-put message :display-content nil))
+        (plist-put message :metadata metadata)
+        (plist-put message :time (current-time))
+        (when-let ((item (plist-get message :item)))
+          (plist-put item :metadata metadata)
+          (benedict-chat--refresh-message-header item)))))
+  (benedict-chat--streaming-reset buffer))
+
+(defun benedict-chat--fail-streaming-message (buffer content metadata)
+  "Replace the streaming message in BUFFER with error CONTENT and METADATA.
+Returns non-nil when an active streaming entry handled the error."
+  (with-current-buffer buffer
+    (let ((handled nil))
+      (when-let ((message (plist-get benedict-chat--streaming-message :message)))
+        (setq handled t)
+        (benedict-chat--replace-message-content buffer message content)
+        (plist-put message :content content)
+        (plist-put message :display-content nil)
+        (plist-put message :metadata metadata)
+        (plist-put message :time (current-time))
+        (when-let ((item (plist-get message :item)))
+          (plist-put item :metadata metadata)
+          (benedict-chat--refresh-message-header item)))
+      (benedict-chat--streaming-reset buffer)
+      handled)))
 
 (defun benedict-chat--format-metadata-line (metadata &optional prefix)
   "Return a user-facing line for METADATA plist with optional PREFIX."
@@ -2327,147 +2353,150 @@ Returns non-nil when an active streaming entry handled the error."
           (setq metadata (plist-put metadata key value)))))
     metadata))
 
-(defun benedict-chat--ensure-streaming-message (payload)
-  "Ensure a streaming assistant message exists in the buffer for PAYLOAD."
-  (unless benedict-chat--streaming-message
-    (let* ((metadata (benedict-chat--metadata
-                      :provider (plist-get payload :provider)
-                      :model (plist-get payload :model)
-                      :usage (plist-get payload :usage)))
-           (record (list :role 'assistant
-                         :content ""
-                         :time (current-time)
-                         :metadata metadata)))
-      ;; Insert header and register item in history
-      (setq record (benedict-chat--record-message record))
-      (when-let ((item (plist-get record :item)))
-        (plist-put item :request-id benedict-chat--active-request-id)
-        (plist-put item :started-at (or (plist-get benedict-chat--telemetry :started-at)
-                                        (float-time)))
-        (benedict-chat--refresh-message-header item)
-        (benedict-chat--stream-init (current-buffer) item))
+(defun benedict-chat--ensure-streaming-message (buffer payload)
+  "Ensure a streaming assistant message exists in BUFFER for PAYLOAD."
+  (with-current-buffer buffer
+    (unless benedict-chat--streaming-message
+      (let* ((metadata (benedict-chat--metadata
+                        :provider (plist-get payload :provider)
+                        :model (plist-get payload :model)
+                        :usage (plist-get payload :usage)))
+             (record (list :role 'assistant
+                           :content ""
+                           :time (current-time)
+                           :metadata metadata)))
+        ;; Insert header and register item in history
+        (setq record (benedict-chat--record-message buffer record))
+        (when-let ((item (plist-get record :item)))
+          (plist-put item :request-id benedict-chat--active-request-id)
+          (plist-put item :started-at (or (plist-get benedict-chat--telemetry :started-at)
+                                          (float-time)))
+          (benedict-chat--refresh-message-header item)
+          (benedict-chat--stream-init buffer item))
 
-      (setq benedict-chat--streaming-message
-            (list :message record
-                  :content ""
-                  :metadata metadata)))))
+        (setq benedict-chat--streaming-message
+              (list :message record
+                    :content ""
+                    :metadata metadata))))))
 
-(defun benedict-chat--handle-provider-delta (payload)
-  "Handle structured PAYLOAD update from the provider."
-  (benedict-chat--telemetry-streaming payload)
-  (when-let* ((state benedict-chat--streaming-message)
-              (message (plist-get state :message)))
-    (let* ((current (plist-get message :metadata))
+(defun benedict-chat--handle-provider-delta (buffer payload)
+  "Handle structured PAYLOAD update from the provider in BUFFER."
+  (with-current-buffer buffer
+    (benedict-chat--telemetry-streaming payload)
+    (when-let* ((state benedict-chat--streaming-message)
+                (message (plist-get state :message)))
+      (let* ((current (plist-get message :metadata))
+             (metadata (benedict-chat--metadata
+                        :provider (or (plist-get payload :provider)
+                                      (and current (plist-get current :provider)))
+                        :model (or (plist-get payload :model)
+                                   (and current (plist-get current :model)))
+                        :usage (or (plist-get payload :usage)
+                                   (and current (plist-get current :usage))))))
+        (plist-put message :metadata metadata)
+        (setq benedict-chat--streaming-message
+              (plist-put state :metadata metadata))
+        (when-let ((item (plist-get message :item)))
+          (plist-put item :metadata metadata)
+          (benedict-chat--refresh-message-header item))))
+    (let ((kind (plist-get payload :kind))
+          (text (plist-get payload :text)))
+      (pcase kind
+        ('content-delta
+         (benedict-chat--ensure-streaming-message buffer payload)
+         (benedict-chat--stream-insert-delta benedict-stream-state text))
+        ('thinking-delta
+         (when (and text (not (string-empty-p text)))
+           (let* ((metadata (benedict-chat--streaming-merge-metadata payload))
+                  (id (or (and benedict-chat--streaming-message
+                               (plist-get benedict-chat--streaming-message :thinking-id))
+                          (benedict-chat--thinking-stream-id payload)))
+                  (detail (list :id id
+                                :type "reasoning.text"
+                                :text text)))
+             (when benedict-chat--streaming-message
+               (plist-put benedict-chat--streaming-message :thinking-id id))
+             (benedict-chat--display-thinking-detail buffer detail metadata t))))))))
+
+(defun benedict-chat--handle-provider-success (buffer result)
+  "Handle RESULT returned from the provider in BUFFER."
+  (with-current-buffer buffer
+    (let* ((streaming-state benedict-chat--streaming-message)
+           (streaming-msg (and streaming-state (plist-get streaming-state :message)))
+           (request (plist-get benedict-chat--last-dispatch :request))
+           (message (plist-get result :message))
+           (content (or (plist-get message :content) ""))
+           (thinking (plist-get result :thinking))
+           (empty-response (plist-get result :empty-response))
+           (role (or (plist-get message :role) 'assistant))
+           (tool-calls (plist-get message :tool-calls))
+           (provider (or (plist-get result :provider)
+                         (plist-get request :provider)
+                         (benedict-chat--resolve-provider)))
+           (model (or (plist-get result :model)
+                      (plist-get request :model)))
+           (latency (plist-get result :latency))
+           (usage (plist-get result :usage))
+           (stream-thinking-id (and streaming-state
+                                    (plist-get streaming-state :thinking-id)))
+           (final-record nil)
            (metadata (benedict-chat--metadata
-                      :provider (or (plist-get payload :provider)
-                                    (and current (plist-get current :provider)))
-                      :model (or (plist-get payload :model)
-                                 (and current (plist-get current :model)))
-                      :usage (or (plist-get payload :usage)
-                                 (and current (plist-get current :usage))))))
-      (plist-put message :metadata metadata)
-      (setq benedict-chat--streaming-message
-            (plist-put state :metadata metadata))
-      (when-let ((item (plist-get message :item)))
-        (plist-put item :metadata metadata)
-        (benedict-chat--refresh-message-header item))))
-  (let ((kind (plist-get payload :kind))
-        (text (plist-get payload :text)))
-    (pcase kind
-      ('content-delta
-       (benedict-chat--ensure-streaming-message payload)
-       (benedict-chat--stream-insert-delta benedict-stream-state text))
-      ('thinking-delta
-       (when (and text (not (string-empty-p text)))
-         (let* ((metadata (benedict-chat--streaming-merge-metadata payload))
-                (id (or (and benedict-chat--streaming-message
-                             (plist-get benedict-chat--streaming-message :thinking-id))
-                        (benedict-chat--thinking-stream-id payload)))
-                (detail (list :id id
-                              :type "reasoning.text"
-                              :text text)))
-           (when benedict-chat--streaming-message
-             (plist-put benedict-chat--streaming-message :thinking-id id))
-           (benedict-chat--display-thinking-detail detail metadata t)))))))
+                      :provider provider
+                      :model model
+                      :latency latency
+                      :usage usage
+                      :empty-response empty-response))
+           (visible-content (if (and empty-response (string-empty-p content))
+                                (benedict-chat--empty-response-text thinking)
+                              content)))
 
-(defun benedict-chat--handle-provider-success (result)
-  "Handle RESULT returned from the provider."
-  (let* ((streaming-state benedict-chat--streaming-message)
-         (streaming-msg (and streaming-state (plist-get streaming-state :message)))
-         (request (plist-get benedict-chat--last-dispatch :request))
-         (message (plist-get result :message))
-         (content (or (plist-get message :content) ""))
-         (thinking (plist-get result :thinking))
-         (empty-response (plist-get result :empty-response))
-         (role (or (plist-get message :role) 'assistant))
-         (tool-calls (plist-get message :tool-calls))
-         (provider (or (plist-get result :provider)
-                       (plist-get request :provider)
-                       (benedict-chat--resolve-provider)))
-         (model (or (plist-get result :model)
-                    (plist-get request :model)))
-         (latency (plist-get result :latency))
-         (usage (plist-get result :usage))
-         (stream-thinking-id (and streaming-state
-                                  (plist-get streaming-state :thinking-id)))
-         (final-record nil)
-         (metadata (benedict-chat--metadata
-                    :provider provider
-                    :model model
-                    :latency latency
-                    :usage usage
-                    :empty-response empty-response))
-         (visible-content (if (and empty-response (string-empty-p content))
-                              (benedict-chat--empty-response-text thinking)
-                            content)))
+      (setq benedict-chat--pending-request nil)
+      (setq benedict-chat--active-request-id nil)
+      (benedict-chat--streaming-reset buffer)
 
-    (setq benedict-chat--pending-request nil)
-    (setq benedict-chat--active-request-id nil)
-    (benedict-chat--streaming-reset)
-
-    (benedict-chat--telemetry-finish 'complete metadata)
-    
-    (if streaming-msg
-        ;; Path A: Update the existing streaming message
-        (let ((record streaming-msg))
-          ;; Update record fields
-          (plist-put record :content visible-content)
-          (plist-put record :metadata metadata)
-          (when tool-calls (plist-put record :tool-calls tool-calls))
-          (when-let ((item (plist-get record :item)))
-            (plist-put item :metadata metadata)
-            (plist-put item :ended-at (float-time))
-            (benedict-chat--replace-message-content record visible-content)
-            (benedict-chat--refresh-message-header item))
-          (setq final-record record))
-          ;; Note: The record is already in benedict-chat--messages
-          ;; and already rendered in the buffer.
-          
+      (benedict-chat--telemetry-finish 'complete metadata)
       
-      ;; Path B: Insert new message (non-streaming)
-      (let ((record (list :role role :content visible-content :time (current-time) :metadata metadata)))
-        (when tool-calls (plist-put record :tool-calls tool-calls))
-        (setq record (benedict-chat--record-message record))
-        (setq final-record record)))
+      (if streaming-msg
+          ;; Path A: Update the existing streaming message
+          (let ((record streaming-msg))
+            ;; Update record fields
+            (plist-put record :content visible-content)
+            (plist-put record :metadata metadata)
+            (when tool-calls (plist-put record :tool-calls tool-calls))
+            (when-let ((item (plist-get record :item)))
+              (plist-put item :metadata metadata)
+              (plist-put item :ended-at (float-time))
+              (benedict-chat--replace-message-content buffer record visible-content)
+              (benedict-chat--refresh-message-header item))
+            (setq final-record record))
+            ;; Note: The record is already in benedict-chat--messages
+            ;; and already rendered in the buffer.
+            
+        
+        ;; Path B: Insert new message (non-streaming)
+        (let ((record (list :role role :content visible-content :time (current-time) :metadata metadata)))
+          (when tool-calls (plist-put record :tool-calls tool-calls))
+          (setq record (benedict-chat--record-message buffer record))
+          (setq final-record record)))
 
-    ;; Render any final thinking payloads before tools/navigation
-    (when-let ((details (benedict-chat--normalize-thinking-payload thinking)))
-      (let ((first-id stream-thinking-id))
-        (dolist (detail details)
-          (let ((detail (copy-sequence detail)))
-            (when (and first-id (not (plist-get detail :id)))
-              (plist-put detail :id first-id)
-              (setq first-id nil))
-            (benedict-chat--display-thinking-detail detail metadata)))))
+      ;; Render any final thinking payloads before tools/navigation
+      (when-let ((details (benedict-chat--normalize-thinking-payload thinking)))
+        (let ((first-id stream-thinking-id))
+          (dolist (detail details)
+            (let ((detail (copy-sequence detail)))
+              (when (and first-id (not (plist-get detail :id)))
+                (plist-put detail :id first-id)
+                (setq first-id nil))
+              (benedict-chat--display-thinking-detail buffer detail metadata)))))
 
-    ;; Handle tool calls after thinking so sections remain grouped
-    (when (and final-record tool-calls)
-      (benedict-chat--process-tool-calls final-record tool-calls metadata)
-      (benedict-chat--loop-step final-record))
-    
-    (message "Benedict: %s replied via %s" 
-             (or model "provider") 
-             (benedict-chat--provider-label provider))))
+      ;; Handle tool calls after thinking so sections remain grouped
+      (when (and final-record tool-calls)
+        (benedict-chat--process-tool-calls buffer final-record tool-calls metadata)
+        (benedict-chat--loop-step final-record))
+      
+      (message "Benedict: %s replied via %s" 
+               (or model "provider") 
+               (benedict-chat--provider-label provider)))))
 
 (defun benedict-chat--format-error-content (payload)
   "Return a human-readable string for PAYLOAD."
@@ -2483,88 +2512,96 @@ Returns non-nil when an active streaming entry handled the error."
                  (when retryable "Retry is available.")))
      " — ")))
 
-(defun benedict-chat--handle-provider-error (payload)
-  "Render PAYLOAD returned from provider failure."
-  (setq benedict-chat--pending-request nil)
-  (setq benedict-chat--active-request-id nil)
-  (let ((content (benedict-chat--format-error-content payload))
-        (metadata (benedict-chat--metadata
-                   :provider (or (plist-get payload :provider)
-                                 (plist-get (plist-get benedict-chat--last-dispatch :request) :provider)
-                                 (benedict-chat--resolve-provider))
-                   :error t
-                   :status (plist-get payload :status)
-                   :code (plist-get payload :code)
-                   :retryable (plist-get payload :retryable))))
-    (benedict-chat--telemetry-finish 'error metadata)
-    (unless (benedict-chat--fail-streaming-message content metadata)
-      (benedict-chat--record-message
-       (list :role 'assistant :content content :time (current-time) :metadata metadata)))
-    (message "Benedict provider error: %s" content)))
+(defun benedict-chat--handle-provider-error (buffer payload)
+  "Render PAYLOAD returned from provider failure in BUFFER."
+  (with-current-buffer buffer
+    (setq benedict-chat--pending-request nil)
+    (setq benedict-chat--active-request-id nil)
+    (let ((content (benedict-chat--format-error-content payload))
+          (metadata (benedict-chat--metadata
+                     :provider (or (plist-get payload :provider)
+                                   (plist-get (plist-get benedict-chat--last-dispatch :request) :provider)
+                                   (benedict-chat--resolve-provider))
+                     :error t
+                     :status (plist-get payload :status)
+                     :code (plist-get payload :code)
+                     :retryable (plist-get payload :retryable))))
+      (benedict-chat--telemetry-finish 'error metadata)
+      (unless (benedict-chat--fail-streaming-message buffer content metadata)
+        (benedict-chat--record-message
+         buffer
+         (list :role 'assistant :content content :time (current-time) :metadata metadata)))
+      (message "Benedict provider error: %s" content))))
 
-(defun benedict-chat--start-dispatch (request &optional retry)
-  "Send REQUEST through the provider.  RETRY notes when replaying."
-  (let* ((buffer (current-buffer))
-         (provider-id (or (plist-get request :provider) benedict-provider))
-         (provider-label (benedict-chat--provider-label provider-id)))
-    (setq benedict-chat--request-seq (1+ benedict-chat--request-seq))
-    (setq benedict-chat--active-request-id benedict-chat--request-seq)
-    (setq benedict-chat--thinking-temp-counter 0)
-    (benedict-chat--streaming-reset)
-    (benedict-chat--telemetry-begin request)
-    (setq benedict-chat--last-dispatch
-          (list :request request :timestamp (current-time) :retry retry))
-    (message "Benedict: contacting %s%s..."
-             provider-label (if retry " (retry)" ""))
-    (condition-case err
-        (let ((benedict-provider provider-id))
-          (setq benedict-chat--pending-request
-                (benedict-provider-dispatch
-                 request
-                 :on-success (lambda (result)
+(defun benedict-chat--start-dispatch (buffer request &optional retry)
+  "Send REQUEST through the provider for BUFFER.
+RETRY notes when replaying."
+  (unless (and buffer (buffer-live-p buffer))
+    (user-error "Chat buffer is unavailable"))
+  (with-current-buffer buffer
+    (let* ((provider-id (or (plist-get request :provider) benedict-provider))
+           (provider-label (benedict-chat--provider-label provider-id)))
+      (setq benedict-chat--request-seq (1+ benedict-chat--request-seq))
+      (setq benedict-chat--active-request-id benedict-chat--request-seq)
+      (setq benedict-chat--thinking-temp-counter 0)
+      (benedict-chat--streaming-reset buffer)
+      (benedict-chat--telemetry-begin request)
+      (setq benedict-chat--last-dispatch
+            (list :request request :timestamp (current-time) :retry retry))
+      (message "Benedict: contacting %s%s..."
+               provider-label (if retry " (retry)" ""))
+      (condition-case err
+          (let ((benedict-provider provider-id))
+            (setq benedict-chat--pending-request
+                  (benedict-provider-dispatch
+                   request
+                   :on-success (lambda (result)
+                                 (when (buffer-live-p buffer)
+                                   (benedict-chat--handle-provider-success buffer result)))
+                   :on-error (lambda (payload)
                                (when (buffer-live-p buffer)
-                                 (with-current-buffer buffer
-                                   (benedict-chat--handle-provider-success result))))
-                 :on-error (lambda (payload)
-                             (when (buffer-live-p buffer)
-                               (with-current-buffer buffer
-                                 (benedict-chat--handle-provider-error payload))))
-                 :on-delta (lambda (&rest payload)
-                             (when (buffer-live-p buffer)
-                               (with-current-buffer buffer
-                                 ;; If payload is wrapped in a list, unwrap it
-                                 (let ((data (if (and (listp payload) 
+                                 (benedict-chat--handle-provider-error buffer payload)))
+                   :on-delta (lambda (&rest payload)
+                               (when (buffer-live-p buffer)
+                                 ;; If payload is wrapped in a list, unwrap it.
+                                 (let ((data (if (and (listp payload)
                                                       (not (keywordp (car payload)))
                                                       (listp (car payload)))
                                                  (car payload)
                                                payload)))
-                                   (benedict-chat--handle-provider-delta data))))))))
-      (error
-       (setq benedict-chat--pending-request nil)
-       (let ((payload (list :message (error-message-string err)
-                            :type 'dispatch
-                            :provider benedict-provider
-                            :retryable nil)))
-         (benedict-chat--handle-provider-error payload))))))
+                                   (benedict-chat--handle-provider-delta buffer data)))))))
+        (error
+         (setq benedict-chat--pending-request nil)
+         (let ((payload (list :message (error-message-string err)
+                              :type 'dispatch
+                              :provider benedict-provider
+                              :retryable nil)))
+           (benedict-chat--handle-provider-error buffer payload)))))))
 
 (defun benedict-chat-send-prompt (text)
   "Send TEXT to the provider and insert the assistant reply."
   (interactive (list (read-string "Prompt: ")))
   (benedict-chat--send-text text))
 
-(defun benedict-chat--send-text (text)
-  "Helper implementing the logic behind `benedict-chat-send-prompt'.  TEXT is the prompt to dispatch."
-  (unless (derived-mode-p 'benedict-chat-mode)
-    (user-error "Not in a Benedict chat buffer"))
-  (when (string-blank-p text)
-    (user-error "Prompt is empty"))
-  (benedict-chat--ensure-not-busy)
-  (setq benedict-chat--loop-start-time (float-time))
-  (setq benedict-chat--loop-turn-count 0)
-  (setq benedict-chat--loop-canceled nil)
-  (benedict-chat--record-message
-   (list :role 'user :content text :time (current-time)))
-  (benedict-chat--start-dispatch (benedict-chat--build-request)))
+(defun benedict-chat--send-text (text &optional buffer)
+  "Helper implementing the logic behind `benedict-chat-send-prompt'.
+TEXT is the prompt to dispatch.  BUFFER is the target chat buffer."
+  (let ((chat (or buffer (benedict-chat--resolve-chat-buffer))))
+    (unless (and chat (buffer-live-p chat))
+      (user-error "Not in a Benedict chat buffer"))
+    (with-current-buffer chat
+      (unless (derived-mode-p 'benedict-chat-mode)
+        (user-error "Not in a Benedict chat buffer"))
+      (when (string-blank-p text)
+        (user-error "Prompt is empty"))
+      (benedict-chat--ensure-not-busy)
+      (setq benedict-chat--loop-start-time (float-time))
+      (setq benedict-chat--loop-turn-count 0)
+      (setq benedict-chat--loop-canceled nil)
+      (benedict-chat--record-message
+       chat
+       (list :role 'user :content text :time (current-time)))
+      (benedict-chat--start-dispatch chat (benedict-chat--build-request)))))
 
 ;; -------------------------------------------------------------------
 ;; Compose buffer flow (context-aware prompts)
@@ -2830,17 +2867,20 @@ Returns a plist (:slice :replacing) where :slice carries the final handle."
     (when (string-blank-p prompt)
       (user-error "Prompt is empty"))
     (let* ((chat benedict-chat-compose--chat-buffer)
-           (slices (with-current-buffer chat benedict-chat--context-slices))
+           (stable-chat (with-current-buffer chat
+                          (or benedict-chat--buffer chat)))
+           (slices (with-current-buffer stable-chat
+                     benedict-chat--context-slices))
            (body-handles (benedict-chat--extract-handle-links prompt))
            (text (benedict-chat--assemble-message-text prompt slices)))
       (benedict-chat--warn-unknown-handles body-handles slices)
-      (with-current-buffer chat
-        (benedict-chat--send-text text)
+      (with-current-buffer stable-chat
+        (benedict-chat--send-text text stable-chat)
         (unless benedict-chat-context-retain-after-send
           (setq benedict-chat--context-slices nil))
         (benedict-chat--clear-compose-state))
-      (when (buffer-live-p chat)
-        (pop-to-buffer chat))
+      (when (buffer-live-p stable-chat)
+        (pop-to-buffer stable-chat))
       (when (buffer-live-p compose)
         (kill-buffer compose))
       (message "Benedict: sent prompt with context"))))
@@ -3316,7 +3356,9 @@ toggles all thinking blocks nested under that assistant section."
   (let ((request (plist-get benedict-chat--last-dispatch :request)))
     (unless request
       (user-error "Stored request is unavailable"))
-    (benedict-chat--start-dispatch request t)))
+    (benedict-chat--start-dispatch
+     (or benedict-chat--buffer (current-buffer))
+     request t)))
 
 (defvar benedict-chat-mode-map
   (let ((m (make-sparse-keymap)))
@@ -3353,6 +3395,7 @@ toggles all thinking blocks nested under that assistant section."
 
 (defun benedict-chat--init-buffer ()
   "Initialize buffer-local state for Benedict chat."
+  (setq-local benedict-chat--buffer (current-buffer))
   (setq-local benedict-chat--messages nil)
   (setq-local benedict-chat--items nil)
   (setq-local benedict-chat--item-counter 0)

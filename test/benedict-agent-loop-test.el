@@ -15,9 +15,10 @@
 (defvar benedict-test--last-y-or-n-prompt nil)
 (defvar benedict-test--y-or-n-response t)
 
-(defun benedict-test--mock-start-dispatch (request &optional retry)
-  "Mock dispatch by storing REQUEST."
-  (setq benedict-test--last-dispatch-call (list :request request :retry retry)))
+(defun benedict-test--mock-start-dispatch (buffer request &optional retry)
+  "Mock dispatch by storing BUFFER, REQUEST, and RETRY."
+  (setq benedict-test--last-dispatch-call
+        (list :buffer buffer :request request :retry retry)))
 
 (defun benedict-test--mock-y-or-n-p (prompt)
   "Mock y-or-n-p by storing PROMPT and returning `benedict-test--y-or-n-response'."
@@ -39,7 +40,9 @@
       
       (benedict-chat--loop-step '(:role assistant :tool-calls ((:name "test"))))
       
-      (should (equal benedict-test--last-dispatch-call '(:request (:mock-request t) :retry nil)))
+      (should (equal (plist-get benedict-test--last-dispatch-call :request)
+                     '(:mock-request t)))
+      (should (null (plist-get benedict-test--last-dispatch-call :retry)))
       (should (= benedict-chat--loop-turn-count 1)))))
 
 (ert-deftest benedict-loop-stops-on-no-tool-calls ()

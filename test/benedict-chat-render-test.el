@@ -27,12 +27,12 @@
           (item2 (list :tool-call '(:name "tool2") :content "Output2")))
       
       ;; Render first tool
-      (benedict-chat--render-tool-item item1)
+      (benedict-chat--render-tool-item (current-buffer) item1)
       (should (string-match-p "tool1" (buffer-string)))
       (should (string-match-p "Output1" (buffer-string)))
       
       ;; Render second tool immediately after
-      (benedict-chat--render-tool-item item2)
+      (benedict-chat--render-tool-item (current-buffer) item2)
       (should (string-match-p "tool2" (buffer-string)))
       (should (string-match-p "Output2" (buffer-string)))
       
@@ -53,7 +53,7 @@
   "Test that updating tool content adjusts markers correctly."
   (with-temp-buffer
     (let ((item (list :tool-call '(:name "tool1") :content "Old")))
-      (benedict-chat--render-tool-item item)
+      (benedict-chat--render-tool-item (current-buffer) item)
       
       ;; Verify initial content
       (should (string-match-p "Old" (buffer-string)))
@@ -76,7 +76,7 @@
 	                       :content "Body"
 	                       :tool-folded t))
 	           (label "fold-me"))
-	      (benedict-chat--render-tool-item item)
+	      (benedict-chat--render-tool-item (current-buffer) item)
 	      ;; Toggle open then closed
 	      (goto-char (plist-get item :header-start))
       (benedict-chat-tool-toggle)
@@ -100,7 +100,7 @@
                       :tool-call (list :name 'fold-me)
                       :content "HiddenBody"
                       :tool-folded t)))
-      (benedict-chat--render-tool-item item)
+      (benedict-chat--render-tool-item (current-buffer) item)
       (goto-char (plist-get item :header-start))
       (should (eq (get-text-property (plist-get item :content-start) 'invisible)
                   'benedict-tool-details))
@@ -118,7 +118,7 @@
     (let* ((message (list :role 'assistant :content "Hello"))
            (item (list :kind 'message :message message)))
       (plist-put message :item item)
-      (benedict-chat--render-message-item item "[ASSISTANT] initial" "Hello")
+      (benedict-chat--render-message-item (current-buffer) item "[ASSISTANT] initial" "Hello")
       (let ((body-start (marker-position (plist-get item :content-start)))
             (body-end (marker-position (plist-get item :content-end))))
         (benedict-chat--update-message-header item "[ASSISTANT] updated")
@@ -133,7 +133,7 @@
     (let* ((message (list :role 'assistant :content "Hello"))
            (item (list :kind 'message :message message)))
       (plist-put message :item item)
-      (benedict-chat--render-message-item item "[ASSISTANT] hdr" "Hello")
+      (benedict-chat--render-message-item (current-buffer) item "[ASSISTANT] hdr" "Hello")
       (let ((old-end (marker-position (plist-get item :content-end))))
         (benedict-chat--write-message-item-body item "Hello world")
         (should (string-match-p "Hello world" (buffer-string)))

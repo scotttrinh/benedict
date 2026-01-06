@@ -57,9 +57,11 @@
                (benedict-chat--active-request-id 1)
                (benedict-chat--last-dispatch (list :request request :timestamp (current-time))))
           (benedict-chat--telemetry-begin request)
-          (benedict-chat--record-message (list :role 'user :content "hi" :time (current-time)))
+          (benedict-chat--record-message (current-buffer)
+                                         (list :role 'user :content "hi" :time (current-time)))
 
           (benedict-chat--handle-provider-delta
+           (current-buffer)
            (list :kind 'content-delta :provider 'fake :model "fake-model" :text "Hello **bo"))
 
           (let* ((assistant (cl-find-if (lambda (msg) (eq (plist-get msg :role) 'assistant))
@@ -78,6 +80,7 @@
             (should (string= (funcall body) "Hello **bo"))
 
             (benedict-chat--handle-provider-delta
+             (current-buffer)
              (list :kind 'content-delta :provider 'fake :model "fake-model" :text "ld**"))
             (should (string= (funcall body) "Hello **bold**"))
 
@@ -86,6 +89,7 @@
 
             ;; Completion updates metadata + replaces the body with final content.
             (benedict-chat--handle-provider-success
+             (current-buffer)
              (list :provider 'fake
                    :model "fake-model"
                    :latency 0.42
@@ -129,6 +133,7 @@
                (benedict-chat--last-dispatch (list :request request :timestamp (current-time))))
           (benedict-chat--telemetry-begin request)
           (benedict-chat--handle-provider-delta
+           (current-buffer)
            (list :kind 'content-delta :provider 'fake :model "fake-model" :text "Hello"))
           (let* ((assistant (cl-find-if (lambda (msg) (eq (plist-get msg :role) 'assistant))
                                         benedict-chat--messages))
@@ -142,6 +147,142 @@
             (goto-char (point-min))
             (benedict-chat--status-tick (current-buffer))
             (should (= (point) (marker-position body-end)))))))))
+
+(ert-deftest benedict-chat-integration-streaming-delta-targets-stable-buffer ()
+  "Streaming deltas should land in the chat buffer even if the user switches buffers."
+  (let ((benedict-provider 'fake)
+        (benedict-provider-fake-script nil)
+        (chat-buffer (generate-new-buffer "*Benedict Buffer Switch Integration*"))
+        (other-buffer (generate-new-buffer "*Benedict Other Buffer*")))
+    (unwind-protect
+        (with-current-buffer chat-buffer
+          (benedict-chat-mode)
+          (benedict-chat--init-buffer)
+          (cl-letf (((symbol-function 'benedict-chat--status-start-timer) #'ignore)
+                    ((symbol-function 'benedict-chat--status-refresh) #'ignore))
+            (let* ((request (list :provider 'fake :model "fake-model" :messages nil))
+                   (benedict-chat--request-seq 0)
+                   (benedict-chat--active-request-id 1)
+                   (benedict-chat--last-dispatch (list :request request :timestamp (current-time))))
+              (benedict-chat--telemetry-begin request)
+              (with-current-buffer other-buffer
+                (benedict-chat--handle-provider-delta
+                 chat-buffer
+                 (list :kind 'content-delta :provider 'fake :model "fake-model"
+                       :text "Hello from delta"))))
+            (with-current-buffer chat-buffer
+              (goto-char (point-min))
+              (should (search-forward "[ASSISTANT]" nil t))
+              (should (search-forward "Hello from delta" nil t)))
+            (with-current-buffer other-buffer
+              (goto-char (point-min))
+              (should-not (search-forward "Hello from delta" nil t)))))
+      (when (buffer-live-p other-buffer)
+        (kill-buffer other-buffer))
+      (when (buffer-live-p chat-buffer)
+        (kill-buffer chat-buffer)))))
+
+(ert-deftest benedict-chat-integration-tool-update-targets-stable-buffer ()
+  "Tool UI updates should land in the chat buffer even if the user switches buffers."
+  (let ((chat-buffer (generate-new-buffer "*Benedict Tool Update Integration*"))
+        (other-buffer (generate-new-buffer "*Benedict Tool Update Other*")))
+    (unwind-protect
+        (with-current-buffer chat-buffer
+          (benedict-chat-mode)
+          (benedict-chat--init-buffer)
+          (cl-letf (((symbol-function 'benedict-chat--status-start-timer) #'ignore)
+                    ((symbol-function 'benedict-chat--status-refresh) #'ignore))
+            (let* ((call (list :id "call-1" :name "demo" :arguments '(:foo "bar")))
+                   (metadata (list :status 'running :provider 'fake))
+                   (item (benedict-chat--record-tool-block chat-buffer call metadata)))
+              (with-current-buffer other-buffer
+                (benedict-chat--update-tool-block
+                 chat-buffer
+                 item
+                 (list :status 'success :provider 'fake)
+                 (list :body "Tool updated")
+                 "Tool fallback"))
+              (with-current-buffer chat-buffer
+                (goto-char (point-min))
+                (should (search-forward "Tool updated" nil t)))
+              (with-current-buffer other-buffer
+                (goto-char (point-min))
+                (should-not (search-forward "Tool updated" nil t))))))
+      (when (buffer-live-p other-buffer)
+        (kill-buffer other-buffer))
+      (when (buffer-live-p chat-buffer)
+        (kill-buffer chat-buffer)))))
+
+(ert-deftest benedict-chat-integration-thinking-update-targets-stable-buffer ()
+  "Thinking updates should land in the chat buffer even if the user switches buffers."
+  (let ((chat-buffer (generate-new-buffer "*Benedict Thinking Update Integration*"))
+        (other-buffer (generate-new-buffer "*Benedict Thinking Update Other*")))
+    (unwind-protect
+        (with-current-buffer chat-buffer
+          (benedict-chat-mode)
+          (benedict-chat--init-buffer)
+          (let* ((metadata (list :provider 'fake))
+                 (item (benedict-chat--record-thinking chat-buffer "" metadata)))
+            (with-current-buffer other-buffer
+              (benedict-chat--write-thinking-content chat-buffer item "Thinking update" t))
+            (with-current-buffer chat-buffer
+              (goto-char (point-min))
+              (should (search-forward "Thinking update" nil t)))
+            (with-current-buffer other-buffer
+              (goto-char (point-min))
+              (should-not (search-forward "Thinking update" nil t)))))
+      (when (buffer-live-p other-buffer)
+        (kill-buffer other-buffer))
+      (when (buffer-live-p chat-buffer)
+        (kill-buffer chat-buffer)))))
+
+(ert-deftest benedict-chat-integration-streaming-finalization-targets-stable-buffer ()
+  "Streaming success/error callbacks should land in the chat buffer even if the user switches buffers."
+  (cl-labels
+      ((run-case (chat-name finish-fn expected-text)
+         (let ((chat-buffer (generate-new-buffer chat-name))
+               (other-buffer (generate-new-buffer (concat chat-name " Other"))))
+           (unwind-protect
+               (with-current-buffer chat-buffer
+                 (benedict-chat-mode)
+                 (benedict-chat--init-buffer)
+                 (cl-letf (((symbol-function 'benedict-chat--status-start-timer) #'ignore)
+                           ((symbol-function 'benedict-chat--status-refresh) #'ignore))
+                   (let* ((request (list :provider 'fake :model "fake-model" :messages nil))
+                          (benedict-chat--request-seq 0)
+                          (benedict-chat--active-request-id 1)
+                          (benedict-chat--last-dispatch (list :request request :timestamp (current-time))))
+                     (benedict-chat--telemetry-begin request)
+                     (benedict-chat--handle-provider-delta
+                      chat-buffer
+                      (list :kind 'content-delta :provider 'fake :model "fake-model"
+                            :text "Partial"))
+                     (with-current-buffer other-buffer
+                       (funcall finish-fn chat-buffer))
+                     (with-current-buffer chat-buffer
+                       (goto-char (point-min))
+                       (should (search-forward expected-text nil t)))
+                     (with-current-buffer other-buffer
+                       (goto-char (point-min))
+                       (should-not (search-forward expected-text nil t)))))
+             (when (buffer-live-p other-buffer)
+               (kill-buffer other-buffer))
+             (when (buffer-live-p chat-buffer)
+               (kill-buffer chat-buffer)))))
+    (run-case "*Benedict Stream Success*" 
+              (lambda (buffer)
+                (benedict-chat--handle-provider-success
+                 buffer
+                 (list :provider 'fake
+                       :model "fake-model"
+                       :message (list :role 'assistant :content "Final success"))))
+              "Final success")
+    (run-case "*Benedict Stream Error*"
+              (lambda (buffer)
+                (benedict-chat--handle-provider-error
+                 buffer
+                 (list :provider 'fake :message "Oops error")))
+              "Oops error")))))
 
 (ert-deftest benedict-chat-integration-inserts-blank-line-between-blocks ()
   "Rendering adjacent blocks should include a blank line between them."
@@ -158,16 +299,19 @@
                (benedict-chat--active-request-id 1)
                (benedict-chat--last-dispatch (list :request request :timestamp (current-time))))
           (benedict-chat--telemetry-begin request)
-          (benedict-chat--record-message (list :role 'user :content "hi" :time (current-time)))
+          (benedict-chat--record-message (current-buffer)
+                                         (list :role 'user :content "hi" :time (current-time)))
           (benedict-chat--handle-provider-delta
+           (current-buffer)
            (list :kind 'content-delta :provider 'fake :model "fake-model" :text "Hello"))
 
           (let* ((assistant (cl-find-if (lambda (msg) (eq (plist-get msg :role) 'assistant))
                                         benedict-chat--messages))
                  (assistant-item (plist-get assistant :item))
                  (tool-item (benedict-chat--record-tool-block
-                            (list :id "call-1" :name 'demo :arguments '(:foo "bar"))
-                            (list :status 'running)))
+                             (current-buffer)
+                             (list :id "call-1" :name 'demo :arguments '(:foo "bar"))
+                             (list :status 'running)))
                  (assistant-end (plist-get assistant-item :end))
                  (tool-start (plist-get tool-item :start)))
             (should assistant)

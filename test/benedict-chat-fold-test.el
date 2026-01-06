@@ -117,7 +117,7 @@
                        :content "Body"
                        :tool-folded t))
            (alias (benedict-fold-core-spec-alias benedict-chat-fold-tool-spec)))
-      (benedict-chat--render-tool-item item)
+      (benedict-chat--render-tool-item (current-buffer) item)
       (goto-char (plist-get item :header-start))
       (benedict-chat-tool-toggle)
       (let ((inhibit-read-only t))
@@ -138,7 +138,7 @@
                        :content "Body"
                        :tool-folded t))
            (alias (benedict-fold-core-spec-alias benedict-chat-fold-tool-spec)))
-      (benedict-chat--render-tool-item item)
+      (benedict-chat--render-tool-item (current-buffer) item)
       (let* ((header (plist-get item :header-start))
              (body-start (marker-position (plist-get item :content-start)))
              (body-end (marker-position (plist-get item :content-end))))
@@ -162,7 +162,7 @@
                       :tool-call (list :name 'marker-guard)
                       :content "Range"
                       :tool-folded t)))
-      (benedict-chat--render-tool-item item)
+      (benedict-chat--render-tool-item (current-buffer) item)
       (let* ((header (plist-get item :header-start))
              (h-pos (marker-position header))
              (body-start (plist-get item :content-start))
@@ -188,7 +188,7 @@
                        :content "Body"
                        :tool-folded t))
            (alias (benedict-fold-core-spec-alias benedict-chat-fold-tool-spec)))
-      (benedict-chat--render-tool-item item)
+      (benedict-chat--render-tool-item (current-buffer) item)
       (goto-char (plist-get item :header-start))
       (benedict-chat-tool-toggle)
       (goto-char (plist-get item :header-start))
@@ -217,7 +217,7 @@
                          :tool-call (list :name 'isearch)
                          :content "tool-body"
                          :tool-folded t)))
-        (benedict-chat--render-tool-item tool)
+        (benedict-chat--render-tool-item (current-buffer) tool)
         (let* ((thinking-pos (marker-position (plist-get thinking :content-start)))
                (tool-pos (marker-position (plist-get tool :content-start))))
           (benedict-chat-fold--isearch-open)
