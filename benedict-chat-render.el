@@ -15,9 +15,8 @@
 (require 'benedict)
 (require 'benedict-chat-fold)
 
-(declare-function benedict-chat-ui-active-p "benedict-chat-ui")
-(declare-function benedict-chat-ui--badge "benedict-chat-ui")
-(declare-function benedict-chat-ui--set-section-folded "benedict-chat-ui")
+(declare-function benedict-chat--badge "benedict-chat")
+(declare-function benedict-chat--set-section-folded "benedict-chat")
 
 (defvar benedict-chat-tool-toggle-map
    (let ((map (make-sparse-keymap)))
@@ -35,8 +34,7 @@
 
 (defsubst benedict-chat-render--ui-active-p ()
   "Return non-nil when the section-based chat UI is active."
-  (and (fboundp 'benedict-chat-ui-active-p)
-       (benedict-chat-ui-active-p)))
+  (derived-mode-p 'benedict-chat-mode))
 
 (defun benedict-chat-render--badge-face (face)
   "Return FACE coerced to a single face symbol for badges."
@@ -55,8 +53,8 @@
   (when label
     (let ((label (format "%s" label))
           (face (benedict-chat-render--badge-face face)))
-      (if (fboundp 'benedict-chat-ui--badge)
-          (benedict-chat-ui--badge label face)
+      (if (fboundp 'benedict-chat--badge)
+          (benedict-chat--badge label face)
         (propertize (format "[%s]" label) 'face face)))))
 
 (defun benedict-chat-render--badge-separator ()
@@ -544,7 +542,7 @@ insert-after markers to work without swallowing subsequent blocks."
   (let ((folded (plist-get item :tool-folded)))
     (if (and (benedict-chat-render--ui-active-p)
              (plist-get item :section))
-        (benedict-chat-ui--set-section-folded
+        (benedict-chat--set-section-folded
          (plist-get item :section)
          folded)
       (benedict-chat-fold-set-tool-folded item folded))))

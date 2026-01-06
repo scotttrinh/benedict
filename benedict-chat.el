@@ -25,7 +25,6 @@
 (require 'benedict-chat-fold)
 (require 'benedict-chat-render)
 (require 'benedict-chat-stream)
-(require 'benedict-chat-ui)
 
 ;;; Mode definition and setup
 
@@ -99,8 +98,312 @@ No effect on terminals or when fringes are unavailable."
   :type 'boolean
   :group 'benedict-chat)
 
-;; Note: Section classes, buffer locals, and UI helpers remain in benedict-chat-ui.el
-;; during Phase 1; they will be moved to benedict-chat.el and renamed in Phase 2.
+;;; Section Classes and UI Helpers
+
+(defclass benedict-chat-section (magit-section)
+  ((item :initarg :item :initform nil :accessor benedict-chat-section-item)
+   (kind :initarg :kind :initform nil :accessor benedict-chat-section-kind))
+  :documentation "Base section for Benedict chat UI.")
+
+(defclass benedict-chat-conversation-section (benedict-chat-section) ()
+  :documentation "Top-level conversation container.")
+(defclass benedict-chat-turn-section (benedict-chat-section) ()
+  :documentation "Turn section grouping user/assistant blocks.")
+(defclass benedict-chat-message-user-section (benedict-chat-section) ()
+  :documentation "User message section.")
+(defclass benedict-chat-message-assistant-section (benedict-chat-section) ()
+  :documentation "Assistant message section.")
+(defclass benedict-chat-message-system-section (benedict-chat-section) ()
+  :documentation "System message section.")
+(defclass benedict-chat-thinking-section (benedict-chat-section) ()
+  :documentation "Thinking/analysis section.")
+(defclass benedict-chat-tool-section (benedict-chat-section) ()
+  :documentation "Tool call section.")
+
+(defconst benedict-chat--section-classes
+  '((conversation . benedict-chat-conversation-section)
+    (turn . benedict-chat-turn-section)
+    (message/user . benedict-chat-message-user-section)
+    (message/assistant . benedict-chat-message-assistant-section)
+    (message/system . benedict-chat-message-system-section)
+    (thinking . benedict-chat-thinking-section)
+    (tool . benedict-chat-tool-section))
+  "Canonical mapping from chat block kinds to magit-section classes.
+These keys remain stable across renders to keep folding/navigation predictable.")
+
+(dolist (entry benedict-chat--section-classes)
+  (add-to-list 'magit--section-type-alist entry))
+
+(defvar-local benedict-chat--conversation-section nil
+  "Conversation root section for the current chat buffer.
+
+All UI sections are inserted under this stable parent to avoid ad-hoc
+root sections when streaming inserts append later.")
+
+(defvar-local benedict-chat--current-turn-section nil
+  "Most recent turn section in the current chat buffer.
+
+Turn sections group user and assistant blocks for stable navigation and
+folding semantics in the UI renderer.")
+
+(defun benedict-chat--svg-supported-p ()
+  "Return non-nil when SVG badges can be rendered."
+  (and (display-graphic-p)
+       (featurep 'svg)
+       (require 'svg-lib nil t)
+       (fboundp 'svg-lib-tag)))
+
+(defun benedict-chat--badge-face (face)
+  "Return FACE coerced to a single face symbol."
+  (cond
+   ((and (symbolp face) (facep face)) face)
+   ((listp face)
+    (or (cl-some (lambda (candidate)
+                   (and (symbolp candidate) (facep candidate)))
+                 face)
+        'benedict-chat-header))
+   (t 'benedict-chat-header)))
+
+(defun benedict-chat--badge (label face)
+  "Render LABEL as a badge using FACE.
+Falls back to a propertized text badge when SVG is unavailable."
+  (let* ((label (format "%s" label))
+         (face (benedict-chat--badge-face face))
+         (fg (face-foreground face nil 'default))
+         (bg (or (face-background face nil 'default)
+                 (face-background 'default nil))))
+    (if (benedict-chat--svg-supported-p)
+        (let ((image (svg-lib-tag label nil
+                                  :stroke 0
+                                  :radius 4
+                                  :padding 1.0
+                                  :foreground fg
+                                  :background bg
+                                  :font-family "Menlo")))
+          (propertize label 'display image 'face face))
+      (propertize (format "[%s]" label) 'face face))))
+
+(defun benedict-chat--normalize-role (role)
+  "Normalize ROLE (symbol/string/keyword) into a lowercase symbol."
+  (cond
+   ((keywordp role) (intern (substring (symbol-name role) 1)))
+   ((stringp role) (intern (downcase role)))
+   ((symbolp role) (intern (downcase (symbol-name role))))
+   (t 'unknown)))
+
+(defun benedict-chat--item-section-kind (item)
+  "Return the canonical section kind keyword for ITEM.
+ITEM may be a chat render plist (with :kind) or a plain message plist.
+Message kinds are refined by role (user/assistant/system). Unknown
+items default to `turn'."
+  (let ((kind (plist-get item :kind)))
+    (pcase kind
+      ('message
+       (pcase (benedict-chat--normalize-role (plist-get item :role))
+         ('user 'message/user)
+         ('system 'message/system)
+         (_ 'message/assistant)))
+      ('thinking 'thinking)
+      ('tool 'tool)
+      (_ (cond
+          ((plist-member item :tool-call) 'tool)
+          ((plist-member item :thinking-id) 'thinking)
+          ((plist-member item :role)
+           (pcase (benedict-chat--normalize-role (plist-get item :role))
+             ('user 'message/user)
+             ('system 'message/system)
+             (_ 'message/assistant)))
+          (t 'turn))))))
+
+(defun benedict-chat--section-p (section)
+  "Return non-nil when SECTION is a Benedict chat UI section."
+  (and section
+       (condition-case nil
+           (object-of-class-p section 'magit-section)
+         (error nil))
+       (memq (oref section type) (mapcar #'car benedict-chat--section-classes))))
+
+(defun benedict-chat--set-section-folded (section folded)
+  "Show or hide SECTION according to FOLDED."
+  (when (benedict-chat--section-p section)
+    (let ((inhibit-read-only t))
+      (condition-case nil
+          (if folded
+              (magit-section-hide section)
+            (magit-section-show section))
+        (error
+         (oset section hidden folded))))))
+
+(defun benedict-chat--section-end-position (section)
+  "Return a buffer position for SECTION end, defaulting to `point-max'."
+  (let ((end (and section (ignore-errors (oref section end)))))
+    (cond
+     ((markerp end) (or (marker-position end) (point-max)))
+     ((integerp end) end)
+     (t (point-max)))))
+
+(defun benedict-chat--insert-anchor ()
+  "Insert an invisible anchor character for magit sections.
+
+Magit sections without any buffer text can be difficult to reference and
+extend reliably. This inserts a zero-width display anchor so the section
+has a stable position without changing the visible buffer."
+  (let ((pos (point)))
+    (insert (propertize " " 'display "" 'benedict-region-kind 'header))
+    (put-text-property pos (1+ pos) 'benedict-chat-anchor t)))
+
+(defun benedict-chat--ensure-conversation-root ()
+  "Ensure a stable conversation root section exists in the current buffer."
+  (unless (benedict-chat--section-p benedict-chat--conversation-section)
+    (let ((inhibit-read-only t))
+      (save-excursion
+        (goto-char (point-min))
+        (benedict-chat--insert-section 'conversation nil nil
+          (benedict-chat--insert-anchor)
+          (setq benedict-chat--conversation-section
+                (or (and (boundp 'magit-insert-section--current)
+                         magit-insert-section--current)
+                    (magit-current-section)))
+          (setq-local magit-root-section benedict-chat--conversation-section))))))
+
+(defun benedict-chat--current-turn ()
+  "Return the current turn section when it is valid."
+  (when (benedict-chat--section-p benedict-chat--current-turn-section)
+    benedict-chat--current-turn-section))
+
+(defun benedict-chat--begin-turn ()
+  "Insert a new turn section and make it current.
+
+The turn section is a structural container; it does not insert any
+visible header text."
+  (benedict-chat--ensure-conversation-root)
+  (let ((parent benedict-chat--conversation-section))
+    (when (benedict-chat--section-p parent)
+      (let ((inhibit-read-only t))
+        (save-excursion
+          (goto-char (benedict-chat--section-end-position parent))
+          (let ((magit-insert-section--parent parent))
+            (benedict-chat--insert-section 'turn nil nil
+              (benedict-chat--insert-anchor)
+              (setq benedict-chat--current-turn-section
+                    (or (and (boundp 'magit-insert-section--current)
+                             magit-insert-section--current)
+                        (magit-current-section))))))))
+    (benedict-chat--current-turn)))
+
+(defun benedict-chat--sync-fold-state (section)
+  "Keep SECTION's item plist in sync with its visibility."
+  (when (benedict-chat--section-p section)
+    (let* ((item (oref section value))
+           (hidden (oref section hidden)))
+      (pcase (oref section type)
+        ('tool
+         (when item
+           (plist-put item :tool-folded hidden)
+           (benedict-chat--update-tool-header item)))
+        ('thinking
+         (when item
+           (plist-put item :thinking-folded hidden)
+           (when (fboundp 'benedict-chat--update-thinking-header)
+             (benedict-chat--update-thinking-header item))))))))
+
+(defun benedict-chat--sync-fold-state-after-visibility (section &rest _)
+  "Advice: update SECTION metadata after magit visibility changes."
+  (benedict-chat--sync-fold-state section))
+
+(advice-add 'magit-section-show :after #'benedict-chat--sync-fold-state-after-visibility)
+(advice-add 'magit-section-hide :after #'benedict-chat--sync-fold-state-after-visibility)
+
+(defmacro benedict-chat--insert-section (kind value &optional hide &rest body)
+  "Insert a magit-section for chat KIND with VALUE and optional HIDE flag.
+KIND must be a key in `benedict-chat--section-classes'. BODY inserts
+the section header/body content. This helper only sets up the section
+object; callers remain responsible for marker-backed insertion so
+streaming updates stay stable."
+  (declare (indent 3))
+  (let ((kind-sym (make-symbol "kind"))
+        (value-sym (make-symbol "value"))
+        (hide-sym (make-symbol "hide")))
+    `(let ((,kind-sym ,kind)
+           (,value-sym ,value)
+           (,hide-sym ,hide))
+       (pcase ,kind-sym
+         ,@(mapcar
+            (lambda (entry)
+              (let ((section-kind (car entry)))
+                `(,(list 'quote section-kind)
+                  (magit-insert-section (,section-kind ,value-sym ,hide-sym)
+                    (let ((section (magit-current-section)))
+                      (benedict-chat--register-section section ',section-kind ,value-sym))
+                    ,@body))))
+            benedict-chat--section-classes)
+         (_ (error "Unknown chat section kind: %S" ,kind-sym))))))
+
+(defun benedict-chat--register-section (section kind item)
+  "Attach SECTION metadata to KIND and ITEM."
+  (when section
+    (oset section type kind)
+    (when item
+      (oset section value item))
+    (when (and item (plistp item))
+      (plist-put item :section section)))
+  section)
+
+(defmacro benedict-chat--with-section (item &rest body)
+  "Wrap BODY in a magit section for ITEM in the current buffer."
+  (declare (indent 1))
+  `(let ((item-value ,item))
+     (benedict-chat--ensure-conversation-root)
+     (let* ((kind (benedict-chat--item-section-kind item-value))
+            (parent benedict-chat--conversation-section))
+       (save-excursion
+         (goto-char (benedict-chat--section-end-position parent))
+         (let ((magit-insert-section--parent parent))
+           (benedict-chat--insert-section kind item-value nil
+              (when (and (plistp item-value) parent)
+                (plist-put item-value :parent-section parent))
+              ,@body))))))
+
+(defmacro benedict-chat--with-parent-section (parent item &rest body)
+  "Wrap BODY in a magit section for ITEM under PARENT when possible."
+  (declare (indent 2))
+  `(let ((parent-section ,parent)
+         (item-value ,item))
+     (if (benedict-chat--section-p parent-section)
+         (progn
+           (benedict-chat--ensure-conversation-root)
+           (save-excursion
+             (goto-char (benedict-chat--section-end-position parent-section))
+             (let ((magit-insert-section--parent parent-section))
+               (let ((kind (benedict-chat--item-section-kind item-value)))
+                 (benedict-chat--insert-section kind item-value nil
+                   (when (and (plistp item-value) parent-section)
+                     (plist-put item-value :parent-section parent-section))
+                   ,@body)))))
+       (benedict-chat--with-section item-value ,@body))))
+
+(defun benedict-chat--propertize-region (beg end kind)
+  "Apply `benedict-region-kind' KIND to region between BEG and END."
+  (put-text-property beg end 'benedict-region-kind kind))
+
+(defun benedict-chat--insert-header-line (text item)
+  "Insert TEXT as a header line for ITEM and tag it as non-body.
+This only applies text properties; callers handle marker tracking."
+  (let ((start (point)))
+    (insert text)
+    (benedict-chat--propertize-region start (point) 'header)
+    (put-text-property start (point) 'benedict-chat-item item)
+    (insert "\n")
+    (benedict-chat--propertize-region (1- (point)) (point) 'header)))
+
+(defun benedict-chat--insert-body (content &optional kind)
+  "Insert CONTENT and tag the region as KIND (defaults to `body')."
+  (let* ((kind (or kind 'body))
+         (start (point)))
+    (insert (or content ""))
+    (benedict-chat--propertize-region start (point) kind)
+    (insert "\n")
+    (benedict-chat--propertize-region (1- (point)) (point) kind)))
 
 ;;; Keymap
 
@@ -1181,8 +1484,8 @@ PROVIDER and MODEL should be strings (or nil)."
   (when label
     (let ((label (format "%s" label))
           (face (benedict-chat--badge-face face)))
-      (if (fboundp 'benedict-chat-ui--badge)
-          (benedict-chat-ui--badge label face)
+      (if (fboundp 'benedict-chat--badge)
+          (benedict-chat--badge label face)
         (propertize (format "[%s]" label) 'face face)))))
 
 (defun benedict-chat--message-header-string (message &optional in-flight)
@@ -1300,7 +1603,7 @@ Assistant messages are rendered as marker-backed items."
                        :message message)))
            (plist-put message :item item)
            (benedict-chat--track-item item)
-           (benedict-chat-ui--with-section item
+           (benedict-chat--with-section item
              (benedict-chat--render-message-item
               buffer
               item
@@ -1310,8 +1613,8 @@ Assistant messages are rendered as marker-backed items."
            item))
         (_
          (when (eq role 'user)
-           (benedict-chat-ui--begin-turn))
-         (benedict-chat-ui--with-section message
+           (benedict-chat--begin-turn))
+         (benedict-chat--with-section message
            (benedict-chat--insert-message message))
          (setq benedict-chat--has-rendered-block t)
          nil)))))
@@ -1374,15 +1677,15 @@ This does not affect provider message history."
           (plist-put item :parent-section parent))
         (let ((inhibit-read-only t))
           (if parent
-              (benedict-chat-ui--with-parent-section parent item
+              (benedict-chat--with-parent-section parent item
                 (benedict-chat--render-thinking-item buffer item))
             (goto-char (point-max))
             (benedict-chat--maybe-insert-item-gap buffer)
-            (benedict-chat-ui--with-section item
+            (benedict-chat--with-section item
               (benedict-chat--render-thinking-item buffer item)))))
       (setq benedict-chat--has-rendered-block t)
       (if (benedict-chat-render--ui-active-p)
-          (benedict-chat-ui--set-section-folded
+          (benedict-chat--set-section-folded
            (plist-get item :section)
            (plist-get item :thinking-folded))
         (benedict-chat--prepare-thinking-block item))
@@ -1645,7 +1948,7 @@ Also validates and normalizes :actions if present."
   (let ((folded (plist-get item :thinking-folded)))
     (if (and (benedict-chat-render--ui-active-p)
              (plist-get item :section))
-        (benedict-chat-ui--set-section-folded (plist-get item :section) folded)
+        (benedict-chat--set-section-folded (plist-get item :section) folded)
       (benedict-chat-fold-set-thinking-folded item folded))))
 
 (defun benedict-chat--prepare-thinking-block (item)
@@ -1789,11 +2092,11 @@ Also validates and normalizes :actions if present."
           (plist-put item :parent-section parent))
         (let ((inhibit-read-only t))
           (if parent
-              (benedict-chat-ui--with-parent-section parent item
+              (benedict-chat--with-parent-section parent item
                 (benedict-chat--render-tool-item buffer item))
             (goto-char (point-max))
             (benedict-chat--maybe-insert-item-gap buffer)
-            (benedict-chat-ui--with-section item
+            (benedict-chat--with-section item
               (benedict-chat--render-tool-item buffer item)))))
       (setq benedict-chat--has-rendered-block t)
       item)))
@@ -3526,8 +3829,8 @@ toggles all thinking blocks nested under that assistant section."
                 (kill-buffer benedict-chat--compose-buffer)))
             nil t)
   (benedict-chat-fold-init-buffer)
-  (setq-local benedict-chat-ui--conversation-section nil)
-  (setq-local benedict-chat-ui--current-turn-section nil)
+  (setq-local benedict-chat--conversation-section nil)
+  (setq-local benedict-chat--current-turn-section nil)
   (setq-local magit-root-section nil)
   (let ((inhibit-read-only t))
     (erase-buffer)
@@ -3542,7 +3845,7 @@ toggles all thinking blocks nested under that assistant section."
              'face 'benedict-chat-system
              'benedict-region-kind 'system))
     (insert "\n"))
-  (benedict-chat-ui--ensure-conversation-root))
+  (benedict-chat--ensure-conversation-root))
 
 ;;;###autoload
 (defun benedict-chat ()
@@ -3551,7 +3854,7 @@ toggles all thinking blocks nested under that assistant section."
   (let ((buf (get-buffer-create benedict-chat-buffer-name)))
     (pop-to-buffer buf)
     (with-current-buffer buf
-      (unless (derived-mode-p 'benedict-chat-mode 'benedict-chat-ui-mode)
+      (unless (derived-mode-p 'benedict-chat-mode)
         (let ((mode (or benedict-chat-major-mode #'benedict-chat-mode)))
           (unless (fboundp mode)
             (setq mode #'benedict-chat-mode))

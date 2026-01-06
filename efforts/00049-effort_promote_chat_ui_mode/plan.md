@@ -65,7 +65,7 @@ Move `benedict-chat-ui--*` helpers into `benedict-chat.el`, rename to `benedict-
   - **Changes**: Remove any `benedict-chat-ui-mode` checks; use `benedict-chat-mode` only.
 ### Success Criteria
 #### Automated Verification
-- [ ] `nix run .#test -- test/benedict-chat-thinking-test.el`
+- [x] `nix run .#test -- test/benedict-chat-thinking-test.el` (7/7 tests pass; 5 tests fixed by this phase)
 #### Manual Verification
 - [ ] Thinking/tool sections fold and unfold via magit-section and keep headers in sync.
 

@@ -1,13 +1,14 @@
 ;;; test/benedict-chat-mode-test.el --- Tests for benedict-chat-mode  -*- lexical-binding: t; -*-
 
 (require 'ert)
-(require 'benedict-chat-mode)
+(require 'benedict-chat)
+(require 'benedict-chat-mode) ;; TODO: Remove this require after benedict-chat-mode.el is deleted in Phase 3
 
 (ert-deftest benedict-chat-mode-initialization ()
   "Test that benedict-chat-mode sets up the buffer correctly."
   (with-temp-buffer
     (benedict-chat-mode)
-    (should (derived-mode-p 'special-mode))
+    (should (derived-mode-p 'magit-section-mode))
     (should buffer-read-only)
     (should (eq benedict-region-kind-property 'benedict-region-kind))
     (should (local-variable-p 'markdown-fontify-code-blocks-natively))
