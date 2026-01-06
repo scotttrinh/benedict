@@ -325,6 +325,27 @@
                       (marker-position tool-start))
                      "\n\n"))))))))
 
+(ert-deftest benedict-chat-integration-header-precedes-messages ()
+  "Buffer header should stay above the first rendered message."
+  (let ((benedict-provider 'fake)
+        (benedict-provider-fake-script nil))
+    (with-temp-buffer
+      (rename-buffer "*Benedict Header Ordering Integration*" t)
+      (benedict-chat-mode)
+      (benedict-chat--init-buffer)
+      (benedict-chat--record-message (current-buffer)
+                                     (list :role 'user :content "hi" :time (current-time)))
+      (cl-labels ((find-pos (needle)
+                    (save-excursion
+                      (goto-char (point-min))
+                      (when (search-forward needle nil t)
+                        (- (point) (length needle))))))
+        (let ((header-pos (find-pos "Benedict Chat"))
+              (user-pos (find-pos "[USER]")))
+          (should header-pos)
+          (should user-pos)
+          (should (< header-pos user-pos)))))))
+
 (ert-deftest-async benedict-chat-integration-agent-run-preserves-ordering (done)
   "Streaming agent runs keep user, assistant, thinking, and tool blocks ordered."
   (benedict-test-with-bindings done

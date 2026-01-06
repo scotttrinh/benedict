@@ -255,7 +255,7 @@ has a stable position without changing the visible buffer."
   (unless (benedict-chat--section-p benedict-chat--conversation-section)
     (let ((inhibit-read-only t))
       (save-excursion
-        (goto-char (point-min))
+        (goto-char (point-max))
         (benedict-chat--insert-section 'conversation nil nil
           (benedict-chat--insert-anchor)
           (setq benedict-chat--conversation-section
