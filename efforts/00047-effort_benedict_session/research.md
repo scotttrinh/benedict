@@ -6,7 +6,7 @@ branch: initial-benedict-session
 repository: benedict
 topic: "Current Architecture Analysis for benedict-session"
 tags: [research, codebase, benedict-session, architecture, refactoring]
-status: draft
+status: complete
 last_updated: 2026-01-06
 ---
 
@@ -15,7 +15,12 @@ last_updated: 2026-01-06
 **Date**: 2026-01-06
 **Researcher**: Claude Opus 4.5
 **Git Commit**: bee557f7c94716d3c804754621bd358461fdc2b8
-**Branch**: fix-chat-render-ordering
+**Branch**: initial-benedict-session
+
+> **Relationship to product.md**: This research document maps the current codebase architecture to inform implementation of `benedict-session` as specified in `product.md`. The product spec is the authoritative source for requirements, scope, and success criteria. This document provides:
+> - Inventory of current state locations and data flows
+> - Resolved implementation questions with rationale
+> - Mapping of current buffer-local state to session vs. UI ownership
 
 ## Research Question
 
@@ -28,9 +33,11 @@ Benedict's current architecture tightly couples **conversation state**, **runtim
 1. Owns the conversation thread (messages)
 2. Manages runtime state (streaming, pending questions, tool activity)
 3. Has a stable identity independent of buffers
-4. Supports attach/detach of UI frontends
+4. Supports attach/detach of UI frontends—**including headless operation where sessions continue running with no buffer attached**
 
 This research documents the current state locations, data flows, and dependencies to inform the implementation strategy.
+
+**Key Design Principle**: Sessions are the source of truth and run independently of buffers. Buffers are views that attach/detach without affecting session state. This enables the daemon-first workflow where an agent can stream responses, execute tools, and wait for input even when no UI is connected.
 
 ---
 
@@ -397,78 +404,461 @@ Currently:
 
 ---
 
-## Open Questions
+## Resolved Questions
 
-1. **Message ID stability**: Messages currently lack stable IDs for cross-session reference. Need to add `:id` field for persistence/sync.
+All implementation questions have been resolved through discussion. Each resolution includes rationale and implementation guidance for the planner.
 
-2. **Thinking item tracking**: `benedict-chat--thinking-items` is a hash table keyed by ID. Should this move to session or be re-derived on attach?
+### ✅ Message ID stability
 
-3. **Compose buffer association**: How should compose buffers relate to sessions? One compose per session, or shared?
+**Question**: Messages currently lack stable IDs for cross-session reference. Need to add `:id` field for persistence/sync.
 
-4. **Error recovery**: If a session was `streaming` when detached, what happens on reattach? Need to define recovery semantics.
+**Answer**: Use session-scoped monotonic integers for message IDs.
 
-5. **Provider request handles**: `benedict-chat--pending-request` holds an opaque provider handle. Can sessions "own" network connections, or must they be buffer-scoped for cleanup?
+**Implementation Details**:
 
-6. **Flywire session lifecycle**: Should `benedict-flywire-session` be session-owned or chat-buffer-owned? Current design ties it to chat buffer kill hooks.
+1. **ID Format**: String `"msg-NNN"` where NNN is zero-padded to 3 digits (e.g., `"msg-001"`, `"msg-042"`)
+   - String format allows future extension if needed
+   - Zero-padding keeps messages sortable lexicographically
 
-7. **Event granularity**: Should events be fine-grained (every delta) or batched (message-level)? Performance vs. flexibility trade-off.
+2. **Session Struct Addition**:
+   ```elisp
+   (cl-defstruct (benedict-session ...)
+     ...
+     (message-seq 0)  ; Monotonic counter for message IDs
+     ...)
+   ```
+
+3. **ID Assignment**: IDs are assigned in `benedict-session-add-message`:
+   ```elisp
+   (defun benedict-session-add-message (session message)
+     "Add MESSAGE to SESSION, assigning a stable ID."
+     (let ((id (format "msg-%03d" (cl-incf (benedict-session-message-seq session)))))
+       (setq message (plist-put message :id id))
+       ;; ... add to session messages list
+       message))
+   ```
+
+4. **Immutability**: Once assigned, `:id` is never changed. Updates to message content preserve the ID.
+
+5. **Tool Call Correlation**: Tool result messages already have `:tool-call-id`. The parent assistant message's `:id` provides the other half of the linkage.
+
+6. **Event References**: Session events (e.g., `message-updated`) will reference messages by `:id`:
+   ```elisp
+   (benedict-session--emit session 'message-updated :id "msg-007" :field :content)
+   ```
+
+7. **Lookup Helper**:
+   ```elisp
+   (defun benedict-session-get-message (session id)
+     "Return message with ID from SESSION, or nil."
+     (cl-find id (benedict-session-messages session)
+              :key (lambda (m) (plist-get m :id))
+              :test #'equal))
+   ```
+
+**Rationale**: Session-scoped integers are simple, compact, and sufficient for all identified use cases. If global uniqueness is ever needed (e.g., cross-device sync), the combination of `session-id + message-id` provides it.
+
+---
+
+### ✅ Thinking item tracking
+
+**Question**: `benedict-chat--thinking-items` is a hash table keyed by ID. Should this move to session or be re-derived on attach?
+
+**Answer**: Separate content (session) from lookup table (buffer). Re-derive the hash table on attach.
+
+**Analysis**:
+
+The hash table serves two distinct purposes:
+1. **Content storage** - the actual thinking text → belongs in session
+2. **Render item lookup** - mapping IDs to UI elements for streaming updates → belongs in buffer
+
+Render items contain buffer markers (`start-marker`, `end-marker`) which are inherently buffer-local and cannot be shared across buffers.
+
+**Implementation Details**:
+
+1. **Session stores thinking content** in message data:
+   - Option A: As `:thinking-blocks` property on assistant messages
+   - Option B: As separate entries in `messages` list with `:kind thinking`
+   - Each thinking block retains its `:thinking-id` from the provider
+
+2. **Buffer rebuilds hash table on attach**:
+   ```elisp
+   (defun benedict-chat--attach-session (session)
+     "Attach current buffer to SESSION."
+     ;; Reset UI state
+     (setq benedict-chat--thinking-items (make-hash-table :test 'equal))
+     ;; Re-render all messages (this populates the hash table)
+     (benedict-chat--render-session-messages session))
+   ```
+
+3. **Re-render registers thinking items**:
+   ```elisp
+   ;; In benedict-chat--render-thinking-block (called during re-render)
+   (let ((item (benedict-chat--create-thinking-item ...)))
+     (benedict-chat--register-thinking-item thinking-id item)
+     item)
+   ```
+
+4. **Streaming continues to work**: After attach, the hash table is populated and streaming deltas can look up items normally via `benedict-chat--lookup-thinking-item`.
+
+**Key Insight**: The hash table is an **optimization for streaming lookups**, not canonical storage. The canonical thinking content lives in session messages.
+
+---
+
+### ✅ Compose buffer association
+
+**Question**: How should compose buffers relate to sessions? One compose per session, or shared?
+
+**Answer**: Compose buffers remain 1:1 with chat buffers. They are purely UI state.
+
+**Rationale**:
+
+1. **Compose buffers are for text input** - inherently per-buffer, per-user-interface
+2. **Multiple frontends** - if two buffers show the same session, each needs its own compose area
+3. **Context slices are ephemeral** - they're an implementation detail for assembling the next message, not worth preserving across buffer kills
+
+**Implementation Details**:
+
+1. **No changes needed** to compose buffer architecture—it stays as-is:
+   - `benedict-chat--compose-buffer` remains buffer-local in chat buffer
+   - Compose buffer lifecycle tied to chat buffer lifecycle
+
+2. **Context slices stay buffer-local**:
+   - `benedict-chat--context-slices` remains in chat buffer, not session
+   - Lost on buffer kill (acceptable—they just help assemble the message)
+   - Not listed in session struct
+
+3. **On attach**: Fresh compose state
+   ```elisp
+   ;; In benedict-chat--attach-session
+   (setq benedict-chat--compose-buffer nil)  ; Will be created on demand
+   (setq benedict-chat--context-slices nil)
+   ```
+
+**Summary**: Compose and context slices are UI concerns. Session owns conversation history; buffer owns input-in-progress.
+
+---
+
+### ✅ Error recovery (headless streaming)
+
+**Question**: If a session was `streaming` when detached, what happens on reattach? Need to define recovery semantics.
+
+**Answer**: Sessions continue running independently of buffers. Streaming continues "headless" when no buffer is attached. On reattach, render current state and resume live updates.
+
+**Core Requirement**: Support Emacs daemon mode where:
+1. Connect emacsclient, open chat, start a request
+2. Close emacsclient (buffer killed)
+3. Request continues in the background (session still streaming)
+4. Later, reconnect and attach to session—see completed or still-streaming response
+
+**Implementation Details**:
+
+1. **Session owns the inflight request**, not the buffer:
+   - `benedict-session-inflight` holds request metadata and accumulating draft
+   - Provider callbacks update session state, then emit events
+   - Buffers subscribe to session events for UI updates
+
+2. **Headless streaming** (no buffer attached):
+   ```elisp
+   ;; Provider callback updates session regardless of attached buffers
+   (defun benedict-session--handle-delta (session delta)
+     ;; Update session draft
+     (benedict-session--append-draft session delta)
+     ;; Emit event (attached buffers will receive and render)
+     (benedict-session--emit session 'draft-updated :delta delta))
+   ```
+
+3. **Attach to streaming session**:
+   ```elisp
+   (defun benedict-chat--attach-session (session)
+     ;; Render message history
+     (benedict-chat--render-session-messages session)
+     ;; If streaming, render accumulated draft and show indicator
+     (when (eq (benedict-session-state session) 'streaming)
+       (benedict-chat--render-draft (benedict-session-draft session))
+       (benedict-chat--show-streaming-indicator))
+     ;; Subscribe to future events
+     (benedict-session--add-frontend session (current-buffer)))
+   ```
+
+4. **State-specific attach behavior**:
+
+   | Session State | On Attach Behavior |
+   |---------------|-------------------|
+   | `idle` | Render message history |
+   | `streaming` | Render history + accumulated draft, show streaming indicator, receive live updates |
+   | `error` | Render history + error message, enable retry command |
+   | `cancelled` | Render history + partial response with cancelled marker |
+
+5. **Detach does NOT cancel**:
+   ```elisp
+   (defun benedict-chat--detach-session ()
+     "Detach current buffer from session without affecting session state."
+     (when-let ((session benedict-chat--session))
+       ;; Just unsubscribe from events - session continues running
+       (benedict-session--remove-frontend session (current-buffer))
+       (setq benedict-chat--session nil)))
+   ```
+
+6. **Explicit cancel is separate**: User can explicitly cancel via command (`benedict-session-cancel`), which sets state to `cancelled`. Buffer kill never cancels.
+
+**Key Architectural Change**: Provider dispatch callbacks must be refactored to:
+- Update session state (not buffer-local variables)
+- Emit session events
+- Attached buffers respond to events by updating UI
+
+---
+
+### ✅ Provider request handles
+
+**Question**: `benedict-chat--pending-request` holds an opaque provider handle. Can sessions "own" network connections, or must they be buffer-scoped for cleanup?
+
+**Answer**: Sessions own provider request handles. This follows directly from Question 4 (sessions continue independently of buffers).
+
+**Implementation Details**:
+
+1. **Session `inflight` field** holds all request state:
+   ```elisp
+   ;; Within benedict-session struct
+   inflight  ; plist or nil when idle:
+             ;   :request     - opaque provider handle (for cancellation)
+             ;   :request-id  - identifier for correlating callbacks
+             ;   :started-at  - timestamp for elapsed time display
+             ;   :draft       - accumulating response content (text + tool calls)
+             ;   :loop-state  - agent loop metadata (turn count, etc.)
+   ```
+
+2. **Provider dispatch changes**:
+   ```elisp
+   ;; Old: callbacks captured buffer
+   (benedict-provider-dispatch request
+     :on-delta (lambda (delta) (with-current-buffer buffer ...)))
+
+   ;; New: callbacks capture session
+   (benedict-provider-dispatch request
+     :on-delta (lambda (delta) (benedict-session--handle-delta session delta)))
+   ```
+
+3. **Cancellation via session**:
+   ```elisp
+   (defun benedict-session-cancel (session)
+     "Cancel any in-flight request for SESSION."
+     (when-let ((inflight (benedict-session-inflight session)))
+       (when-let ((handle (plist-get inflight :request)))
+         (benedict-provider-cancel handle))
+       (setf (benedict-session-state session) 'cancelled)
+       (benedict-session--emit session 'state-changed :state 'cancelled)))
+   ```
+
+4. **Session destruction cleanup**: If a session is explicitly destroyed while streaming, cancel the request first.
+
+**Key Change**: `benedict-chat--pending-request` buffer-local variable is removed. Request ownership moves entirely to session.
+
+---
+
+### ✅ Flywire session lifecycle
+
+**Question**: Should `benedict-flywire-session` be session-owned or chat-buffer-owned? Current design ties it to chat buffer kill hooks.
+
+**Answer**: Flywire sessions are session-owned, not buffer-owned.
+
+**Rationale**: Tool execution is part of the agent loop, which is session-scoped. If a buffer is killed mid-tool-execution, the tool must continue. Multiple attached buffers share the same execution context.
+
+**Implementation Details**:
+
+1. **Add to session struct**:
+   ```elisp
+   (cl-defstruct (benedict-session ...)
+     ...
+     flywire-session)  ; flywire session for tool execution, or nil
+   ```
+
+2. **Lazy creation** on first tool invocation via `benedict-session-ensure-flywire`.
+
+3. **Cleanup on session destruction**:
+   ```elisp
+   (defun benedict-session-destroy (session)
+     (when-let ((fw (benedict-session-flywire-session session)))
+       (benedict-flywire-session-teardown fw))
+     ...)
+   ```
+
+4. **Event forwarding**: Flywire events route through session events to attached buffers.
+
+---
+
+### ✅ Event granularity
+
+**Question**: Should events be fine-grained (every delta) or batched (message-level)? Performance vs. flexibility trade-off.
+
+**Answer**: Support both granularities via distinct event types, as specified in product.md.
+
+**Event Types** (from product spec):
+
+| Event | Granularity | Purpose |
+|-------|-------------|---------|
+| `message-added` | Message-level | New message committed to history |
+| `message-updated` | Message-level | Existing message modified (e.g., tool result added) |
+| `state-changed` | Session-level | State transitions (idle→streaming, etc.) |
+| `draft-started` | Stream-level | Streaming response begins |
+| `draft-updated` | Delta-level | Streaming delta received |
+| `draft-finalized` | Stream-level | Streaming complete, draft committed |
+| `question-raised` | Session-level | Agent needs user input |
+| `question-answered` | Session-level | User answered pending question |
+| `error` | Session-level | Error occurred |
+
+**Implementation Details**:
+
+1. **Single hook** dispatches all events:
+   ```elisp
+   (defvar benedict-session-event-hook nil
+     "Hook called with (session event-type &rest payload).")
+   ```
+
+2. **Convenience hook** for question flow:
+   ```elisp
+   (defvar benedict-session-ask-user-hook nil
+     "Hook called when session raises a question.")
+   ```
+
+3. **Buffers subscribe** during attach and filter events they care about:
+   ```elisp
+   (defun benedict-chat--handle-session-event (session event-type &rest payload)
+     (pcase event-type
+       ('draft-updated (benedict-chat--append-streaming-delta payload))
+       ('message-added (benedict-chat--render-message payload))
+       ('state-changed (benedict-chat--update-status-line))
+       ...))
+   ```
+
+4. **Performance**: `draft-updated` events may fire rapidly during streaming. Buffer handlers should be efficient (append-only, minimal redisplay).
 
 ---
 
 ## Recommendations for Implementation
 
-### Phase 1: Define `benedict-session` struct
+> **Note**: The authoritative product requirements are in `product.md`. This section synthesizes implementation guidance from the research findings. The planner should reference `product.md` for scope and success criteria.
+
+### Session Struct (from product.md + resolved questions)
 
 Create `benedict-session.el` with `cl-defstruct`:
 
 ```elisp
 (cl-defstruct (benedict-session (:constructor benedict-session--create))
-  "In-memory session owning conversation state."
-  id
-  created-at
-  updated-at
-  title
-  state           ; idle, streaming, waiting, error, cancelled
-  messages        ; list of normalized messages
-  draft           ; streaming accumulator
-  pending-question
-  inflight        ; request metadata
-  root            ; project root
-  provider
-  model
-  profile
-  meta
-  last-error
-  attached-frontends)
+  "In-memory session owning conversation state and runtime."
+  ;; Identity & metadata
+  id                    ; stable string identifier (UUID-ish)
+  created-at            ; timestamp
+  updated-at            ; timestamp
+  title                 ; string; user-set or derived from first prompt
+
+  ;; Thread/conversation state
+  messages              ; list of normalized messages (with :id field)
+  (message-seq 0)       ; monotonic counter for message IDs (resolved Q1)
+
+  ;; Runtime state
+  state                 ; idle | streaming | waiting | error | cancelled
+  draft                 ; streaming accumulator (text + tool calls)
+  pending-question      ; nil or plist describing outstanding question
+  inflight              ; plist: :request :request-id :started-at :loop-state
+  last-error            ; last error object/message
+
+  ;; Configuration snapshot
+  root                  ; project root directory or nil
+  provider              ; provider symbol
+  model                 ; model string
+  profile               ; profile symbol
+  meta                  ; plist for tags, originating context, etc.
+
+  ;; Resources
+  flywire-session       ; flywire session for tool execution (resolved Q6)
+  attached-frontends)   ; list of attached buffer references
 ```
 
-### Phase 2: Create session registry
+### Session Registry API (from product.md)
 
 ```elisp
 (defvar benedict-session--registry (make-hash-table :test 'equal))
 
-(defun benedict-session-create (&rest init-plist) ...)
-(defun benedict-session-get (id) ...)
-(defun benedict-session-list (&optional predicate) ...)
-(defun benedict-session-delete (id) ...)
+(defun benedict-session-create (&rest init-plist) -> session)
+(defun benedict-session-get (id) -> session|nil)
+(defun benedict-session-list (&optional predicate) -> sessions)
+(defun benedict-session-delete (id) -> t|nil)
+(defun benedict-session-touch (session))  ; updates updated-at
+(defun benedict-session-destroy (session)) ; cleanup + delete
 ```
 
-### Phase 3: Refactor chat buffer
+### Event System (from product.md + resolved Q7)
 
-1. Add `benedict-chat--session` buffer-local variable (session struct or ID)
-2. Modify `benedict-chat--init-buffer` to create/attach session
-3. Modify `benedict-chat--build-request` to read from session
-4. Modify `benedict-chat--record-message` to update session
-5. Modify streaming handlers to update session `draft`
-6. Add session event emission at state transitions
+```elisp
+(defvar benedict-session-event-hook nil
+  "Hook called with (session event-type &rest payload).")
 
-### Phase 4: Implement re-render on attach
+(defvar benedict-session-ask-user-hook nil
+  "Convenience hook for question-raised events.")
 
-When attaching a buffer to an existing session:
-1. Clear buffer content
-2. Re-render all session messages
-3. Restore streaming state if active
-4. Subscribe to session events
+;; Event types: message-added, message-updated, state-changed,
+;; draft-started, draft-updated, draft-finalized,
+;; question-raised, question-answered, error
+```
+
+### Chat Buffer Refactoring
+
+**State that moves to session** (all buffer-local variables listed in research):
+- `benedict-chat--messages` → `(benedict-session-messages session)`
+- `benedict-chat--pending-request` → `(plist-get (benedict-session-inflight session) :request)`
+- `benedict-chat--streaming-message` → `(benedict-session-draft session)`
+- `benedict-chat--flywire-session` → `(benedict-session-flywire-session session)`
+- `benedict-chat--loop-*` variables → `(plist-get (benedict-session-inflight session) :loop-state)`
+- Provider/model overrides → session fields
+
+**State that stays in buffer** (UI-only):
+- `benedict-chat--items` (render items with markers)
+- `benedict-chat--thinking-items` (rebuilt on attach, resolved Q2)
+- `benedict-chat--compose-buffer` (1:1 with buffer, resolved Q3)
+- `benedict-chat--context-slices` (ephemeral, resolved Q3)
+- Sections, markers, timers, counters
+
+### Session Routing (from product.md)
+
+`M-x benedict-chat` behavior:
+- **No sessions exist**: create new session, open chat buffer
+- **One session exists**: open that session's chat buffer
+- **Multiple sessions**: prompt with session picker, open selected
+- **C-u prefix**: always create new session (never reattach)
+
+### Attach/Detach Semantics (from resolved Q4)
+
+**Attach** (`benedict-chat--attach-session`):
+1. Store session reference in buffer-local `benedict-chat--session`
+2. Clear and re-render buffer from session messages
+3. If `state` is `streaming`: render accumulated draft, show indicator
+4. If `state` is `error`: show error, enable retry
+5. Rebuild `thinking-items` hash table during render
+6. Subscribe to session events via `benedict-session--add-frontend`
+
+**Detach** (`benedict-chat--detach-session`):
+1. Unsubscribe from session events
+2. Clear buffer-local session reference
+3. **Do NOT cancel inflight requests** - session continues headless
+
+### Provider Callback Refactoring (from resolved Q4/Q5)
+
+Provider callbacks must be changed to update session, not buffer:
+
+```elisp
+;; Old pattern (buffer-centric)
+(benedict-provider-dispatch request
+  :on-delta (lambda (d) (with-current-buffer buffer ...)))
+
+;; New pattern (session-centric)
+(benedict-provider-dispatch request
+  :on-delta (lambda (d) (benedict-session--handle-delta session d))
+  :on-success (lambda (r) (benedict-session--handle-success session r))
+  :on-error (lambda (e) (benedict-session--handle-error session e)))
+```
+
+Session handlers update state and emit events; attached buffers respond to events.
 
 ---
 
