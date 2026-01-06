@@ -16,7 +16,6 @@
 (require 'eieio)
 (require 'magit-section)
 (require 'svg-lib nil t)
-(require 'benedict-chat-mode)
 (require 'benedict-chat-render)
 
 (defgroup benedict-chat-ui nil
@@ -24,12 +23,7 @@
   :group 'benedict-chat
   :prefix "benedict-chat-ui-")
 
-(defcustom benedict-chat-ui-fringe-bars-enabled t
-  "When non-nil, draw role/state bars in the fringe for top-level blocks.
-No effect on terminals or when fringes are unavailable."
-  :type 'boolean
-  :group 'benedict-chat-ui)
-
+;; Buffer locals remain here for Phase 1; will be moved to benedict-chat.el in Phase 2
 (defvar-local benedict-chat-ui--conversation-section nil
   "Conversation root section for the current chat buffer.
 
@@ -79,6 +73,7 @@ Falls back to a propertized text badge when SVG is unavailable."
           (propertize label 'display image 'face face))
       (propertize (format "[%s]" label) 'face face))))
 
+;; Section classes: remain in benedict-chat-ui.el during Phase 1
 (defclass benedict-chat-ui-section (magit-section)
   ((item :initarg :item :initform nil :accessor benedict-chat-ui-section-item)
    (kind :initarg :kind :initform nil :accessor benedict-chat-ui-section-kind))
@@ -114,8 +109,8 @@ These keys remain stable across renders to keep folding/navigation predictable."
   (add-to-list 'magit--section-type-alist entry))
 
 (defun benedict-chat-ui-active-p ()
-  "Return non-nil when the current buffer uses `benedict-chat-ui-mode'."
-  (derived-mode-p 'benedict-chat-ui-mode))
+  "Return non-nil when the current buffer uses `benedict-chat-mode'."
+  (derived-mode-p 'benedict-chat-mode))
 
 (defun benedict-chat-ui--normalize-role (role)
   "Normalize ROLE (symbol/string/keyword) into a lowercase symbol."
@@ -345,29 +340,8 @@ This only applies text properties; callers handle marker tracking."
     (insert "\n")
     (benedict-chat-ui--propertize-region (1- (point)) (point) kind)))
 
-(defvar benedict-chat-ui-mode-map
-  (let ((map (make-sparse-keymap)))
-    (set-keymap-parent map magit-section-mode-map)
-    (define-key map (kbd "g l") #'benedict-chat-jump-to-latest)
-    (define-key map (kbd "g a") #'benedict-chat-jump-to-last-assistant)
-    (define-key map (kbd "g A") #'benedict-chat-jump-to-last-assistant-with-tools)
-    (define-key map (kbd "] t") #'benedict-chat-next-tool)
-    (define-key map (kbd "[ t") #'benedict-chat-previous-tool)
-    (define-key map (kbd "] f") #'benedict-chat-next-tool-failure)
-    (define-key map (kbd "[ f") #'benedict-chat-previous-tool-failure)
-    (define-key map (kbd "] e") #'benedict-chat-next-error)
-    (define-key map (kbd "[ e") #'benedict-chat-previous-error)
-    (define-key map (kbd "] h") #'benedict-chat-next-thinking)
-    (define-key map (kbd "[ h") #'benedict-chat-previous-thinking)
-    (define-key map (kbd "s") #'benedict-chat-toggle-thinking)
-    map)
-  "Keymap for `benedict-chat-ui-mode'.")
-
-;;;###autoload
-(define-derived-mode benedict-chat-ui-mode magit-section-mode "Benedict-Chat-UI"
-  "Major mode for Benedict's section-based chat UI."
-  (benedict-chat--setup-common-buffer)
-  (benedict-chat-ui--ensure-conversation-root))
+;; Note: benedict-chat-ui-mode and benedict-chat-ui-mode-map have been moved
+;; to benedict-chat.el as benedict-chat-mode and benedict-chat-mode-map.
 
 (provide 'benedict-chat-ui)
 ;;; benedict-chat-ui.el ends here

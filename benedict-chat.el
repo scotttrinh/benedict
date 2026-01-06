@@ -13,16 +13,119 @@
 (require 'subr-x)
 (require 'button)
 (require 'project)
+(require 'magit-section)
+(require 'markdown-mode)
+(require 'eieio)
+(require 'svg-lib nil t)
 (require 'benedict)
 (require 'benedict-context)
 (require 'benedict-tools)
 (require 'benedict-flywire)
 (require 'benedict-fold-core)
 (require 'benedict-chat-fold)
-(require 'benedict-chat-mode)
-(require 'benedict-chat-ui)
 (require 'benedict-chat-render)
 (require 'benedict-chat-stream)
+(require 'benedict-chat-ui)
+
+;;; Mode definition and setup
+
+(defun benedict-chat--extend-region-body-only ()
+  "Restrict font-lock to only body regions.
+Non-body regions are marked with the `benedict-region-kind' text property.
+This function is a member of `font-lock-extend-region-functions', so it
+takes no arguments and modifies `font-lock-beg' and `font-lock-end' dynamically."
+  (save-excursion
+    (save-match-data
+      (let ((new-start font-lock-beg)
+            (new-end font-lock-end)
+            (changed nil))
+        ;; If we're not in a body region, don't fontify
+        (unless (eq (get-text-property new-start 'benedict-region-kind) 'body)
+          (setq new-start (point-max)
+                new-end (point-max)
+                changed t))
+
+        ;; Move START backward to the beginning of the current body run
+        (when (eq (get-text-property new-start 'benedict-region-kind) 'body)
+          (goto-char new-start)
+          (while (and (> (point) (point-min))
+                      (eq (get-text-property (1- (point)) 'benedict-region-kind)
+                          'body))
+            (backward-char))
+          (when (< (point) new-start)
+            (setq new-start (point))
+            (setq changed t)))
+
+        ;; Move END forward to the end of the current body run
+        (when (eq (get-text-property new-end 'benedict-region-kind) 'body)
+          (goto-char new-end)
+          (while (and (< (point) (point-max))
+                      (eq (get-text-property (point) 'benedict-region-kind)
+                          'body))
+            (forward-char))
+          (when (> (point) new-end)
+            (setq new-end (point))
+            (setq changed t)))
+
+        (when changed
+          (setq font-lock-beg new-start
+                font-lock-end new-end)
+          t)))))
+
+(defun benedict-chat--enable-markdown-fontification-in-body ()
+  "Enable `markdown-mode` fontification only in regions marked as `'body."
+  ;; Borrow markdown-mode's keywords and syntax propertize function
+  (setq-local font-lock-defaults `(markdown-mode-font-lock-keywords
+                                   nil nil nil nil
+                                   (font-lock-multiline . t)
+                                   (font-lock-extend-region-functions . (benedict-chat--extend-region-body-only))))
+
+  (setq-local syntax-propertize-function #'markdown-syntax-propertize)
+
+  ;; Enable native code block fontification
+  (setq-local markdown-fontify-code-blocks-natively t))
+
+(defun benedict-chat--setup-common-buffer ()
+  "Apply shared buffer settings for Benedict chat modes."
+  (setq buffer-read-only t)
+  (setq-local word-wrap t)
+  (setq-local truncate-lines nil)
+  (setq-local benedict-region-kind-property 'benedict-region-kind)
+  (benedict-chat--enable-markdown-fontification-in-body))
+
+(defcustom benedict-chat-fringe-bars-enabled t
+  "When non-nil, draw role/state bars in the fringe for top-level blocks.
+No effect on terminals or when fringes are unavailable."
+  :type 'boolean
+  :group 'benedict-chat)
+
+;; Note: Section classes, buffer locals, and UI helpers remain in benedict-chat-ui.el
+;; during Phase 1; they will be moved to benedict-chat.el and renamed in Phase 2.
+
+;;; Keymap
+
+(defvar benedict-chat-mode-map
+  (let ((map (make-sparse-keymap)))
+    (set-keymap-parent map magit-section-mode-map)
+    (define-key map (kbd "g l") #'benedict-chat-jump-to-latest)
+    (define-key map (kbd "g a") #'benedict-chat-jump-to-last-assistant)
+    (define-key map (kbd "g A") #'benedict-chat-jump-to-last-assistant-with-tools)
+    (define-key map (kbd "] t") #'benedict-chat-next-tool)
+    (define-key map (kbd "[ t") #'benedict-chat-previous-tool)
+    (define-key map (kbd "] f") #'benedict-chat-next-tool-failure)
+    (define-key map (kbd "[ f") #'benedict-chat-previous-tool-failure)
+    (define-key map (kbd "] e") #'benedict-chat-next-error)
+    (define-key map (kbd "[ e") #'benedict-chat-previous-error)
+    (define-key map (kbd "] h") #'benedict-chat-next-thinking)
+    (define-key map (kbd "[ h") #'benedict-chat-previous-thinking)
+    (define-key map (kbd "s") #'benedict-chat-toggle-thinking)
+    map)
+  "Keymap for `benedict-chat-mode'.")
+
+;;;###autoload
+(define-derived-mode benedict-chat-mode magit-section-mode "Benedict-Chat"
+  "Major mode for Benedict chat buffers."
+  (benedict-chat--setup-common-buffer))
 
 (defvar-local benedict-chat--messages nil
   "List of chat message plists (newest first).
@@ -62,12 +165,8 @@ Each entry includes :role, :content, :time, optional :metadata, and UI state.")
   "Default chat buffer name.")
 
 (defcustom benedict-chat-major-mode #'benedict-chat-mode
-  "Major mode constructor used when creating chat buffers.
-Set this to `benedict-chat-ui-mode' to opt into the magit-section UI."
-  :type '(choice
-          (const :tag "Classic chat mode" benedict-chat-mode)
-          (const :tag "Section-based chat UI" benedict-chat-ui-mode)
-          function)
+  "Major mode constructor used when creating chat buffers."
+  :type 'function
   :group 'benedict)
 
 (defcustom benedict-chat-apply-buffer-name "*Benedict Block*"
@@ -3107,7 +3206,7 @@ When INCLUDE-ERRORS is nil, skip entries flagged with :error metadata."
 
 (defun benedict-chat--ensure-chat-buffer ()
   "Return the active Benedict chat buffer, creating one if needed."
-  (or (and (derived-mode-p 'benedict-chat-mode 'benedict-chat-ui-mode)
+  (or (and (derived-mode-p 'benedict-chat-mode)
            (current-buffer))
       (get-buffer benedict-chat-buffer-name)
       (progn
@@ -3427,10 +3526,9 @@ toggles all thinking blocks nested under that assistant section."
                 (kill-buffer benedict-chat--compose-buffer)))
             nil t)
   (benedict-chat-fold-init-buffer)
-  (when (derived-mode-p 'benedict-chat-ui-mode)
-    (setq-local benedict-chat-ui--conversation-section nil)
-    (setq-local benedict-chat-ui--current-turn-section nil)
-    (setq-local magit-root-section nil))
+  (setq-local benedict-chat-ui--conversation-section nil)
+  (setq-local benedict-chat-ui--current-turn-section nil)
+  (setq-local magit-root-section nil)
   (let ((inhibit-read-only t))
     (erase-buffer)
     (insert (propertize
@@ -3444,8 +3542,7 @@ toggles all thinking blocks nested under that assistant section."
              'face 'benedict-chat-system
              'benedict-region-kind 'system))
     (insert "\n"))
-  (when (derived-mode-p 'benedict-chat-ui-mode)
-    (benedict-chat-ui--ensure-conversation-root)))
+  (benedict-chat-ui--ensure-conversation-root))
 
 ;;;###autoload
 (defun benedict-chat ()

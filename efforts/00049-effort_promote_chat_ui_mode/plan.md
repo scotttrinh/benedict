@@ -33,7 +33,7 @@ Define `benedict-chat-mode` as the magit-section derived mode in `benedict-chat.
 ### Changes Required
 - **File**: `benedict-chat.el`
   - **Changes**: Move `benedict-chat-ui-mode` definition, keymap, defcustom, and section-class registration here; rename to `benedict-chat-mode` and `benedict-chat-mode-map`. Ensure it derives from `magit-section-mode` and preserves existing keybindings and setup.
-  - ```elisp
+    ```elisp
     (defcustom benedict-chat-fringe-bars-enabled ...)
     (defvar benedict-chat-mode-map ...)
     (define-derived-mode benedict-chat-mode magit-section-mode "Benedict-Chat" ...)
@@ -54,7 +54,7 @@ Move `benedict-chat-ui--*` helpers into `benedict-chat.el`, rename to `benedict-
 ### Changes Required
 - **File**: `benedict-chat.el`
   - **Changes**: Add the renamed helpers for badges, section classes, section insertion, folding sync, and UI state; initialize conversation/turn section locals unconditionally.
-  - ```elisp
+    ```elisp
     (defvar-local benedict-chat--conversation-section nil)
     (defvar-local benedict-chat--current-turn-section nil)
     (defun benedict-chat--badge ...) ; replaces benedict-chat-ui--badge
