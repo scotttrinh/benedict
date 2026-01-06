@@ -85,9 +85,9 @@ Eliminate overlay-based folding logic and classic-mode tests; update test suite 
   - **Changes**: Update expectations to align with magit-section mode and new mode definition location; ensure markdown font-lock setup is retained if still required.
 ### Success Criteria
 #### Automated Verification
-- [ ] `nix run .#test`
+- [X] `nix run .#test`
 #### Manual Verification
-- [ ] No references to `benedict-chat-ui-mode` or `benedict-chat-ui--*` remain in the codebase.
+- [X] No references to `benedict-chat-ui-mode` or `benedict-chat-ui--*` remain in the codebase.
 
 ## Testing Strategy
 - Use `nix run .#test` after each phase to catch regressions in chat rendering and folding behavior.

@@ -2,6 +2,7 @@
 
 (require 'ert)
 (require 'cl-lib)
+(require 'benedict-chat)
 (require 'benedict-chat-render)
 
 (ert-deftest benedict-chat-render-insert-message ()
@@ -94,23 +95,29 @@
         (should (= 1 count))))))
 
 (ert-deftest benedict-chat-render-tool-folds-body ()
-  "Tool body starts folded and toggles visibility."
+  "Tool body starts folded and toggles visibility using magit-section."
   (with-temp-buffer
     (let ((item (list :metadata (list :status 'success)
                       :tool-call (list :name 'fold-me)
                       :content "HiddenBody"
                       :tool-folded t)))
-      (benedict-chat--render-tool-item (current-buffer) item)
-      (goto-char (plist-get item :header-start))
-      (should (eq (get-text-property (plist-get item :content-start) 'invisible)
-                  'benedict-tool-details))
-      (goto-char (plist-get item :header-start))
-      (benedict-chat-tool-toggle)
-      (should-not (get-text-property (plist-get item :content-start) 'invisible))
-      (goto-char (plist-get item :header-start))
-      (benedict-chat-tool-toggle)
-      (should (eq (get-text-property (plist-get item :content-start) 'invisible)
-                  'benedict-tool-details)))))
+      (benedict-chat-mode)
+      (benedict-chat--init-buffer)
+      ;; Use the section wrapper to create a magit-section for the tool
+      (benedict-chat--with-section item
+        (benedict-chat--render-tool-item (current-buffer) item))
+      (let ((section (plist-get item :section)))
+        (should section)
+        ;; Tool body should start folded
+        (should (oref section hidden))
+        ;; Toggle open
+        (goto-char (plist-get item :header-start))
+        (benedict-chat-tool-toggle)
+        (should-not (oref section hidden))
+        ;; Toggle closed
+        (goto-char (plist-get item :header-start))
+        (benedict-chat-tool-toggle)
+        (should (oref section hidden))))))
 
 (ert-deftest benedict-chat-render-message-item-header-update-preserves-body-markers ()
   "Updating a message header should not move body markers."

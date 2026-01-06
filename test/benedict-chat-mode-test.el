@@ -2,7 +2,6 @@
 
 (require 'ert)
 (require 'benedict-chat)
-(require 'benedict-chat-mode) ;; TODO: Remove this require after benedict-chat-mode.el is deleted in Phase 3
 
 (ert-deftest benedict-chat-mode-initialization ()
   "Test that benedict-chat-mode sets up the buffer correctly."

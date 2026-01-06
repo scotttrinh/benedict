@@ -5,27 +5,6 @@
 (require 'magit-section)
 (require 'benedict-chat)
 
-;; SKIPPED: This test verifies classic overlay folding behavior which is being
-;; removed in favor of magit-section based folding. After Phase 3, delete this test.
-;; (ert-deftest benedict-chat-thinking-records-folded-block ()
-;;   "Thinking blocks render folded with overlays in classic mode."
-;;   (with-temp-buffer
-;;     (benedict-chat-mode)
-;;     (benedict-chat--init-buffer)
-;;     (let* ((item (benedict-chat--record-thinking (current-buffer) "analysis" (list :provider 'fake)))
-;;            (start (plist-get item :content-start))
-;;            (end (plist-get item :content-end)))
-;;       (should item)
-;;       (should (plist-get item :thinking-folded))
-;;       (should (markerp start))
-;;       (should (markerp end))
-;;       (with-current-buffer (marker-buffer start)
-;;         (let ((pos (marker-position start)))
-;;           (should (eq (get-text-property pos 'benedict-region-kind) 'thinking))
-;;           (should (invisible-p pos))
-;;           (should (equal (buffer-substring-no-properties pos (marker-position end))
-;;                          "analysis")))))))
-
 (ert-deftest benedict-chat-thinking-streaming-appends-and-replaces ()
   "Streaming thinking deltas append then replace on final detail."
   (with-temp-buffer
@@ -123,18 +102,7 @@
                   (marker-position header-end))))))))
 
 ;; SKIPPED: This test verifies classic overlay folding via benedict-chat-fold
-;; which is being removed in favor of magit-section based folding. After Phase 3, delete this test.
-;; (ert-deftest benedict-chat-thinking-classic-fold-mirrors-metadata ()
-;;   "Classic thinking folding updates `:thinking-folded' like UI sync."
-;;   (with-temp-buffer
-;;     (benedict-chat-mode)
-;;     (benedict-chat--init-buffer)
-;;     (let ((item (benedict-chat--record-thinking (current-buffer) "analysis" (list :provider 'fake))))
-;;       (should (plist-get item :thinking-folded))
-;;       (benedict-chat-fold-set-thinking-folded item nil)
-;;       (should-not (plist-get item :thinking-folded))
-;;       (benedict-chat-fold-set-thinking-folded item t)
-;;       (should (plist-get item :thinking-folded)))))
+;; which is being removed in favor of magit-section based folding.
 
 (ert-deftest benedict-chat-thinking-navigation-moves-between-blocks ()
   "Navigation commands move between thinking blocks."

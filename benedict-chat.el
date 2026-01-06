@@ -21,8 +21,6 @@
 (require 'benedict-context)
 (require 'benedict-tools)
 (require 'benedict-flywire)
-(require 'benedict-fold-core)
-(require 'benedict-chat-fold)
 (require 'benedict-chat-render)
 (require 'benedict-chat-stream)
 
@@ -1653,9 +1651,8 @@ Assistant messages are rendered as marker-backed items."
 
 (defun benedict-chat--current-assistant-section ()
   "Return the magit-section for the most recent assistant message, or nil."
-  (when (benedict-chat-render--ui-active-p)
-    (when-let ((item (benedict-chat--last-assistant-item)))
-      (plist-get item :section))))
+  (when-let ((item (benedict-chat--last-assistant-item)))
+    (plist-get item :section)))
 
 (defun benedict-chat--record-thinking (buffer content metadata &rest properties)
   "Record a thinking block with CONTENT and METADATA in BUFFER.  PROPERTIES describe additional block hints.
@@ -1684,11 +1681,9 @@ This does not affect provider message history."
             (benedict-chat--with-section item
               (benedict-chat--render-thinking-item buffer item)))))
       (setq benedict-chat--has-rendered-block t)
-      (if (benedict-chat-render--ui-active-p)
-          (benedict-chat--set-section-folded
-           (plist-get item :section)
-           (plist-get item :thinking-folded))
-        (benedict-chat--prepare-thinking-block item))
+      (when-let ((section (plist-get item :section)))
+        (benedict-chat--set-section-folded
+         section (plist-get item :thinking-folded)))
       item)))
 
 (defun benedict-chat--message-history ()
@@ -1944,105 +1939,14 @@ Also validates and normalizes :actions if present."
         (error)))))
 
 (defun benedict-chat--update-thinking-visibility (item)
-  "Apply ITEM thinking folded state using the active UI backend."
-  (let ((folded (plist-get item :thinking-folded)))
-    (if (and (benedict-chat-render--ui-active-p)
-             (plist-get item :section))
-        (benedict-chat--set-section-folded (plist-get item :section) folded)
-      (benedict-chat-fold-set-thinking-folded item folded))))
-
-(defun benedict-chat--prepare-thinking-block (item)
-  "Install folding controls and overlays for thinking ITEM."
-  (unless (plist-member item :thinking-folded)
-    (plist-put item :thinking-folded t))
-  (unless (benedict-chat-render--ui-active-p)
-    (benedict-chat-fold-ensure-thinking item)
-    (benedict-chat--ensure-thinking-toggle item))
-  (benedict-chat--apply-thinking-fold item))
-
-(defun benedict-chat--apply-thinking-fold (item)
-  "Apply ITEM's folding state to its overlay and toggle."
-  (benedict-chat--update-thinking-visibility item)
-  (unless (benedict-chat-render--ui-active-p)
-    (benedict-chat--refresh-thinking-toggle item)))
-
-(defun benedict-chat--thinking-toggle-label (item)
-  "Return the label used for ITEM's toggle button."
-  (if (plist-get item :thinking-folded)
-      "Show thinking"
-    "Hide thinking"))
-
-(defun benedict-chat--insert-thinking-toggle (item)
-  "Insert ITEM's toggle button at point and record markers."
-  (let ((start (point)))
-    (insert-text-button (benedict-chat--thinking-toggle-label item)
-                        'face 'benedict-chat-button
-                        'follow-link t
-                        'help-echo "Toggle hidden reasoning"
-                        'action #'benedict-chat--thinking-toggle-action
-                        'benedict-chat-thinking-item item)
-    (plist-put item :thinking-button-start (copy-marker start t))
-    (plist-put item :thinking-button-end (copy-marker (point) nil))))
-
-(defun benedict-chat--thinking-toggle-valid-p (item)
-  "Return non-nil when ITEM already has a live toggle button."
-  (let ((start (plist-get item :thinking-button-start))
-        (end (plist-get item :thinking-button-end)))
-    (and start end
-         (marker-buffer start)
-         (marker-buffer end)
-         (marker-position start)
-         (marker-position end))))
-
-(defun benedict-chat--ensure-thinking-toggle (item)
-  "Create a toggle button for ITEM or refresh the existing one."
-  (if (or (benedict-chat-render--ui-active-p)
-          (benedict-chat--thinking-toggle-valid-p item))
-      (benedict-chat--refresh-thinking-toggle item)
-    (let ((header-end (plist-get item :header-end)))
-      (when-let ((pos (and header-end (marker-position header-end))))
-        (let ((inhibit-read-only t))
-          (save-excursion
-            (goto-char pos)
-            (when (> (point) (point-min))
-              (backward-char 1)
-              (when (eq (char-after) ?\n)
-                (unless (memq (char-before) '(?\s ?\t))
-                  (insert " "))
-                (benedict-chat--insert-thinking-toggle item)))))))))
-
-(defun benedict-chat--refresh-thinking-toggle (item)
-  "Update ITEM's toggle label to match its folding state."
-  (when (benedict-chat-render--ui-active-p)
-    (cl-return-from benedict-chat--refresh-thinking-toggle nil))
-  (let ((start (plist-get item :thinking-button-start))
-        (end (plist-get item :thinking-button-end)))
-    (when (and start end
-               (marker-position start) (marker-position end))
-      (let ((inhibit-read-only t)
-            (start-pos (marker-position start))
-            (end-pos (marker-position end)))
-        (save-excursion
-          (goto-char start-pos)
-          (delete-region start-pos end-pos)
-          (benedict-chat--insert-thinking-toggle item))))))
-
-(defun benedict-chat--thinking-toggle-action (button)
-  "Toggle the thinking block referenced by BUTTON."
-  (let ((item (button-get button 'benedict-chat-thinking-item)))
-    (when item
-      (benedict-chat--set-thinking-folded item
-                                          (not (plist-get item :thinking-folded))))))
+  "Apply ITEM thinking folded state using magit-section."
+  (when-let ((section (plist-get item :section)))
+    (benedict-chat--set-section-folded section (plist-get item :thinking-folded))))
 
 (defun benedict-chat--set-thinking-folded (item folded)
   "Set ITEM's folding state to FOLDED."
   (plist-put item :thinking-folded folded)
-  (benedict-chat--apply-thinking-fold item))
-
-(defun benedict-chat--update-thinking-overlay (item)
-  "Refresh ITEM overlay boundaries after content change."
-  (unless (benedict-chat-render--ui-active-p)
-    (benedict-chat-fold-update-thinking item)))
+  (benedict-chat--update-thinking-visibility item))
 
 ;; -------------------------------------------------------------------
 ;; Tool call helpers
@@ -2395,7 +2299,6 @@ When REPLACE is non-nil, replace the entire block contents."
                                    '(face benedict-chat-thinking))
               (plist-put item :content
                          (buffer-substring-no-properties start-pos end-pos))))))
-      (benedict-chat--update-thinking-overlay item)
       (benedict-chat--update-thinking-visibility item))))
 
 (defun benedict-chat--append-thinking-content (buffer item text)
@@ -3549,16 +3452,15 @@ DIRECTION is either 'forward or 'backward."
 
 (defun benedict-chat--goto-item (item)
   "Move point to ITEM header."
-  (when-let ((pos (or (plist-get item :header-start)
-                      (plist-get item :start))))
-    (when (and (markerp pos)
-               (marker-buffer pos)
-               (marker-position pos))
-      (goto-char (marker-position pos)))
-    (when (and (benedict-chat-render--ui-active-p)
-               (plist-get item :section))
-      (magit-section-goto (plist-get item :section)))
-    item))
+  (if-let ((section (plist-get item :section)))
+      (magit-section-goto section)
+    (when-let ((pos (or (plist-get item :header-start)
+                       (plist-get item :start))))
+      (when (and (markerp pos)
+                 (marker-buffer pos)
+                 (marker-position pos))
+        (goto-char (marker-position pos)))))
+  item)
 
 (defun benedict-chat--navigate (predicate direction label)
   "Move to item matching PREDICATE in DIRECTION or echo LABEL when missing."
@@ -3697,21 +3599,19 @@ DIRECTION is either 'forward or 'backward."
 When ALL is non-nil (interactive prefix argument), toggle all thinking
 blocks in the current chat buffer.
 
-In UI mode, when point is inside an assistant message/tool block, this
-toggles all thinking blocks nested under that assistant section."
+When point is inside an assistant message/tool block, this toggles all
+thinking blocks nested under that assistant section."
   (interactive "P")
   (let ((chat (benedict-chat--ensure-chat-buffer)))
     (unless (eq (current-buffer) chat)
       (pop-to-buffer-same-window chat))
     (with-current-buffer chat
       (let* ((item (benedict-chat--item-at-point))
-             (target-section (and item (plist-get item :parent-section)))
              (assistant-section (cond
                                  ((benedict-chat--assistant-message-item-p item)
                                   (plist-get item :section))
-                                 ((and (benedict-chat-render--ui-active-p) target-section)
-                                  target-section)
-                                 (t nil)))
+                                 (t
+                                  (plist-get item :parent-section))))
              (candidates
               (cond
                (all
@@ -3828,7 +3728,6 @@ toggles all thinking blocks nested under that assistant section."
               (when (buffer-live-p benedict-chat--compose-buffer)
                 (kill-buffer benedict-chat--compose-buffer)))
             nil t)
-  (benedict-chat-fold-init-buffer)
   (setq-local benedict-chat--conversation-section nil)
   (setq-local benedict-chat--current-turn-section nil)
   (setq-local magit-root-section nil)

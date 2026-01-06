@@ -13,7 +13,6 @@
 (require 'subr-x)
 (require 'json)
 (require 'benedict)
-(require 'benedict-chat-fold)
 
 (declare-function benedict-chat--badge "benedict-chat")
 (declare-function benedict-chat--set-section-folded "benedict-chat")
@@ -503,10 +502,8 @@ insert-after markers to work without swallowing subsequent blocks."
         
         ;; Item end excludes sentinel (which is the content's sentinel here)
         (plist-put item :end (copy-marker (1- (point)) t))
-        
+
         ;; Initial visibility
-        (unless (benedict-chat-render--ui-active-p)
-          (benedict-chat-fold-ensure-tool item))
         (benedict-chat--update-tool-visibility item)))))
 
 (defun benedict-chat--update-tool-header (item)
@@ -538,14 +535,9 @@ insert-after markers to work without swallowing subsequent blocks."
             (set-marker-insertion-type start start-type)))))))
 
 (defun benedict-chat--update-tool-visibility (item)
-  "Update body visibility for ITEM."
-  (let ((folded (plist-get item :tool-folded)))
-    (if (and (benedict-chat-render--ui-active-p)
-             (plist-get item :section))
-        (benedict-chat--set-section-folded
-         (plist-get item :section)
-         folded)
-      (benedict-chat-fold-set-tool-folded item folded))))
+  "Update body visibility for ITEM using magit-section."
+  (when-let ((section (plist-get item :section)))
+    (benedict-chat--set-section-folded section (plist-get item :tool-folded))))
 
 (defun benedict-chat--write-message-item-content (item content)
   "Replace ITEM's content region with CONTENT.
