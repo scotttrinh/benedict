@@ -403,7 +403,9 @@
 (ert-deftest benedict-chat-section-end-marker-advances ()
   "Parent section end markers should advance as new blocks are inserted."
   (let ((benedict-provider 'fake)
-        (benedict-provider-fake-script nil))
+        (benedict-provider-fake-script nil)
+        ;; Isolate session registry to avoid test pollution
+        (benedict-session--registry (make-hash-table :test #'equal)))
     (with-temp-buffer
       (rename-buffer "*Benedict Section End Integration*" t)
       (benedict-chat-mode)

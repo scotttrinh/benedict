@@ -57,7 +57,8 @@
       ((benedict-provider 'fake)
        (benedict-provider-fake-latency-seconds 0.01)
        (benedict-provider-fake-script (list (list :type 'success :delay 0.01)))
-       (benedict-chat-buffer-name " *Benedict Compose Flow*"))
+       (benedict-chat-buffer-name " *Benedict Compose Flow*")
+       (benedict-session--registry (make-hash-table :test #'equal)))
     (let ((source (generate-new-buffer " *Benedict Compose Source*")))
       (with-current-buffer source
         (insert "Compose region text.")
@@ -114,6 +115,7 @@
   (benedict-test-with-bindings done
       ((benedict-provider 'fake)
        (benedict-chat-buffer-name " *Benedict Compose Override*")
+       (benedict-session--registry (make-hash-table :test #'equal))
        (benedict-chat-profiles '((override :label "Override"
                                            :provider fake
                                            :model "profile/model")))
@@ -155,6 +157,7 @@
   "Tool calls trigger approval, execution, and history update."
   (benedict-test-with-bindings done
       ((benedict-provider 'fake)
+       (benedict-session--registry (make-hash-table :test #'equal))
        (benedict-provider-fake-latency-seconds 0.01)
        (benedict-provider-fake-script
         (list (list :type 'success
@@ -207,6 +210,7 @@
   "Tool failures capture structured details for the model and UI."
   (benedict-test-with-bindings done
       ((benedict-provider 'fake)
+       (benedict-session--registry (make-hash-table :test #'equal))
        (benedict-provider-fake-latency-seconds 0.01)
        (benedict-provider-fake-script
         (list (list :type 'success
@@ -299,7 +303,8 @@
   "Choosing a provider updates buffer state and telemetry."
   (benedict-test-with-bindings done
       ((benedict-provider 'fake)
-       (benedict-chat-buffer-name " *Benedict Provider Choice*"))
+       (benedict-chat-buffer-name " *Benedict Provider Choice*")
+       (benedict-session--registry (make-hash-table :test #'equal)))
     (let ((chat (generate-new-buffer benedict-chat-buffer-name)))
       (with-current-buffer chat
         (benedict-chat-mode)

@@ -314,26 +314,29 @@ ITEM should include optional :header string and :content text."
   "Refresh the header text for thinking ITEM.
 
 This is primarily used by the magit-section UI to keep fold indicators in
-sync with `:thinking-folded'."
+sync with `:thinking-folded'.
+Guards against operations on killed buffers."
   (let ((start (plist-get item :header-start))
         (end (plist-get item :header-end)))
     (when (and start end (marker-position start))
-      (with-current-buffer (marker-buffer start)
-        (let* ((inhibit-read-only t)
-               (text (benedict-chat--format-thinking-header item))
-               (start-type (marker-insertion-type start)))
-          (save-excursion
-            (plist-put item :header text)
-            (set-marker-insertion-type start nil)
-            (delete-region start end)
-            (goto-char start)
-            (let ((header-beg (point)))
-              (insert text)
-              (add-text-properties header-beg (point)
-                                   (list 'benedict-region-kind 'header
+      (let ((buf (marker-buffer start)))
+        (when (buffer-live-p buf)
+          (with-current-buffer buf
+            (let* ((inhibit-read-only t)
+                   (text (benedict-chat--format-thinking-header item))
+                   (start-type (marker-insertion-type start)))
+              (save-excursion
+                (plist-put item :header text)
+                (set-marker-insertion-type start nil)
+                (delete-region start end)
+                (goto-char start)
+                (let ((header-beg (point)))
+                  (insert text)
+                  (add-text-properties header-beg (point)
+                                       (list 'benedict-region-kind 'header
                                          'benedict-chat-item item
                                          'face 'benedict-chat-header)))
-            (set-marker-insertion-type start start-type)))))))
+                (set-marker-insertion-type start start-type)))))))))
 
 (defun benedict-chat--write-message-item-body (item content)
   "Replace ITEM body region with CONTENT.
@@ -507,32 +510,35 @@ insert-after markers to work without swallowing subsequent blocks."
         (benedict-chat--update-tool-visibility item)))))
 
 (defun benedict-chat--update-tool-header (item)
-   "Refresh the header text for ITEM."
+   "Refresh the header text for ITEM.
+Guards against operations on killed buffers."
   (let ((start (plist-get item :header-start))
         (end (plist-get item :header-end)))
     (when (and start end (marker-position start))
-      (with-current-buffer (marker-buffer start)
-        (let* ((inhibit-read-only t)
-               (text (benedict-chat--format-tool-header item))
-               (start-type (marker-insertion-type start)))
-          (save-excursion
-            ;; Keep start anchored at the beginning while we rewrite.
-            (set-marker-insertion-type start nil)
-            ;; Delete header text only; keep the sentinel newline so the tool
-            ;; body markers (which start after the newline) remain stable.
-            (delete-region start end)
-            (goto-char start)
-            ;; Re-insert header with same structure as render.
-            (let ((header-beg (point)))
-              (insert text)
-              (add-text-properties header-beg (point)
-                                   (list 'benedict-region-kind 'header
-                                         'benedict-chat-item item
-                                         'keymap benedict-chat-tool-toggle-map
-                                         'mouse-face 'highlight)))
-            ;; Re-render action buttons on same line.
-            (benedict-chat--render-tool-actions item)
-            (set-marker-insertion-type start start-type)))))))
+      (let ((buf (marker-buffer start)))
+        (when (buffer-live-p buf)
+          (with-current-buffer buf
+            (let* ((inhibit-read-only t)
+                   (text (benedict-chat--format-tool-header item))
+                   (start-type (marker-insertion-type start)))
+              (save-excursion
+                ;; Keep start anchored at the beginning while we rewrite.
+                (set-marker-insertion-type start nil)
+                ;; Delete header text only; keep the sentinel newline so the tool
+                ;; body markers (which start after the newline) remain stable.
+                (delete-region start end)
+                (goto-char start)
+                ;; Re-insert header with same structure as render.
+                (let ((header-beg (point)))
+                  (insert text)
+                  (add-text-properties header-beg (point)
+                                       (list 'benedict-region-kind 'header
+                                             'benedict-chat-item item
+                                             'keymap benedict-chat-tool-toggle-map
+                                             'mouse-face 'highlight)))
+                ;; Re-render action buttons on same line.
+                (benedict-chat--render-tool-actions item)
+                (set-marker-insertion-type start start-type)))))))))
 
 (defun benedict-chat--update-tool-visibility (item)
   "Update body visibility for ITEM using magit-section."

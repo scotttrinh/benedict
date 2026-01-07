@@ -25,34 +25,66 @@
   (setq benedict-test--last-y-or-n-prompt prompt)
   benedict-test--y-or-n-response)
 
+;; Mock functions for advice-based testing
+(defun benedict-test--mock-build-request ()
+  "Mock build-request returning a test request."
+  '(:mock-request t))
+
+(defun benedict-test--mock-check-constraints ()
+  "Mock check-loop-constraints always returning t."
+  t)
+
+(defun benedict-test--mock-check-repetition (_calls _history)
+  "Mock check-repetition-guard always returning nil (no repetition)."
+  nil)
+
 ;; -------------------------------------------------------------------
 ;; Loop Step & Recursion Tests
 ;; -------------------------------------------------------------------
 
 (ert-deftest benedict-loop-recurses-on-tool-calls ()
   "Loop should recurse (dispatch) when tool calls are present."
-  (let ((benedict-chat--loop-turn-count 0)
-        (benedict-chat--messages nil)
-        (benedict-test--last-dispatch-call nil))
-    (cl-letf (((symbol-function 'benedict-chat--start-dispatch) #'benedict-test--mock-start-dispatch)
-              ((symbol-function 'benedict-chat--build-request) (lambda () '(:mock-request t)))
-              ((symbol-function 'benedict-chat--check-loop-constraints) (lambda () t)))
-      
-      (benedict-chat--loop-step '(:role assistant :tool-calls ((:name "test"))))
-      
-      (should (equal (plist-get benedict-test--last-dispatch-call :request)
-                     '(:mock-request t)))
-      (should (null (plist-get benedict-test--last-dispatch-call :retry)))
-      (should (= benedict-chat--loop-turn-count 1)))))
+  ;; Use temp-buffer to avoid buffer-local state from previous tests
+  (with-temp-buffer
+    ;; Avoid byte-compiled references to global variables by setting
+    ;; buffer-local values before any function calls
+    (setq-local benedict-chat--messages nil)
+    (setq-local benedict-chat--loop-turn-count 0)
+    (let ((benedict-test--last-dispatch-call nil))
+      ;; Use advice for functions that might be byte-compiled
+      (unwind-protect
+          (progn
+            (advice-add 'benedict-chat--build-request :override #'benedict-test--mock-build-request)
+            (advice-add 'benedict-chat--check-loop-constraints :override #'benedict-test--mock-check-constraints)
+            (advice-add 'benedict-chat--check-repetition-guard :override #'benedict-test--mock-check-repetition)
+            (advice-add 'benedict-chat--start-dispatch :override #'benedict-test--mock-start-dispatch)
+
+            (benedict-chat--loop-step '(:role assistant :tool-calls ((:name "test"))))
+
+            (should (equal (plist-get benedict-test--last-dispatch-call :request)
+                           '(:mock-request t)))
+            (should (null (plist-get benedict-test--last-dispatch-call :retry)))
+            (should (= benedict-chat--loop-turn-count 1)))
+        ;; Clean up advice
+        (advice-remove 'benedict-chat--build-request #'benedict-test--mock-build-request)
+        (advice-remove 'benedict-chat--check-loop-constraints #'benedict-test--mock-check-constraints)
+        (advice-remove 'benedict-chat--check-repetition-guard #'benedict-test--mock-check-repetition)
+        (advice-remove 'benedict-chat--start-dispatch #'benedict-test--mock-start-dispatch)))))
 
 (ert-deftest benedict-loop-stops-on-no-tool-calls ()
   "Loop should NOT recurse when no tool calls are present."
-  (let ((benedict-chat--loop-turn-count 0)
-        (benedict-test--last-dispatch-call nil))
-    (cl-letf (((symbol-function 'benedict-chat--start-dispatch) #'benedict-test--mock-start-dispatch))
-      (benedict-chat--loop-step '(:role assistant :content "Done."))
-      (should (null benedict-test--last-dispatch-call))
-      (should (= benedict-chat--loop-turn-count 0)))))
+  (with-temp-buffer
+    ;; Set buffer-local values before any function calls
+    (setq-local benedict-chat--messages nil)
+    (setq-local benedict-chat--loop-turn-count 0)
+    (let ((benedict-test--last-dispatch-call nil))
+      (unwind-protect
+          (progn
+            (advice-add 'benedict-chat--start-dispatch :override #'benedict-test--mock-start-dispatch)
+            (benedict-chat--loop-step '(:role assistant :content "Done."))
+            (should (null benedict-test--last-dispatch-call))
+            (should (= benedict-chat--loop-turn-count 0)))
+        (advice-remove 'benedict-chat--start-dispatch #'benedict-test--mock-start-dispatch)))))
 
 ;; -------------------------------------------------------------------
 ;; Safeguard Tests
