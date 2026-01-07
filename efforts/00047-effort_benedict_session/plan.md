@@ -670,12 +670,12 @@ After tests exist and fail, create `benedict-session.el`:
 ### Success Criteria
 
 #### Automated Verification
-- [ ] `nix run .#test` - all 25+ session tests pass
-- [ ] `nix run .#lint` - byte-compiles cleanly
+- [X] `nix run .#test` - all 25+ session tests pass
+- [X] `nix run .#lint` - byte-compiles cleanly
 
 #### Manual Verification
-- [ ] `M-: (benedict-session-create :title "test")` works
-- [ ] Session operations work in isolation
+- [X] `M-: (benedict-session-create :title "test")` works
+- [X] Session operations work in isolation
 
 ---
 
