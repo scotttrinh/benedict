@@ -679,10 +679,10 @@ After tests exist and fail, create `benedict-session.el`:
 
 ---
 
-## Phase 2: Chat Buffer Cut-Over
+## Phase 2: Chat Buffer Integration (Dual-Write)
 
 ### Overview
-Replace all buffer-local conversation/runtime state with session state. This will break chat functionality until complete.
+Integrate session infrastructure into chat buffers using a dual-write approach. Messages are written to both buffer-local state and session, maintaining backward compatibility while adding session support.
 
 ### Test Specifications (Write First)
 
@@ -836,29 +836,80 @@ Create `test/benedict-chat-session-test.el`:
 ### Changes Required
 
 - **File**: `benedict-chat.el`
-  - Add `(require 'benedict-session)` at top
-  - Add `(defvar-local benedict-chat--session nil)`
-  - Modify `benedict-chat--init-buffer` to create/attach session
-  - Modify `benedict-chat--record-message` to write to session
-  - Modify `benedict-chat--build-request` to read from session
-  - Modify `benedict-chat--start-dispatch` to use session callbacks
-  - Add `benedict-chat--session-handle-delta/success/error`
-  - Add `benedict-chat--handle-session-event` for UI updates
-  - Add `benedict-chat--detach-session` and hook to `kill-buffer-hook`
-  - Update all reads of buffer-local state to use session
+  - [X] Add `(require 'benedict-session)` at top
+  - [X] Add `(defvar-local benedict-chat--session nil)`
+  - [X] Modify `benedict-chat--init-buffer` to create/attach session
+  - [X] Modify `benedict-chat--record-message` to write to session (dual-write)
+  - [X] Add `benedict-chat--detach-session` and hook to `kill-buffer-hook`
 
 ### Success Criteria
 
 #### Automated Verification
-- [ ] `nix run .#test` - all integration tests pass
-- [ ] `nix run .#lint` - clean
+- [X] `nix run .#test` - all integration tests pass (37 session tests)
+- [X] `nix run .#lint` - clean (only pre-existing checkdoc warnings)
 
 #### Manual Verification
 - [ ] Send message → appears in chat
-- [ ] Response streams correctly
-- [ ] Tool calls work
 - [ ] Kill buffer → session persists
-- [ ] Reopen → see same session
+
+---
+
+## Phase 2b: Full Session Cut-Over
+
+### Overview
+Complete the cut-over from buffer-local state to session state. After this phase, the session becomes the authoritative source for conversation data, enabling headless operation and streaming persistence across buffer attach/detach cycles.
+
+### Changes Required
+
+- **File**: `benedict-chat.el`
+  - [X] Modify `benedict-chat--build-request` to read from session instead of `benedict-chat--messages`
+  - [X] Modify `benedict-chat--start-dispatch` to use session callbacks:
+    - [X] Call `benedict-session-start-request` to track inflight state
+    - [X] Call `benedict-session-start-draft` when streaming begins (via headless handler)
+    - [X] Call `benedict-session-append-draft` for content deltas (via headless handler)
+    - [X] Call `benedict-session-finalize-draft` on success (via headless handler)
+    - [X] Call `benedict-session-clear-request` in all terminal handlers (via headless handler)
+  - [X] Add headless session handlers (`benedict-chat--handle-provider-*-headless`) for session state updates independent of buffer
+  - [X] Modify buffer handlers to only update UI (session state via headless handlers)
+  - [X] Modify `benedict-chat--record-message` to skip session write for assistant messages during streaming
+  - [X] Fix failing `benedict-chat-session-test-headless-streaming` failure
+  - [ ] Add `benedict-chat--handle-session-event` for UI updates driven by session events (deferred - direct calls work for now)
+
+### Test Specifications
+
+The streaming and headless tests from the original Phase 2 spec apply here:
+
+```elisp
+;;; Streaming Tests (require session draft integration)
+
+(ert-deftest-async benedict-chat-session-test-streaming-uses-draft (done)
+  "Streaming response accumulates in session draft."
+  ...)
+
+;;; Event-Driven UI Tests
+
+(ert-deftest benedict-chat-session-test-events-update-ui ()
+  "Session events trigger UI updates in attached buffers."
+  ...)
+
+;;; Headless Operation Tests
+
+(ert-deftest-async benedict-chat-session-test-headless-streaming (done)
+  "Streaming continues when buffer is killed."
+  ...)
+```
+
+### Success Criteria
+
+#### Automated Verification
+- [X] `nix run .#test` - streaming and headless tests pass (40/40 session tests)
+- [X] `nix run .#lint` - clean (only pre-existing checkdoc warnings)
+
+#### Manual Verification
+- [X] Response streams correctly (accumulated in session draft)
+- [X] Tool calls work
+- [X] Kill buffer mid-stream → session continues → reopen shows content
+- [X] Session state (streaming/idle/error) reflected in UI
 
 ---
 
@@ -1046,8 +1097,9 @@ Add to `test/benedict-chat-session-test.el`:
 
 | Phase | Test File | Test Count | Focus |
 |-------|-----------|------------|-------|
-| 1 | `benedict-session-test.el` | ~30 | Unit + property tests for session module |
-| 2 | `benedict-chat-session-test.el` | ~10 | Integration tests for buffer-session binding |
+| 1 | `benedict-session-test.el` | 33 | Unit + property tests for session module |
+| 2 | `benedict-chat-session-test.el` | 4 | Buffer-session binding (dual-write) |
+| 2b | (same file) | ~6 | Streaming, events, headless (full cut-over) |
 | 3 | (same file) | ~5 | Routing logic tests |
 | 4 | (same file) | ~5 | Headless edge case tests |
 
