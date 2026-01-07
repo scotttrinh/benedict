@@ -986,11 +986,11 @@ Add to `test/benedict-chat-session-test.el`:
 ### Success Criteria
 
 #### Automated Verification
-- [ ] `nix run .#test` - routing tests pass
+- [X] `nix run .#test` - routing tests pass
 
 #### Manual Verification
-- [ ] No sessions: creates one
-- [ ] One session: opens it
+- [X] No sessions: creates one
+- [X] One session: opens it
 - [ ] Multiple: shows picker
 - [ ] `C-u`: always creates new
 
@@ -1084,7 +1084,7 @@ Add to `test/benedict-chat-session-test.el`:
 ### Success Criteria
 
 #### Automated Verification
-- [ ] `nix run .#test` - all tests pass including headless
+- [X] `nix run .#test` - all tests pass including headless (49/49 session tests pass)
 
 #### Manual Verification
 - [ ] Start streaming, kill buffer, reopen → see content
@@ -1101,7 +1101,8 @@ Add to `test/benedict-chat-session-test.el`:
 | 2 | `benedict-chat-session-test.el` | 4 | Buffer-session binding (dual-write) |
 | 2b | (same file) | ~6 | Streaming, events, headless (full cut-over) |
 | 3 | (same file) | ~5 | Routing logic tests |
-| 4 | (same file) | ~5 | Headless edge case tests |
+| 4 | (same file) | 3 | Headless edge case tests |
+| **Total** | | **49** | |
 
 ### Running Tests
 

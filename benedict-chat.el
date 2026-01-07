@@ -2,9 +2,9 @@
 ;; Author: Benedict maintainers
 
 ;;; Commentary:
-;; Provider-backed chat buffer for Phase 2. Renders role-tagged messages,
-;; tracks history for retry/copy actions, and dispatches requests through
-;; the active Benedict provider (OpenRouter by default).
+;; Renders role-tagged messages, tracks history for retry/copy actions, and
+;; dispatches requests through the active Benedict provider (OpenRouter by
+;; default).
 
 ;;; Code:
 
@@ -2901,11 +2901,16 @@ Does not touch any buffer - only updates session state."
                            :usage (plist-get result :usage))))
       ;; Clear request state
       (benedict-session-clear-request session)
-      ;; Finalize draft if we were streaming
-      (if (benedict-session-draft session)
+      ;; Check if draft has actual content (was streaming) or is empty (non-streaming)
+      (if (and (benedict-session-draft session)
+               (> (length (plist-get (benedict-session-draft session) :content)) 0))
           ;; Streaming path: finalize draft (creates message in session)
           (benedict-session-finalize-draft session metadata)
-        ;; Non-streaming path: add message directly
+        ;; Non-streaming path (or empty draft): add message directly
+        ;; Discard empty draft if it exists and set state to idle
+        (when (benedict-session-draft session)
+          (setf (benedict-session-draft session) nil)
+          (benedict-session-set-state session 'idle))
         (benedict-session-add-message
          session
          (list :role 'assistant
@@ -3861,20 +3866,113 @@ The session persists independently and can be reattached later."
     (insert "\n"))
   (benedict-chat--ensure-conversation-root))
 
+(defun benedict-chat--session-annotation (session)
+  "Return annotation string for SESSION completion.
+Includes title, state, and message count."
+  (let ((title (or (benedict-session-title session) "Untitled"))
+        (state (benedict-session-state session))
+        (msg-count (length (benedict-session-messages session))))
+    (format "%s [%s] - %d messages" title state msg-count)))
+
+(defun benedict-chat--buffer-for-session (session)
+  "Return existing buffer for SESSION, or create and initialize one.
+Buffers are keyed by session ID in the buffer name."
+  (unless (benedict-session-p session)
+    (error "Not a valid session: %s" session))
+  ;; Check if any existing buffer is already attached to this session
+  (let ((existing (cl-find-if (lambda (buf)
+                                (and (buffer-live-p buf)
+                                     (with-current-buffer buf
+                                       (and (bound-and-true-p benedict-chat--session)
+                                            (eq benedict-chat--session session)))))
+                              (buffer-list))))
+    (if existing
+        existing
+      ;; Create new buffer for this session
+      (let* ((session-id (benedict-session-id session))
+             (buf-name (format "*Benedict Chat [%s]*"
+                               (substring session-id 0 (min 12 (length session-id)))))
+             (buf (get-buffer-create buf-name)))
+        (with-current-buffer buf
+          (unless (derived-mode-p 'benedict-chat-mode)
+            (let ((mode (or benedict-chat-major-mode #'benedict-chat-mode)))
+              (unless (fboundp mode)
+                (setq mode #'benedict-chat-mode))
+              (funcall mode)
+              ;; Don't create new session - attach to existing one
+              (benedict-chat--init-buffer))))
+        ;; Now attach to the passed session instead of creating a new one
+        (with-current-buffer buf
+          (when (bound-and-true-p benedict-chat--session)
+            ;; A session was created by init-buffer, remove it
+            (benedict-session-destroy benedict-chat--session))
+          (setq-local benedict-chat--session session)
+          (benedict-session--add-frontend session (current-buffer))
+          (benedict-chat--render-session-history session))
+        buf))))
+
+(defun benedict-chat--render-session-history (session)
+  "Render SESSION's message history into current buffer.
+Assumes buffer is already in benedict-chat-mode with session attached."
+  (when (benedict-session-p session)
+    (dolist (msg (benedict-session-messages-chronological session))
+      (benedict-chat--record-message (current-buffer) msg)))
+  ;; Render all messages to buffer
+  (dolist (msg (reverse benedict-chat--messages))
+    (benedict-chat--render-message (current-buffer) msg)))
+
 ;;;###autoload
-(defun benedict-chat ()
-  "Open or switch to the Benedict chat buffer."
-  (interactive)
-  (let ((buf (get-buffer-create benedict-chat-buffer-name)))
-    (pop-to-buffer buf)
-    (with-current-buffer buf
-      (unless (derived-mode-p 'benedict-chat-mode)
-        (let ((mode (or benedict-chat-major-mode #'benedict-chat-mode)))
-          (unless (fboundp mode)
-            (setq mode #'benedict-chat-mode))
-          (funcall mode)
-          (benedict-chat--init-buffer)))))
-  (message "Type C-c C-s to send a prompt; g r retries; w copies last response."))
+(defun benedict-chat (&optional prefix)
+  "Open or switch to Benedict chat buffer.
+With PREFIX argument (C-u), always create a new session.
+When multiple sessions exist, prompt for which one to open."
+  (interactive "P")
+  (let ((sessions (benedict-session-list)))
+    (cond
+     ;; Prefix arg: always create new session
+     (prefix
+      (let ((buf (get-buffer-create benedict-chat-buffer-name)))
+        (pop-to-buffer buf)
+        (with-current-buffer buf
+          (unless (derived-mode-p 'benedict-chat-mode)
+            (let ((mode (or benedict-chat-major-mode #'benedict-chat-mode)))
+              (unless (fboundp mode)
+                (setq mode #'benedict-chat-mode))
+              (funcall mode)
+              (benedict-chat--init-buffer))))))
+
+     ;; No sessions: normal initialization (creates session)
+     ((null sessions)
+      (let ((buf (get-buffer-create benedict-chat-buffer-name)))
+        (pop-to-buffer buf)
+        (with-current-buffer buf
+          (unless (derived-mode-p 'benedict-chat-mode)
+            (let ((mode (or benedict-chat-major-mode #'benedict-chat-mode)))
+              (unless (fboundp mode)
+                (setq mode #'benedict-chat-mode))
+              (funcall mode)
+              (benedict-chat--init-buffer))))))
+
+     ;; One session: open it directly
+     ((= (length sessions) 1)
+      (let ((buf (benedict-chat--buffer-for-session (car sessions))))
+        (pop-to-buffer buf)))
+
+     ;; Multiple sessions: prompt with completion
+     (t
+      (let* ((session-strings
+              (mapcar (lambda (s)
+                        (cons (benedict-chat--session-annotation s) s))
+                      sessions))
+             (selected
+              (completing-read "Select session: "
+                               session-strings
+                               nil t nil nil
+                               (benedict-chat--session-annotation (car sessions)))))
+        (when-let ((session (cdr (assoc selected session-strings :test #'equal))))
+          (let ((buf (benedict-chat--buffer-for-session session)))
+            (pop-to-buffer buf))))))
+  (message "Type C-c C-s to send a prompt; g r retries; w copies last response.")))
 
 (provide 'benedict-chat)
 ;;; benedict-chat.el ends here
