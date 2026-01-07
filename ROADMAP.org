@@ -68,7 +68,7 @@ Acceptance:
 - Typed items render as distinct blocks (messages vs thinking vs tools vs plans); folding and buttons work; copy/apply actions operate on the correct regions
 - Code fences font-lock in streaming content; markdown-lite decoration is incremental and does not re-fontify the entire buffer
 
-* Phase 4 — Context & Project Integration [PARTIAL]
+* Phase 4 — Context & Project Integration [DONE]
 Tasks:
 - [DONE] Commands: ask region/defun/buffer/project; keymap prefix (default C-c C-b)
 - [DONE] Basic Git context: current branch, status, and diff --stat
@@ -78,10 +78,10 @@ Acceptance:
 - [DONE] Ask commands aware of region/defun; responses differ by profile
 - [DONE] Simple Git status/diff included in context
 
-* Phase 5 — Tools & Approvals [PARTIAL]
+* Phase 5 — Tools & Approvals [MOSTLY COMPLETE]
 Tasks:
 - [DONE] Toolcall protocol: JSON args → plist; schema validation; approval policies: auto/confirm/always
-- [DONE] Built-ins: project-search (ripgrep), read-file, write, edit, find-files
+- [DONE] Built-ins: project-search (ripgrep), read-file, write, edit, find-files, exec-elisp
 - [DONE] Isolated environment: `benedict-flywire` for agent-frame isolation and tool execution safety
 - [DONE] Basic Approval UI: y-or-n-p prompt showing tool and arguments
 - [PENDING] Advanced Approval UI: transient menu + diff/ediff buffer; provenance logged to thread metadata
@@ -93,13 +93,14 @@ Acceptance:
 * Phase 6 — Multi‑Provider & Local Models [DONE]
 Tasks:
 - [DONE] Provider and model registry, selection, feature flags (tools, streaming)
-- [DONE] OpenRouter, Vercel, and Ollama (local) providers
+- [DONE] OpenRouter, Vercel, Ollama (local), Gemini (OAuth + API key), and Fake providers
 - [DONE] Capability discovery; graceful degradation if a feature is unavailable
 - [DONE] Assign certain provider/model to certain profiles by default
 Acceptance:
 - [DONE] Switching providers is one command/customize; features adapt without errors
+Note: Gemini provider does not support streaming (non-streaming only); all other providers support streaming.
 
-* Phase 7 — Persistence, History, UX Polish [IN PROGRESS]
+* Phase 7 — Persistence, History, UX Polish [PARTIAL]
 Tasks:
 - [DONE] Magit-inspired UI: turn-based structural hierarchy using `magit-section`
 - [DONE] Visual Polish: standard badges and icons via `svg-lib` for roles and statuses
@@ -153,6 +154,31 @@ Acceptance:
 - Provider drift: capability flags; versioned adapter layer; good error messages
 - Performance: throttle rendering; chunk aggregation; avoid blocking redisplay
 - Safety: approvals everywhere; tight scopes; no automatic writes without previews
+
+* Future — Org-Mode Product/Shaping/Efforts Workflow
+Goals:
+- Keep product-level discussion, shaping notes, and effort execution cohesive without adding a separate CLI tracker.
+- Allow per-project customization of where org artifacts live (repo-local vs personal org).
+- Enable task-oriented context extraction by org-id for agents, with minimal, scoped inputs.
+Proposed Structure:
+- product.org: product areas, architecture, map-of-content, ongoing opportunities
+- shaping.org: shaped bets/opportunities; links to product areas and resulting efforts
+- efforts.org: each effort as a subtree with research, plan, execution phases, and logs
+Flow:
+- Product discussions update product.org area notes and opportunity list.
+- Opportunity/bug becomes a shaping entry; use it to define scope and constraints.
+- Shaped work spawns one or more efforts with research -> plan -> execution.
+- Execution phases are org agenda items with subtasks and log entries.
+- Closing an effort updates shaping + product notes and archives the effort subtree.
+Context Strategy:
+- Use org-id for effort, phase, shaping, and area nodes.
+- Add a "benedict-ask" helper that takes an org-id and a tier (phase-only, effort, effort+plan, full lineage).
+Backend Concept:
+- Default todo backend remains in-memory for lightweight agent sessions.
+- Optional org backend writes to effort subtrees (create/update subtasks, log work, set status).
+Configuration:
+- Use dir-locals to set per-project org paths (benedict-product-file, benedict-shaping-file, benedict-efforts-file).
+- Resolve project root via project.el (or projectile if present) for org file lookup.
 
 * Future — Subagents & Delegation
 Tasks:

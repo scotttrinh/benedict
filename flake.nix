@@ -1,5 +1,5 @@
 {
-  description = "Benedict - AI chat in Emacs";
+  description = "Benedict - Agent in Emacs";
 
   inputs = {
     nixpkgs.url = "github:nixos/nixpkgs/nixos-unstable";

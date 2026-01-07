@@ -166,7 +166,7 @@ The snippet below is an annotated, copy‑pasteable Doom Emacs setup. Drop it in
 - Region/defun/buffer/project-aware actions: ask, explain, transform, refactor.
 - Tool calls map to Elisp capabilities with approval policies and diff previews.
 - Project & git context: project.el, ripgrep, Magit integration.
-- Provider‑agnostic: OpenRouter, Ollama, Vercel, Gemini (experimental), and local endpoints via a shared interface.
+- Provider‑agnostic: OpenRouter, Ollama, Vercel, Gemini (OAuth + API key, non-streaming), and local endpoints via a shared interface.
 - Loop and autonomy safeguards: repetition detection, turn limits, and timing budget.
 
 * Emacs‑Native Tools & Workflows
@@ -192,7 +192,8 @@ Implemented tools:
 - `exec-elisp`: Evaluate arbitrary Elisp code (requires explicit approval).
 
 * Architecture Overview
-- Provider interface: Registry for providers (OpenRouter, Ollama, Vercel, Gemini (experimental), Fake) with capabilities for streaming and tools.
+- Provider interface: Registry for providers (OpenRouter, Ollama, Vercel, Gemini, Fake) with capabilities for streaming and tools.
+  Note: Gemini provider does not support streaming; all other providers support streaming.
 - HTTP/Streaming: `benedict-http` uses `url-retrieve` for simple requests and `curl` for robust streaming (SSE).
 - Tool registry: Maps tool identifiers to Elisp functions with JSON schema validation and per-tool approval policies.
 - Rendering: `benedict-chat-render` uses markers and a "Sentinel Pattern" to manage live-updating regions for messages, thinking blocks, and tool calls.
@@ -317,7 +318,7 @@ Example: enforce non-streaming behavior globally:
 All of these live under the Customize group =benedict-provider-vercel=.
 
 - =benedict-provider-vercel-endpoint= :: HTTP endpoint for chat completions (default: =https://ai-gateway.vercel.sh/v1/chat/completions=).
-- =benedict-provider-vercel-default-model= :: Default model identifier when none is specified (default: =gpt-4=).
+- =benedict-provider-vercel-default-model= :: Default model identifier when none is specified (default: =xai/grok-4.1-fast-reasoning=).
 - =benedict-provider-vercel-default-temperature= :: Default sampling temperature (number or =nil= to use provider defaults; default: =0.2=).
 - =benedict-provider-vercel-default-reasoning= :: Default reasoning options plist/alist; set to =nil= to keep provider defaults (keys include =effort=, =max_tokens=, =exclude=, =enabled=).
 - =benedict-provider-vercel-default-usage= :: Default usage options plist/alist; set to =nil= to keep provider defaults (keys include =include=).
@@ -336,7 +337,7 @@ For all providers, Benedict prefers the filesystem store (~/.config/benedict/aut
 Example: pin a model and tweak retry/backoff behavior:
 #+begin_src elisp
 (after! benedict
-  (setq benedict-provider-vercel-default-model "gpt-4o"
+  (setq benedict-provider-vercel-default-model "openai/gpt-4o"
         benedict-provider-vercel-default-temperature 0.1
         benedict-provider-vercel-max-retries 3
         benedict-provider-vercel-retry-backoff-seconds 1.0))
@@ -356,11 +357,12 @@ Example: enforce non-streaming behavior globally:
 
 ** Gemini provider
 
-The `gemini` provider now implements the full Phase 2+ plan: credential
-resolution, PKCE, an Emacs-driven login command, and a basic
-`generateContent` chat request. OAuth refresh tokens are the only secrets ever
-written to disk, and they live in `auth-source`. Everything else stays
-in-memory.
+The `gemini` provider implements full OAuth-based credential resolution with
+PKCE, an Emacs-driven login command, and a `generateContent` chat request.
+OAuth refresh tokens are the only secrets ever written to disk, and they live
+in `auth-source`. Everything else stays in-memory.
+
+Note: The Gemini provider does not support streaming (non-streaming only).
 
 Typical workflow:
 - Run `M-x benedict-provider-gemini-login`, follow the browser instructions, then paste
