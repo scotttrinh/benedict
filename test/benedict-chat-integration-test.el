@@ -53,10 +53,13 @@
       (cl-letf (((symbol-function 'benedict-chat--status-start-timer) #'ignore)
                 ((symbol-function 'benedict-chat--status-refresh) #'ignore))
         (let* ((request (list :provider 'fake :model "fake-model" :messages nil))
+               (session benedict-chat--session)
                (benedict-chat--request-seq 0)
-               (benedict-chat--active-request-id 1)
                (benedict-chat--last-dispatch (list :request request :timestamp (current-time))))
-          (benedict-chat--telemetry-begin request)
+          ;; Set up session inflight state
+          (when session
+            (benedict-session-start-request session 'test-handle)
+            (benedict-session-start-draft session))
           (benedict-chat--record-message (current-buffer)
                                          (list :role 'user :content "hi" :time (current-time)))
 
@@ -64,13 +67,15 @@
            (current-buffer)
            (list :kind 'content-delta :provider 'fake :model "fake-model" :text "Hello **bo"))
 
-          (let* ((assistant (cl-find-if (lambda (msg) (eq (plist-get msg :role) 'assistant))
-                                        benedict-chat--messages))
-                 (item (plist-get assistant :item))
+          ;; During streaming, the assistant message is tracked in streaming-message
+          (let* ((streaming-msg benedict-chat--streaming-message)
+                 (assistant (and streaming-msg (plist-get streaming-msg :message)))
+                 (item (and assistant (plist-get assistant :item)))
                  (body (lambda ()
                          (buffer-substring-no-properties
                           (marker-position (plist-get item :content-start))
                           (marker-position (plist-get item :content-end))))))
+            (should streaming-msg)
             (should assistant)
             (should item)
             (should (string= (funcall body) "Hello **bo"))
@@ -128,17 +133,22 @@
       (cl-letf (((symbol-function 'benedict-chat--status-start-timer) #'ignore)
                 ((symbol-function 'benedict-chat--status-refresh) #'ignore))
         (let* ((request (list :provider 'fake :model "fake-model" :messages nil))
+               (session benedict-chat--session)
                (benedict-chat--request-seq 0)
-               (benedict-chat--active-request-id 1)
                (benedict-chat--last-dispatch (list :request request :timestamp (current-time))))
-          (benedict-chat--telemetry-begin request)
+          ;; Set up session inflight state
+          (when session
+            (benedict-session-start-request session 'test-handle)
+            (benedict-session-start-draft session))
           (benedict-chat--handle-provider-delta
            (current-buffer)
            (list :kind 'content-delta :provider 'fake :model "fake-model" :text "Hello"))
-          (let* ((assistant (cl-find-if (lambda (msg) (eq (plist-get msg :role) 'assistant))
-                                        benedict-chat--messages))
-                 (item (plist-get assistant :item))
+          ;; During streaming, the assistant message is tracked in streaming-message
+          (let* ((streaming-msg benedict-chat--streaming-message)
+                 (assistant (and streaming-msg (plist-get streaming-msg :message)))
+                 (item (and assistant (plist-get assistant :item)))
                  (body-end (plist-get item :content-end)))
+            (should streaming-msg)
             (should assistant)
             (should item)
             (should (markerp body-end))
@@ -161,10 +171,13 @@
           (cl-letf (((symbol-function 'benedict-chat--status-start-timer) #'ignore)
                     ((symbol-function 'benedict-chat--status-refresh) #'ignore))
             (let* ((request (list :provider 'fake :model "fake-model" :messages nil))
+                   (session benedict-chat--session)
                    (benedict-chat--request-seq 0)
-                   (benedict-chat--active-request-id 1)
                    (benedict-chat--last-dispatch (list :request request :timestamp (current-time))))
-              (benedict-chat--telemetry-begin request)
+              ;; Set up session inflight state
+              (when session
+                (benedict-session-start-request session 'test-handle)
+                (benedict-session-start-draft session))
               (with-current-buffer other-buffer
                 (benedict-chat--handle-provider-delta
                  chat-buffer
@@ -249,10 +262,13 @@
                  (cl-letf (((symbol-function 'benedict-chat--status-start-timer) #'ignore)
                            ((symbol-function 'benedict-chat--status-refresh) #'ignore))
                    (let* ((request (list :provider 'fake :model "fake-model" :messages nil))
+                          (session benedict-chat--session)
                           (benedict-chat--request-seq 0)
-                          (benedict-chat--active-request-id 1)
                           (benedict-chat--last-dispatch (list :request request :timestamp (current-time))))
-                     (benedict-chat--telemetry-begin request)
+                     ;; Set up session inflight state
+                     (when session
+                       (benedict-session-start-request session 'test-handle)
+                       (benedict-session-start-draft session))
                      (benedict-chat--handle-provider-delta
                       chat-buffer
                       (list :kind 'content-delta :provider 'fake :model "fake-model"
@@ -295,25 +311,30 @@
       (cl-letf (((symbol-function 'benedict-chat--status-start-timer) #'ignore)
                 ((symbol-function 'benedict-chat--status-refresh) #'ignore))
         (let* ((request (list :provider 'fake :model "fake-model" :messages nil))
+               (session benedict-chat--session)
                (benedict-chat--request-seq 0)
-               (benedict-chat--active-request-id 1)
                (benedict-chat--last-dispatch (list :request request :timestamp (current-time))))
-          (benedict-chat--telemetry-begin request)
+          ;; Set up session inflight state
+          (when session
+            (benedict-session-start-request session 'test-handle)
+            (benedict-session-start-draft session))
           (benedict-chat--record-message (current-buffer)
                                          (list :role 'user :content "hi" :time (current-time)))
           (benedict-chat--handle-provider-delta
            (current-buffer)
            (list :kind 'content-delta :provider 'fake :model "fake-model" :text "Hello"))
 
-          (let* ((assistant (cl-find-if (lambda (msg) (eq (plist-get msg :role) 'assistant))
-                                        benedict-chat--messages))
-                 (assistant-item (plist-get assistant :item))
+          ;; During streaming, the assistant message is tracked in streaming-message
+          (let* ((streaming-msg benedict-chat--streaming-message)
+                 (assistant (and streaming-msg (plist-get streaming-msg :message)))
+                 (assistant-item (and assistant (plist-get assistant :item)))
                  (tool-item (benedict-chat--record-tool-block
                              (current-buffer)
                              (list :id "call-1" :name 'demo :arguments '(:foo "bar"))
                              (list :status 'running)))
                  (assistant-end (plist-get assistant-item :end))
                  (tool-start (plist-get tool-item :start)))
+            (should streaming-msg)
             (should assistant)
             (should assistant-item)
             (should tool-item)
@@ -373,10 +394,12 @@
             (benedict-chat--init-buffer)
             (benedict-chat-send-prompt "User prompt")
             (let ((deadline (+ (float-time) 1.0)))
-              (while (and benedict-chat--pending-request
+              (while (and benedict-chat--session
+                          (benedict-session-request-active-p benedict-chat--session)
                           (< (float-time) deadline))
                 (accept-process-output nil 0.01)))
-            (should-not benedict-chat--pending-request)
+            (should-not (and benedict-chat--session
+                             (benedict-session-request-active-p benedict-chat--session)))
             (cl-labels ((find-pos (needle)
                           (save-excursion
                             (goto-char (point-min))

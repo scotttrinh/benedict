@@ -43,6 +43,30 @@
     (should (benedict-session-get (benedict-session-id session)))
     (should-not (benedict-session-has-frontend-p session))))
 
+(ert-deftest benedict-chat-session-test-subscription-lifecycle ()
+  "Buffer subscribes on attach, unsubscribes on kill."
+  (let ((benedict-session--registry (make-hash-table :test 'equal))
+        (subscription nil)
+        (session nil)
+        (buf nil))
+    (setq buf (generate-new-buffer "*test-subscription*"))
+    (with-current-buffer buf
+      (benedict-chat-mode)
+      (benedict-chat--init-buffer)
+      ;; Subscription active
+      (should benedict-chat--session-subscription)
+      (should (memq benedict-chat--session-subscription
+                    benedict-session-event-hook))
+      (setq subscription benedict-chat--session-subscription)
+      (setq session benedict-chat--session)
+      ;; Events reach the buffer (verified by state change not erroring)
+      (benedict-session-set-state session 'streaming)
+      (should (eq 'streaming (benedict-session-state session))))
+    ;; Kill buffer properly to trigger kill-buffer-hook
+    (kill-buffer buf)
+    ;; After kill, subscription removed
+    (should-not (memq subscription benedict-session-event-hook))))
+
 ;;; Message Flow Tests
 
 (ert-deftest benedict-chat-session-test-send-records-in-session ()
@@ -190,7 +214,7 @@
         (should (string-match-p "Streaming Test" ann))))))
 
 (ert-deftest benedict-chat-session-test-render-history ()
-  "Rendering session history populates buffer messages."
+  "Rendering session history renders messages into buffer."
   (let ((benedict-session--registry (make-hash-table :test 'equal)))
     (let ((session (benedict-session-create :title "History Test")))
       (benedict-session-add-message session '(:role user :content "Hello"))
@@ -199,9 +223,85 @@
         (benedict-chat-mode)
         (setq-local benedict-chat--session session)
         (benedict-chat--render-session-history session)
-        (should (= 2 (length benedict-chat--messages)))
-        (should (string= "Hello" (plist-get (car (last benedict-chat--messages)) :content)))
-        (should (string= "Hi there" (plist-get (car benedict-chat--messages) :content)))))))
+        ;; Check that messages are rendered in the buffer text
+        (goto-char (point-min))
+        (should (search-forward "Hello" nil t))
+        (should (search-forward "Hi there" nil t))
+        ;; Verify session still has the messages
+        (should (= 2 (length (benedict-session-messages session))))))))
+
+(ert-deftest benedict-chat-session-test-attach-renders-history ()
+  "Attaching to a session renders its messages."
+  (let ((benedict-session--registry (make-hash-table :test 'equal)))
+    (let ((session (benedict-session-create :title "Attach Test")))
+      (benedict-session-add-message session '(:role user :content "Hello"))
+      (benedict-session-add-message session '(:role assistant :content "Hi there"))
+      (let ((buf (benedict-chat--buffer-for-session session)))
+        (with-current-buffer buf
+          (goto-char (point-min))
+          (should (search-forward "Hello" nil t))
+          (should (search-forward "Hi there" nil t)))
+        (kill-buffer buf)))))
+
+(ert-deftest-async benedict-chat-session-test-attach-during-streaming (done)
+  "Attaching mid-stream shows accumulated content."
+  (benedict-test-with-bindings done
+      ((benedict-session--registry (make-hash-table :test 'equal))
+       (benedict-provider 'fake)
+       (benedict-provider-fake-script
+        (list (list :type 'success
+                    :chunks '("Part1 " "Part2 " "Part3")
+                    :chunk-delay 0.02
+                    :delay 0.1))))
+    (let ((session nil))
+      ;; Start streaming headlessly
+      (with-temp-buffer
+        (benedict-chat-mode)
+        (benedict-chat--init-buffer)
+        (setq session benedict-chat--session)
+        (benedict-chat--send-text "Test"))
+      ;; Wait for chunks, then attach new buffer
+      (run-at-time 0.05 nil
+                   (lambda ()
+                     (let ((buf (benedict-chat--buffer-for-session session)))
+                       (with-current-buffer buf
+                         (goto-char (point-min))
+                         (should (search-forward "Part1" nil t)))
+                       ;; Wait for completion
+                       (run-at-time 0.1 nil
+                                    (lambda ()
+                                      (with-current-buffer buf
+                                        (goto-char (point-min))
+                                        (should (search-forward "Part3" nil t)))
+                                      (kill-buffer buf)
+                                      (funcall done)))))))))
+
+(ert-deftest benedict-chat-session-test-multi-buffer-same-session ()
+  "Multiple buffers can view the same session."
+  (let ((benedict-session--registry (make-hash-table :test 'equal)))
+    (let ((session (benedict-session-create :title "Multi")))
+      (benedict-session-add-message session '(:role user :content "Test"))
+      (let ((buf1 (benedict-chat--buffer-for-session session))
+            (buf2 (get-buffer-create "*test-second*")))
+        (with-current-buffer buf2
+          (benedict-chat-mode)
+          (setq-local benedict-chat--session session)
+          (benedict-session--add-frontend session (current-buffer))
+          (setq-local benedict-chat--session-subscription
+                      (benedict-chat--subscribe-to-session session))
+          (add-hook 'benedict-session-event-hook
+                    benedict-chat--session-subscription)
+          (benedict-chat--sync-from-session session))
+        (should (= 2 (length (benedict-session-frontends session))))
+        (benedict-session-add-message session '(:role user :content "Second"))
+        (with-current-buffer buf1
+          (goto-char (point-min))
+          (should (search-forward "Second" nil t)))
+        (with-current-buffer buf2
+          (goto-char (point-min))
+          (should (search-forward "Second" nil t)))
+        (kill-buffer buf2)
+        (kill-buffer buf1)))))
 
 ;;; Headless Verification Tests (Phase 4)
 

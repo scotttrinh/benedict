@@ -106,7 +106,6 @@
           ;; Minimal initialization for magit-section support
           ;; Skip full benedict-chat--init-buffer to avoid kill-buffer-hook issues
           (setq-local benedict-chat--buffer (current-buffer))
-          (setq-local benedict-chat--messages nil)
           (setq-local benedict-chat--items nil)
           (setq-local benedict-chat--item-counter 0)
           (setq-local benedict-chat--thinking-items (make-hash-table :test 'equal))

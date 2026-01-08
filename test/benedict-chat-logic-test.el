@@ -8,20 +8,35 @@
 
 (defvar benedict-provider 'fake)
 
-(ert-deftest benedict-chat-telemetry-accumulates-session-seconds ()
+(ert-deftest benedict-chat-session-accumulates-seconds ()
   "Completed requests add to session seconds; errors do not."
   (let ((buffer (generate-new-buffer " *Benedict Telemetry Seconds*")))
     (unwind-protect
         (with-current-buffer buffer
           (benedict-chat-mode)
           (benedict-chat--init-buffer)
-          (should (equal (plist-get benedict-chat--telemetry :session-seconds) 0.0))
-          (benedict-chat--telemetry-begin (list :provider 'fake))
-          (benedict-chat--telemetry-finish 'complete (list :latency 1.25))
-          (should (= (plist-get benedict-chat--telemetry :session-seconds) 1.25))
-          (benedict-chat--telemetry-begin (list :provider 'fake))
-          (benedict-chat--telemetry-finish 'error (list :status 500 :error t))
-          (should (= (plist-get benedict-chat--telemetry :session-seconds) 1.25)))
+          (let* ((session benedict-chat--session)
+                 (start (seconds-to-time 1000))
+                 (finish (seconds-to-time 1010)))
+            (should (equal (benedict-session-accumulated-seconds session) 0.0))
+            (cl-letf (((symbol-function 'current-time) (lambda () start)))
+              (benedict-session-start-request session 'handle)
+              (benedict-session-start-draft session))
+            (cl-letf (((symbol-function 'current-time) (lambda () finish)))
+              (benedict-chat--handle-provider-success-headless
+               session
+               (list :provider 'fake
+                     :model "fake-model"
+                     :latency 1.25
+                     :usage '(:prompt-tokens 1 :completion-tokens 1 :total-tokens 2)
+                     :message (list :role 'assistant :content "ok"))))
+            (should (= (benedict-session-accumulated-seconds session) 1.25))
+            (cl-letf (((symbol-function 'current-time) (lambda () finish)))
+              (benedict-session-start-request session 'handle)
+              (benedict-session-start-draft session)
+              (benedict-chat--handle-provider-error-headless
+               session (list :provider 'fake :message "fail")))
+            (should (= (benedict-session-accumulated-seconds session) 1.25))))
       (when (buffer-live-p buffer)
         (kill-buffer buffer)))))
 
@@ -83,7 +98,9 @@
           (benedict-chat-compose-send))
         (let ((deadline (+ (float-time) 2.0)))
           (while (and (buffer-live-p chat)
-                      (with-current-buffer chat benedict-chat--pending-request)
+                      (with-current-buffer chat
+                        (and benedict-chat--session
+                             (benedict-session-request-active-p benedict-chat--session)))
                       (< (float-time) deadline))
             (sleep-for 0.05)
             (accept-process-output nil 0.05))
@@ -95,7 +112,8 @@
                          (messages (and request (plist-get request :messages)))
                          (user (cl-find-if (lambda (msg)
                                              (eq (plist-get msg :role) 'user))
-                                           benedict-chat--messages)))
+                                           (when benedict-chat--session
+                                             (benedict-session-messages benedict-chat--session)))))
                     (should handle)
                     (should request)
                     (should messages)
@@ -138,7 +156,9 @@
           (benedict-chat-compose-send)))
       (let ((deadline (+ (float-time) 2.0)))
         (while (and (buffer-live-p chat)
-                    (with-current-buffer chat benedict-chat--pending-request)
+                    (with-current-buffer chat
+                      (and benedict-chat--session
+                           (benedict-session-request-active-p benedict-chat--session)))
                     (< (float-time) deadline))
           (sleep-for 0.05)
           (accept-process-output nil 0.05))
@@ -185,11 +205,12 @@
            (unwind-protect
                (condition-case e
                    (with-current-buffer buffer
-                     ;; Check history
+                     ;; Check history from session
                      (let* ((tool-message
                              (cl-find-if (lambda (message)
                                            (eq (plist-get message :role) 'tool))
-                                         benedict-chat--messages)))
+                                         (when benedict-chat--session
+                                           (benedict-session-messages benedict-chat--session)))))
                        (should tool-message)
                        (should (equal (plist-get tool-message :tool-call-id) "call-123"))
                        ;; We check that history recorded the result, ignoring exact string formatting
@@ -238,7 +259,8 @@
                      (let* ((tool-message
                              (cl-find-if (lambda (message)
                                            (eq (plist-get message :role) 'tool))
-                                         benedict-chat--messages))
+                                         (when benedict-chat--session
+                                           (benedict-session-messages benedict-chat--session))))
                             (content (and tool-message (plist-get tool-message :content)))
                             (metadata (and tool-message (plist-get tool-message :metadata)))
                             (request (benedict-chat--build-request))
@@ -300,7 +322,7 @@
     (should (equal unknown-name "Nonexistent"))))
 
 (ert-deftest-async benedict-chat-choose-provider-updates-state (done)
-  "Choosing a provider updates buffer state and telemetry."
+  "Choosing a provider updates buffer state and session provider."
   (benedict-test-with-bindings done
       ((benedict-provider 'fake)
        (benedict-chat-buffer-name " *Benedict Provider Choice*")
@@ -315,8 +337,9 @@
         (cl-letf (((symbol-function 'completing-read)
                    (lambda (&rest _) "OpenRouter")))
           (benedict-chat-choose-provider))
-        ;; Verify provider override is set
-        (should (eq benedict-chat--provider-override 'openrouter)))
+        ;; Verify provider override is set and session updated
+        (should (eq benedict-chat--provider-override 'openrouter))
+        (should (eq (benedict-session-provider benedict-chat--session) 'openrouter)))
       (when (buffer-live-p chat)
         (kill-buffer chat))
       (funcall done))))

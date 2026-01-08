@@ -313,6 +313,51 @@
       (benedict-session-destroy session)
       (should-not (benedict-session-get id)))))
 
+;;; Telemetry Accumulation Tests
+
+(ert-deftest benedict-session-test-accumulate-usage ()
+  "Usage accumulates across multiple calls."
+  (let ((benedict-session--registry (make-hash-table :test 'equal)))
+    (let ((session (benedict-session-create)))
+      (benedict-session-accumulate-usage session
+        '(:prompt-tokens 100 :completion-tokens 50 :total-tokens 150) 1.5)
+      (should (= 100 (plist-get (benedict-session-accumulated-usage session) :prompt)))
+      (should (= 50 (plist-get (benedict-session-accumulated-usage session) :completion)))
+      (should (= 150 (plist-get (benedict-session-accumulated-usage session) :total)))
+      (should (= 1.5 (benedict-session-accumulated-seconds session)))
+      ;; Second call accumulates
+      (benedict-session-accumulate-usage session
+        '(:prompt-tokens 200 :completion-tokens 100 :total-tokens 300) 2.0)
+      (should (= 300 (plist-get (benedict-session-accumulated-usage session) :prompt)))
+      (should (= 150 (plist-get (benedict-session-accumulated-usage session) :completion)))
+      (should (= 450 (plist-get (benedict-session-accumulated-usage session) :total)))
+      (should (= 3.5 (benedict-session-accumulated-seconds session))))))
+
+(ert-deftest benedict-session-test-accumulate-usage-with-cost ()
+  "Cost accumulates correctly."
+  (let ((benedict-session--registry (make-hash-table :test 'equal)))
+    (let ((session (benedict-session-create)))
+      (benedict-session-accumulate-usage session
+        '(:prompt-tokens 100 :completion-tokens 50 :total-tokens 150 :cost 0.01) 1.0)
+      (should (= 0.01 (plist-get (benedict-session-accumulated-usage session) :cost)))
+      (benedict-session-accumulate-usage session
+        '(:prompt-tokens 100 :completion-tokens 50 :total-tokens 150 :cost 0.02) 1.0)
+      (should (= 0.03 (plist-get (benedict-session-accumulated-usage session) :cost))))))
+
+(ert-deftest benedict-session-test-accumulate-usage-nil-safe ()
+  "Accumulation handles nil usage and elapsed gracefully."
+  (let ((benedict-session--registry (make-hash-table :test 'equal)))
+    (let ((session (benedict-session-create)))
+      ;; nil usage, non-nil elapsed
+      (benedict-session-accumulate-usage session nil 1.0)
+      (should (= 1.0 (benedict-session-accumulated-seconds session)))
+      (should-not (benedict-session-accumulated-usage session))
+      ;; non-nil usage, nil elapsed
+      (benedict-session-accumulate-usage session
+        '(:prompt-tokens 100 :completion-tokens 50 :total-tokens 150) nil)
+      (should (= 100 (plist-get (benedict-session-accumulated-usage session) :prompt)))
+      (should (= 1.0 (benedict-session-accumulated-seconds session))))))
+
 ;;; Property Tests
 
 (propcheck-deftest benedict-session-prop-ids-unique ()

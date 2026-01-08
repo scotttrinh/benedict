@@ -16,7 +16,13 @@
   messages (message-seq 0)
   (state 'idle) draft pending-question inflight last-error last-request
   root provider model profile meta
-  flywire-session attached-frontends)
+  flywire-session attached-frontends
+  ;; Telemetry fields
+  (accumulated-usage nil)    ; plist: :prompt :completion :total :cost
+  (accumulated-seconds 0.0)  ; float: total elapsed time
+  last-phase                 ; symbol: complete/error/canceled/idle
+  last-usage                 ; raw usage payload from last request
+  last-elapsed)              ; float: last request elapsed seconds
 
 ;;; Registry
 
@@ -207,6 +213,11 @@ Returns a unique request ID."
   "Cancel SESSION's active request, discard draft, set cancelled state.
 Returns t if there was something to cancel."
   (when (benedict-session-inflight session)
+    (when-let ((started (plist-get (benedict-session-inflight session) :started-at)))
+      (setf (benedict-session-last-phase session) 'canceled)
+      (setf (benedict-session-last-elapsed session)
+            (float-time (time-subtract (current-time) started)))
+      (setf (benedict-session-last-usage session) nil))
     (benedict-session-clear-request session)
     (benedict-session-discard-draft session)
     (benedict-session-set-state session 'cancelled)
@@ -215,6 +226,65 @@ Returns t if there was something to cancel."
 (defun benedict-session-request-active-p (session)
   "Return non-nil if SESSION has an active inflight request."
   (not (null (benedict-session-inflight session))))
+
+;;; Telemetry Accumulation
+
+(defun benedict-session--usage-value (usage key)
+  "Return value for KEY in USAGE plist or alist."
+  (when usage
+    (let* ((key-str (if (symbolp key) (symbol-name key) key))
+           (sym (intern key-str))
+           (kw (intern (concat ":" key-str))))
+      (cond
+       ((and (listp usage)
+             (consp (car usage))
+             (not (keywordp (caar usage))))
+        (or (cdr (assoc-string key-str usage))
+            (cdr (assq sym usage))
+            (cdr (assq kw usage))))
+       ((and (listp usage) (keywordp (car usage)))
+        (plist-get usage kw))
+       (t nil)))))
+
+(defun benedict-session--usage-number (usage key)
+  "Return numeric value for KEY in USAGE."
+  (when-let ((val (benedict-session--usage-value usage key)))
+    (if (stringp val) (string-to-number val) val)))
+
+(defun benedict-session--usage-cost-number (usage)
+  "Return numeric cost value from USAGE."
+  (or (benedict-session--usage-number usage "cost")
+      (benedict-session--usage-number usage "total_cost")
+      (benedict-session--usage-number usage "total-cost")))
+
+(defun benedict-session-accumulate-usage (session usage elapsed)
+  "Accumulate USAGE plist and ELAPSED seconds into SESSION totals.
+USAGE should have :prompt-tokens, :completion-tokens, :total-tokens, :cost.
+ELAPSED is seconds as a float."
+  (when usage
+    (let ((current (or (benedict-session-accumulated-usage session)
+                       '(:prompt 0 :completion 0 :total 0 :cost 0.0))))
+      (setf (benedict-session-accumulated-usage session)
+            (list :prompt (+ (or (plist-get current :prompt) 0)
+                             (or (benedict-session--usage-number usage "prompt_tokens")
+                                 (benedict-session--usage-number usage "prompt-tokens")
+                                 (benedict-session--usage-number usage "prompt")
+                                 0))
+                  :completion (+ (or (plist-get current :completion) 0)
+                                 (or (benedict-session--usage-number usage "completion_tokens")
+                                     (benedict-session--usage-number usage "completion-tokens")
+                                     (benedict-session--usage-number usage "completion")
+                                     0))
+                  :total (+ (or (plist-get current :total) 0)
+                            (or (benedict-session--usage-number usage "total_tokens")
+                                (benedict-session--usage-number usage "total-tokens")
+                                (benedict-session--usage-number usage "tokens")
+                                (benedict-session--usage-number usage "total")
+                                0))
+                  :cost (+ (or (plist-get current :cost) 0.0)
+                           (or (benedict-session--usage-cost-number usage) 0.0))))))
+  (when elapsed
+    (cl-incf (benedict-session-accumulated-seconds session) elapsed)))
 
 ;;; Frontend (buffer) Management
 

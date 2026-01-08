@@ -462,15 +462,14 @@ This only applies text properties; callers handle marker tracking."
   "Major mode for Benedict chat buffers."
   (benedict-chat--setup-common-buffer))
 
-(defvar-local benedict-chat--messages nil
-  "List of chat message plists (newest first).
-Each entry includes :role, :content, :time, optional :metadata, and UI state.")
+;; benedict-chat--messages has been removed - session is source of truth.
+;; Use (benedict-session-messages session) to read message history.
 
 (defvar-local benedict-chat--buffer nil
   "Stable reference to the chat buffer.")
 
-(defvar-local benedict-chat--pending-request nil
-  "Opaque handle representing an in-flight provider request.")
+;; benedict-chat--pending-request has been removed - use session inflight.
+;; Use (plist-get (benedict-session-inflight session) :request) for handle.
 
 (defvar-local benedict-chat--last-dispatch nil
   "Plist describing the most recent provider request (for retries).")
@@ -487,8 +486,9 @@ Each entry includes :role, :content, :time, optional :metadata, and UI state.")
 (defvar-local benedict-chat--streaming-message nil
   "Plist describing the in-progress streaming assistant message.")
 
-(defvar-local benedict-chat--active-request-id nil
-  "Identifier for the in-flight provider request, if any.")
+;; benedict-chat--active-request-id has been removed - use session inflight.
+;; Use (plist-get (benedict-session-inflight session) :request-id) or
+;; (benedict-chat--current-request-id) for the active request ID.
 
 (defvar-local benedict-chat--request-seq 0
   "Monotonic sequence used to tag provider requests.")
@@ -708,8 +708,8 @@ The agent frame provides isolation for flywire-backed tools."
 (defvar benedict-chat-model-history nil
   "Minibuffer history for `benedict-chat-choose-model'.")
 
-(defvar-local benedict-chat--telemetry nil
-  "Buffer-local telemetry for modeline/header-line status.")
+(defvar-local benedict-chat--status-spinner-index 0
+  "Spinner index for the status line animation.")
 
 (defvar-local benedict-chat--status-timer nil
   "Timer driving spinner/elapsed updates for the status line.")
@@ -748,6 +748,9 @@ When non-nil, this symbol takes precedence over profile :provider and global ben
 (defvar-local benedict-chat--session nil
   "Session object managing this chat buffer's conversation state.
 See `benedict-session' for the in-memory session data structure.")
+
+(defvar-local benedict-chat--session-subscription nil
+  "Function to call to unsubscribe from session events.")
 
 (defconst benedict-chat--compose-separator "----\n"
   "Separator line between compose header and body.")
@@ -803,7 +806,8 @@ Prompts the user to authorize extensions when limits are reached."
       ;; 3. Token Limit (Best effort based on session telemetry)
       (when (and continue
                  limit-tokens)
-        (let* ((usage (plist-get benedict-chat--telemetry :session-usage))
+        (let* ((usage (and benedict-chat--session
+                           (benedict-session-accumulated-usage benedict-chat--session)))
                (total (or (plist-get usage :total) 0)))
           (when (> total limit-tokens)
             (unless (y-or-n-p (format "Token limit (%d) exceeded (current: %d).  Continue? "
@@ -824,10 +828,12 @@ Prompts the user to authorize extensions when limits are reached."
 
 (defun benedict-chat--loop-step (assistant-message)
   "Decide whether to continue the autonomous loop after ASSISTANT-MESSAGE."
-  (let ((tool-calls (plist-get assistant-message :tool-calls)))
+  (let ((tool-calls (plist-get assistant-message :tool-calls))
+        (history (when benedict-chat--session
+                   (benedict-session-messages benedict-chat--session))))
     (when tool-calls
       ;; Check for repetition
-      (if (benedict-chat--check-repetition-guard tool-calls benedict-chat--messages)
+      (if (benedict-chat--check-repetition-guard tool-calls history)
           (message "Benedict: loop stopped (repetition detected)")
         ;; Check constraints
         (when (benedict-chat--check-loop-constraints)
@@ -1080,9 +1086,11 @@ Resolution order: buffer override → profile :provider → global `benedict-pro
       (let* ((provider (benedict-chat--resolve-provider profile))
              (model (benedict-chat--resolve-model
                      provider profile benedict-chat--compose-model-override)))
-        (benedict-chat--telemetry-update
-         :provider (benedict-chat--provider-label provider)
-         :model model))
+        (when benedict-chat--session
+          (setf (benedict-session-profile benedict-chat--session) profile)
+          (setf (benedict-session-provider benedict-chat--session) provider)
+          (setf (benedict-session-model benedict-chat--session) model)))
+      (benedict-chat--status-refresh)
       (benedict-chat--refresh-compose-header))
     (message "Benedict profile set to %s" (benedict-chat--profile-label profile))))
 
@@ -1110,9 +1118,10 @@ Resolution order: buffer override → profile :provider → global `benedict-pro
    (let* ((model (benedict-chat--resolve-model
                   provider (benedict-chat--effective-profile) 
                   benedict-chat--compose-model-override)))
-     (benedict-chat--telemetry-update
-      :provider (benedict-chat--provider-label provider)
-      :model model))
+     (when benedict-chat--session
+       (setf (benedict-session-provider benedict-chat--session) provider)
+       (setf (benedict-session-model benedict-chat--session) model)))
+   (benedict-chat--status-refresh)
    (benedict-chat--refresh-compose-header))
   (message "Benedict provider set to %s" (or (benedict-provider-display-name provider)
                                             (symbol-name provider)))))
@@ -1158,45 +1167,6 @@ Resolution order: buffer override → profile :provider → global `benedict-pro
         (and provider-id (format "%s" provider-id))
         "unknown provider")))
 
-(defun benedict-chat--telemetry-reset ()
-  "Initialize telemetry for the current chat buffer."
-  (let* ((profile (benedict-chat--effective-profile))
-         (provider (benedict-chat--resolve-provider profile)))
-    (setq benedict-chat--telemetry
-          (list :phase 'idle
-                :provider (benedict-chat--provider-label provider)
-                :model (benedict-chat--resolve-model
-                        provider profile benedict-chat--compose-model-override)
-                :started-at nil
-                :last-phase nil
-                :last-usage nil
-                :last-elapsed nil
-                :session-usage nil
-                :session-seconds 0.0
-                :spinner-index 0))))
-
-(defun benedict-chat--telemetry-update (&rest pairs)
-  "Merge PAIRS into the buffer-local telemetry plist."
-  (while pairs
-    (let ((key (pop pairs))
-          (value (pop pairs)))
-      (setq benedict-chat--telemetry
-            (plist-put benedict-chat--telemetry key value)))))
-
-(defun benedict-chat--telemetry-apply-metadata (metadata)
-  "Update telemetry with METADATA such as provider/model/usage."
-  (let* ((provider (plist-get metadata :provider))
-         (provider-label (cond
-                          ((stringp provider) provider)
-                          (provider (benedict-chat--provider-label provider))
-                          (t nil)))
-         (model (plist-get metadata :model))
-         (usage (plist-get metadata :usage)))
-    (benedict-chat--telemetry-update
-     :provider (or provider-label (plist-get benedict-chat--telemetry :provider))
-     :model (or model (plist-get benedict-chat--telemetry :model))
-     :usage (or usage (plist-get benedict-chat--telemetry :usage)))))
-
 (defun benedict-chat--usage-number (usage key)
   "Return numeric value for KEY (string or symbol) in USAGE."
   (when-let ((val (benedict-chat--usage-value usage key)))
@@ -1207,84 +1177,43 @@ Resolution order: buffer override → profile :provider → global `benedict-pro
   (or (benedict-chat--usage-number usage "cost")
       (benedict-chat--usage-number usage "total_cost")))
 
-(defun benedict-chat--usage-accumulate (session usage)
-  "Return SESSION usage totals merged with USAGE numbers."
-  (let* ((prompt-old (or (plist-get session :prompt) 0))
-         (completion-old (or (plist-get session :completion) 0))
-         (total-old (or (plist-get session :total) 0))
-         (cost-old (or (plist-get session :cost) 0))
-         (prompt (or (benedict-chat--usage-number usage "prompt_tokens")
-                     (benedict-chat--usage-number usage "prompt")
-                     0))
-         (completion (or (benedict-chat--usage-number usage "completion_tokens")
-                         (benedict-chat--usage-number usage "completion")
-                         0))
-         (total (or (benedict-chat--usage-number usage "total_tokens")
-                    (benedict-chat--usage-number usage "tokens")
-                    (+ prompt completion)))
-         (cost (or (benedict-chat--usage-cost-number usage) 0)))
-    (list :prompt (+ prompt-old prompt)
-          :completion (+ completion-old completion)
-          :total (+ total-old total)
-          :cost (+ cost-old cost))))
+(defun benedict-chat--status-reset ()
+  "Reset status UI state for the current buffer."
+  (setq benedict-chat--status-spinner-index 0))
 
-(defun benedict-chat--telemetry-accumulate-session (usage)
-  "Merge USAGE into session totals."
-  (when usage
-    (let ((session (plist-get benedict-chat--telemetry :session-usage)))
-      (benedict-chat--telemetry-update
-       :session-usage (benedict-chat--usage-accumulate session usage)))))
+(defun benedict-chat--status-phase ()
+  "Return the current session phase for status display."
+  (let ((session benedict-chat--session))
+    (cond
+     ((null session) 'idle)
+     ((eq (benedict-session-state session) 'streaming) 'streaming)
+     ((eq (benedict-session-state session) 'error) 'error)
+     ((eq (benedict-session-state session) 'cancelled) 'canceled)
+     ((benedict-session-request-active-p session) 'sending)
+     (t 'idle))))
 
-(defun benedict-chat--telemetry-begin (request)
-  "Mark telemetry as sending REQUEST."
-  (benedict-chat--telemetry-update
-   :phase 'sending
-   :started-at (float-time)
-   :spinner-index 0
-   :usage nil)
-  (when-let* ((provider (plist-get request :provider)))
-    (benedict-chat--telemetry-update
-     :provider (benedict-chat--provider-label provider)))
-  (when-let ((model (plist-get request :model)))
-    (benedict-chat--telemetry-update :model model))
-  (benedict-chat--status-start-timer)
-  (benedict-chat--status-refresh))
+(defun benedict-chat--status-request-started-at ()
+  "Return the time value when the current request started, if any."
+  (when-let* ((session benedict-chat--session)
+              (inflight (benedict-session-inflight session)))
+    (plist-get inflight :started-at)))
 
-(defun benedict-chat--telemetry-streaming (payload)
-  "Mark telemetry as streaming using PAYLOAD metadata."
-  (benedict-chat--telemetry-apply-metadata payload)
-  (benedict-chat--telemetry-update :phase 'streaming)
-  (benedict-chat--status-start-timer)
-  (benedict-chat--status-refresh))
+(defun benedict-chat--status-request-started-at-float ()
+  "Return the current request start time as float seconds, if any."
+  (when-let ((started (benedict-chat--status-request-started-at)))
+    (if (numberp started) started (float-time started))))
 
-(defun benedict-chat--telemetry-finish (kind metadata)
-  "Mark telemetry as idle after KIND with METADATA.
-KIND is one of 'complete, 'error, or 'canceled."
-  (benedict-chat--telemetry-apply-metadata metadata)
-  (let* ((elapsed (or (benedict-chat--status-elapsed)
-                      (plist-get benedict-chat--telemetry :last-elapsed)))
-         (usage (or (plist-get metadata :usage)
-                    (plist-get benedict-chat--telemetry :usage))))
-    (benedict-chat--telemetry-accumulate-session usage)
-    (when (and (eq kind 'complete) elapsed)
-      (let* ((duration (or (plist-get metadata :latency) elapsed))
-             (current (or (plist-get benedict-chat--telemetry :session-seconds) 0.0)))
-        (benedict-chat--telemetry-update
-         :session-seconds (+ current duration))))
-    (benedict-chat--telemetry-update
-     :phase 'idle
-     :started-at nil
-     :usage nil
-     :spinner-index 0
-     :last-phase kind
-     :last-elapsed elapsed
-     :last-usage usage))
-  (benedict-chat--status-stop-timer)
-  (benedict-chat--status-refresh))
+(defun benedict-chat--status-elapsed ()
+  "Return elapsed seconds for the current session request."
+  (when-let ((started (benedict-chat--status-request-started-at)))
+    (if (numberp started)
+        (- (float-time) started)
+      (float-time (time-subtract (current-time) started)))))
 
 (defun benedict-chat--status-active-p ()
-  "Return non-nil when telemetry indicates an active provider call."
-  (memq (plist-get benedict-chat--telemetry :phase) '(sending streaming)))
+  "Return non-nil when session indicates an active provider call."
+  (let ((phase (benedict-chat--status-phase)))
+    (memq phase '(sending streaming))))
 
 (defun benedict-chat--status-stop-timer ()
   "Cancel the status timer if present."
@@ -1302,9 +1231,8 @@ KIND is one of 'complete, 'error, or 'canceled."
     (with-current-buffer buffer
       (if (benedict-chat--status-active-p)
           (progn
-            (let* ((index (or (plist-get benedict-chat--telemetry :spinner-index) 0))
-                   (next (1+ index)))
-              (benedict-chat--telemetry-update :spinner-index next))
+            (setq benedict-chat--status-spinner-index
+                  (1+ benedict-chat--status-spinner-index))
             (when-let* ((state benedict-chat--streaming-message)
                         (message (plist-get state :message))
                         (item (plist-get message :item)))
@@ -1317,12 +1245,6 @@ KIND is one of 'complete, 'error, or 'canceled."
   (unless (timerp benedict-chat--status-timer)
     (setq benedict-chat--status-timer
           (run-with-timer 0.2 0.2 #'benedict-chat--status-tick (current-buffer)))))
-
-(defun benedict-chat--status-elapsed ()
-  "Return elapsed seconds for the current telemetry."
-  (let ((started (plist-get benedict-chat--telemetry :started-at)))
-    (when started
-      (- (float-time) started))))
 
 (defun benedict-chat--status-usage-string (usage)
   "Format USAGE according to `benedict-chat-token-display', including cost."
@@ -1359,7 +1281,7 @@ KIND is one of 'complete, 'error, or 'canceled."
     ((or 'sending 'streaming)
      (let* ((frames benedict-chat--spinner-frames)
             (len (length frames))
-            (index (mod (or (plist-get benedict-chat--telemetry :spinner-index) 0) len)))
+            (index (mod (or benedict-chat--status-spinner-index 0) len)))
        (aref frames index)))
     ('complete "✔")
     ('error "✖")
@@ -1384,13 +1306,17 @@ KIND is one of 'complete, 'error, or 'canceled."
   "Return provider/model label for the status line.
 When CLICKABLE is non-nil, attach button properties that run
 `benedict-chat-choose-model'."
-  (let* ((provider (or (plist-get benedict-chat--telemetry :provider)
-                       (benedict-chat--provider-label
-                        (benedict-chat--resolve-provider))))
-         (model (plist-get benedict-chat--telemetry :model))
+  (let* ((session benedict-chat--session)
+         (provider (or (and session (benedict-session-provider session))
+                       (benedict-chat--resolve-provider)))
+         (model (or (and session (benedict-session-model session))
+                    (benedict-chat--resolve-model
+                     provider
+                     (benedict-chat--effective-profile)
+                     benedict-chat--compose-model-override)))
          (label (if model
-                    (format "%s:%s" provider model)
-                  (format "%s" provider))))
+                    (format "%s:%s" (benedict-chat--provider-label provider) model)
+                  (format "%s" (benedict-chat--provider-label provider)))))
     (if clickable
         (propertize label
                     'mouse-face 'mode-line-highlight
@@ -1408,13 +1334,14 @@ When CLICKABLE is non-nil, attach button properties that run
 When RICH is non-nil, include header-friendly hints.
 Handles errors related to killed buffers gracefully."
   (condition-case err
-      (let* ((phase (or (plist-get benedict-chat--telemetry :phase) 'idle))
-             (last-phase (plist-get benedict-chat--telemetry :last-phase))
+      (let* ((session benedict-chat--session)
+             (phase (benedict-chat--status-phase))
+             (last-phase (and session (benedict-session-last-phase session)))
              (active (memq phase '(sending streaming)))
              (elapsed (or (and active (benedict-chat--status-elapsed))
-                          (plist-get benedict-chat--telemetry :last-elapsed)))
-             (usage (plist-get benedict-chat--telemetry :session-usage))
-             (session-seconds (plist-get benedict-chat--telemetry :session-seconds))
+                          (and session (benedict-session-last-elapsed session))))
+             (usage (and session (benedict-session-accumulated-usage session)))
+             (session-seconds (and session (benedict-session-accumulated-seconds session)))
              (indicator (benedict-chat--status-indicator phase last-phase))
              (label (benedict-chat--status-phase-label phase))
              (provider (benedict-chat--status-provider-label rich))
@@ -1464,8 +1391,12 @@ Handles errors related to killed buffers gracefully."
     (with-current-buffer chat
       (setq benedict-chat--compose-model-override
             (unless (string-empty-p selection) selection))
-      (benedict-chat--telemetry-update
-       :model (benedict-chat--resolve-model provider profile benedict-chat--compose-model-override))
+      (when benedict-chat--session
+        (setf (benedict-session-provider benedict-chat--session) provider)
+        (setf (benedict-session-model benedict-chat--session)
+              (benedict-chat--resolve-model
+               provider profile benedict-chat--compose-model-override)))
+      (benedict-chat--status-refresh)
       (benedict-chat--refresh-compose-header))
     (if (string-empty-p selection)
         (message "Benedict: cleared compose model override")
@@ -1664,28 +1595,29 @@ Assistant messages are rendered as marker-backed items."
          (setq benedict-chat--has-rendered-block t)
          nil)))))
 
-(defun benedict-chat--history-store (message)
-  "Persist MESSAGE in buffer history without rendering."
-  (setq message (benedict-chat--ensure-message-kind message))
-  (push message benedict-chat--messages)
-  message)
+;; benedict-chat--history-store has been removed.
+;; Messages are added via (benedict-session-add-message session message).
 
 (defun benedict-chat--record-message (buffer message)
-  "Persist MESSAGE in BUFFER history and render it.
-The message is stored in the buffer-local history. For user messages, it is
-also added to the session. For assistant messages during streaming, the
-session message is created via draft finalization, not here."
+  "Persist MESSAGE in session and render it.
+For user messages, adds to session (observer renders via message-added event).
+For assistant messages during streaming, renders directly (streaming UI)."
   (with-current-buffer buffer
-    (setq message (benedict-chat--history-store message))
-    ;; For user messages, write to session immediately.
-    ;; For assistant messages during streaming, skip - the draft handles it.
-    (when benedict-chat--session
-      (let ((role (plist-get message :role))
-            (streaming-p (eq (benedict-session-state benedict-chat--session) 'streaming)))
-        (unless (and (memq role '(assistant Assistant))
-                     streaming-p)
-          (benedict-session-add-message benedict-chat--session message)))))
-  (benedict-chat--render-message buffer message)
+    (setq message (benedict-chat--ensure-message-kind message))
+    (let ((role (plist-get message :role))
+          (streaming-p (and benedict-chat--session
+                            (eq (benedict-session-state benedict-chat--session) 'streaming)))
+          (added-to-session nil))
+      ;; For user messages (and non-streaming assistant), add to session.
+      ;; The session-event observer will render them.
+      (when benedict-chat--session
+        (unless (and (memq role '(assistant Assistant)) streaming-p)
+          (benedict-session-add-message benedict-chat--session message)
+          (setq added-to-session t)))
+      ;; For streaming assistant messages, render directly here.
+      ;; These are not added to session (draft handles it).
+      (unless added-to-session
+        (benedict-chat--render-message buffer message))))
   message)
 
 (defun benedict-chat--thinking-header-text (item)
@@ -1747,8 +1679,9 @@ This does not affect provider message history."
       item)))
 
 (defun benedict-chat--message-history ()
-  "Return messages in chronological order."
-  (reverse benedict-chat--messages))
+  "Return message history for current buffer's session."
+  (when benedict-chat--session
+    (benedict-session-messages-chronological benedict-chat--session)))
 
 ;; Old rendering functions removed.
 
@@ -2197,9 +2130,7 @@ RAW, when non-nil, is attached for debugging/forwarding."
         (condition-case hist-err
             (let ((entry (benedict-chat--tool-result-history-entry
                           tool-id call text result-metadata raw)))
-              ;; Store in buffer-local history
-              (benedict-chat--history-store entry)
-              ;; Also record in session when present for session-authoritative state
+              ;; Record in session (observer will render via message-added event)
               (when-let ((session benedict-chat--session))
                 (benedict-session-add-message session entry)))
           (error
@@ -2242,21 +2173,24 @@ RAW, when non-nil, is attached for debugging/forwarding."
         (when keyword
           (setq plist (plist-put plist keyword (cdr pair))))))))
 
+(defun benedict-chat--current-request-id ()
+  "Return the current request ID from session, or request-seq as fallback."
+  (or (and benedict-chat--session
+           (plist-get (benedict-session-inflight benedict-chat--session) :request-id))
+      benedict-chat--request-seq
+      0))
+
 (defun benedict-chat--next-thinking-temp-id ()
   "Return a generated identifier for thinking blocks."
   (setq benedict-chat--thinking-temp-counter (1+ benedict-chat--thinking-temp-counter))
   (format "benedict-thinking-%s-%d"
-          (or benedict-chat--active-request-id
-              benedict-chat--request-seq
-              0)
+          (benedict-chat--current-request-id)
           benedict-chat--thinking-temp-counter))
 
 (defun benedict-chat--thinking-stream-id (&optional payload)
   "Return a stable identifier for streaming thinking PAYLOAD."
   (let ((request (or (plist-get payload :message-id)
-                     benedict-chat--active-request-id
-                     benedict-chat--request-seq
-                     0)))
+                     (benedict-chat--current-request-id))))
     (format "benedict-thinking-%s-stream" request)))
 
 (defun benedict-chat--register-thinking-item (id item)
@@ -2719,7 +2653,8 @@ Returns non-nil when an active streaming entry handled the error."
 
 (defun benedict-chat--ensure-not-busy ()
   "Signal an error when a provider request is already running."
-  (when benedict-chat--pending-request
+  (when (and benedict-chat--session
+             (benedict-session-request-active-p benedict-chat--session))
     (user-error "A provider request is already in flight")))
 
 (defun benedict-chat--metadata (&rest pairs)
@@ -2748,8 +2683,8 @@ Returns non-nil when an active streaming entry handled the error."
         ;; Insert header and register item in history (buffer-local only)
         (setq record (benedict-chat--record-message buffer record))
         (when-let ((item (plist-get record :item)))
-          (plist-put item :request-id benedict-chat--active-request-id)
-          (plist-put item :started-at (or (plist-get benedict-chat--telemetry :started-at)
+          (plist-put item :request-id (benedict-chat--current-request-id))
+          (plist-put item :started-at (or (benedict-chat--status-request-started-at-float)
                                           (float-time)))
           (benedict-chat--refresh-message-header item)
           (benedict-chat--stream-init buffer item))
@@ -2762,7 +2697,6 @@ Returns non-nil when an active streaming entry handled the error."
 (defun benedict-chat--handle-provider-delta (buffer payload)
   "Handle structured PAYLOAD update from the provider in BUFFER."
   (with-current-buffer buffer
-    (benedict-chat--telemetry-streaming payload)
     (when-let* ((state benedict-chat--streaming-message)
                 (message (plist-get state :message)))
       (let* ((current (plist-get message :metadata))
@@ -2832,14 +2766,9 @@ Returns non-nil when an active streaming entry handled the error."
                                 (benedict-chat--empty-response-text thinking)
                               content)))
 
-      (setq benedict-chat--pending-request nil)
-      (setq benedict-chat--active-request-id nil)
-      (benedict-chat--streaming-reset buffer)
-
-      (benedict-chat--telemetry-finish 'complete metadata)
-
       ;; Note: Session state is updated by headless handler, not here.
       ;; This handler only updates buffer UI.
+      (benedict-chat--streaming-reset buffer)
 
       (if streaming-msg
           ;; Path A: Update the existing streaming message
@@ -2900,8 +2829,6 @@ Returns non-nil when an active streaming entry handled the error."
 (defun benedict-chat--handle-provider-error (buffer payload)
   "Render PAYLOAD returned from provider failure in BUFFER."
   (with-current-buffer buffer
-    (setq benedict-chat--pending-request nil)
-    (setq benedict-chat--active-request-id nil)
     ;; Note: Session state is updated by headless handler, not here.
     ;; This handler only updates buffer UI.
     (let ((content (benedict-chat--format-error-content payload))
@@ -2913,7 +2840,6 @@ Returns non-nil when an active streaming entry handled the error."
                      :status (plist-get payload :status)
                      :code (plist-get payload :code)
                      :retryable (plist-get payload :retryable))))
-      (benedict-chat--telemetry-finish 'error metadata)
       (unless (benedict-chat--fail-streaming-message buffer content metadata)
         (benedict-chat--record-message
          buffer
@@ -2943,10 +2869,24 @@ Does not touch any buffer - only updates session state."
     (let* ((message (plist-get result :message))
            (content (or (plist-get message :content) ""))
            (tool-calls (plist-get message :tool-calls))
+           (usage (plist-get result :usage))
            (metadata (list :provider (plist-get result :provider)
                            :model (plist-get result :model)
                            :latency (plist-get result :latency)
-                           :usage (plist-get result :usage))))
+                           :usage usage)))
+      (when-let ((provider (plist-get result :provider)))
+        (setf (benedict-session-provider session) provider))
+      (when-let ((model (plist-get result :model)))
+        (setf (benedict-session-model session) model))
+      ;; Accumulate usage telemetry to session before clearing request
+      (when-let* ((inflight (benedict-session-inflight session))
+                  (started (plist-get inflight :started-at)))
+        (let* ((elapsed (float-time (time-subtract (current-time) started)))
+               (duration (or (plist-get result :latency) elapsed)))
+          (setf (benedict-session-last-phase session) 'complete)
+          (setf (benedict-session-last-elapsed session) elapsed)
+          (setf (benedict-session-last-usage session) usage)
+          (benedict-session-accumulate-usage session usage duration)))
       ;; Clear request state
       (benedict-session-clear-request session)
       ;; Check if draft has actual content (was streaming) or is empty (non-streaming)
@@ -2970,6 +2910,14 @@ Does not touch any buffer - only updates session state."
   "Update SESSION state on error (headless).
 Does not touch any buffer - only updates session state."
   (when session
+    (when-let ((provider (plist-get payload :provider)))
+      (setf (benedict-session-provider session) provider))
+    (when-let* ((inflight (benedict-session-inflight session))
+                (started (plist-get inflight :started-at)))
+      (setf (benedict-session-last-phase session) 'error)
+      (setf (benedict-session-last-elapsed session)
+            (float-time (time-subtract (current-time) started)))
+      (setf (benedict-session-last-usage session) nil))
     (benedict-session-clear-request session)
     (benedict-session-discard-draft session)
     (setf (benedict-session-last-error session) payload)
@@ -2984,53 +2932,60 @@ RETRY notes when replaying."
     (let* ((provider-id (or (plist-get request :provider) benedict-provider))
            (provider-label (benedict-chat--provider-label provider-id)))
       (setq benedict-chat--request-seq (1+ benedict-chat--request-seq))
-      (setq benedict-chat--active-request-id benedict-chat--request-seq)
       (setq benedict-chat--thinking-temp-counter 0)
       (benedict-chat--streaming-reset buffer)
-      (benedict-chat--telemetry-begin request)
+      (benedict-chat--status-reset)
+      (benedict-chat--status-start-timer)
+      (benedict-chat--status-refresh)
       (setq benedict-chat--last-dispatch
             (list :request request :timestamp (current-time) :retry retry))
-      ;; Track request in session (placeholder handle until we get the real one)
       ;; Capture session reference for headless operation (callbacks need it even after buffer dies)
       (let ((session benedict-chat--session))
         (when session
-          (benedict-session-start-request session 'pending)
-          ;; Start draft immediately so session is in streaming state
-          ;; even if buffer dies before any deltas arrive
-          (benedict-session-start-draft session))
+          (setf (benedict-session-provider session) provider-id)
+          (setf (benedict-session-model session) (plist-get request :model))
+          (when-let ((profile (plist-get request :profile)))
+            (setf (benedict-session-profile session) profile)))
         (message "Benedict: contacting %s%s..."
                  provider-label (if retry " (retry)" ""))
         (condition-case err
-            (let ((benedict-provider provider-id))
-              (setq benedict-chat--pending-request
-                    (benedict-provider-dispatch
-                     request
-                     :on-success (lambda (result)
-                                   ;; Update session state even if buffer is dead
-                                   (benedict-chat--handle-provider-success-headless session result)
-                                   ;; Update buffer UI only if alive
-                                   (when (buffer-live-p buffer)
-                                     (benedict-chat--handle-provider-success buffer result)))
-                     :on-error (lambda (payload)
-                                 ;; Update session state even if buffer is dead
-                                 (benedict-chat--handle-provider-error-headless session payload)
-                                 ;; Update buffer UI only if alive
-                                 (when (buffer-live-p buffer)
-                                   (benedict-chat--handle-provider-error buffer payload)))
-                     :on-delta (lambda (&rest payload)
-                                 ;; Unwrap payload if needed
-                                 (let ((data (if (and (listp payload)
-                                                      (not (keywordp (car payload)))
-                                                      (listp (car payload)))
-                                                 (car payload)
-                                               payload)))
-                                   ;; Update session draft even if buffer is dead
-                                   (benedict-chat--handle-provider-delta-headless session data)
-                                   ;; Update buffer UI only if alive
-                                   (when (buffer-live-p buffer)
-                                     (benedict-chat--handle-provider-delta buffer data)))))))
+              (let* ((benedict-provider provider-id)
+                   (handle (benedict-provider-dispatch
+                            request
+                            :on-success (lambda (result)
+                                          ;; Update session state even if buffer is dead
+                                          (benedict-chat--handle-provider-success-headless session result)
+                                          ;; Update buffer UI only if alive
+                                          (when (buffer-live-p buffer)
+                                            (benedict-chat--handle-provider-success buffer result)))
+                            :on-error (lambda (payload)
+                                        ;; Update session state even if buffer is dead
+                                        (benedict-chat--handle-provider-error-headless session payload)
+                                        ;; Update buffer UI only if alive
+                                        (when (buffer-live-p buffer)
+                                          (benedict-chat--handle-provider-error buffer payload)))
+                            :on-delta (lambda (&rest payload)
+                                        ;; Unwrap payload if needed
+                                        (let ((data (if (and (listp payload)
+                                                             (not (keywordp (car payload)))
+                                                             (listp (car payload)))
+                                                        (car payload)
+                                                      payload)))
+                                          ;; Update session draft even if buffer is dead
+                                          (benedict-chat--handle-provider-delta-headless session data)
+                                          ;; Update buffer UI only if alive
+                                          (when (buffer-live-p buffer)
+                                            (benedict-chat--handle-provider-delta buffer data)))))))
+                ;; Track request in session with actual handle
+              (when session
+                (let ((request-id (benedict-session-start-request session handle)))
+                  (when (and request-id benedict-chat--last-dispatch)
+                    (setq benedict-chat--last-dispatch
+                          (plist-put benedict-chat--last-dispatch :request-id request-id))))
+                ;; Start draft immediately so session is in streaming state
+                ;; even if buffer dies before any deltas arrive
+                (benedict-session-start-draft session)))
           (error
-           (setq benedict-chat--pending-request nil)
            (let ((payload (list :message (error-message-string err)
                                 :type 'dispatch
                                 :provider benedict-provider
@@ -3310,9 +3265,10 @@ Returns a plist (:slice :replacing) where :slice carries the final handle."
                  provider
                  (benedict-chat--effective-profile)
                  benedict-chat--compose-model-override)))
-    (benedict-chat--telemetry-update
-     :provider (benedict-chat--provider-label provider)
-     :model model)))
+    (when benedict-chat--session
+      (setf (benedict-session-provider benedict-chat--session) provider)
+      (setf (benedict-session-model benedict-chat--session) model)))
+  (benedict-chat--status-refresh))
 
 (defun benedict-chat-compose-send ()
   "Send the composed prompt to the associated chat buffer."
@@ -3555,14 +3511,15 @@ Returns a plist (:slice :replacing) where :slice carries the final handle."
     (user-error "No Git context available here")))
 
 (defun benedict-chat--find-last-assistant (&optional include-errors)
-  "Return the most recent assistant message.
+  "Return the most recent assistant message from session.
 When INCLUDE-ERRORS is nil, skip entries flagged with :error metadata."
-  (cl-find-if
-   (lambda (message)
-     (and (eq (benedict-chat--normalize-role (plist-get message :role)) 'assistant)
-          (or include-errors
-              (not (plist-get (plist-get message :metadata) :error)))))
-   benedict-chat--messages))
+  (when benedict-chat--session
+    (cl-find-if
+     (lambda (message)
+       (and (eq (benedict-chat--normalize-role (plist-get message :role)) 'assistant)
+            (or include-errors
+                (not (plist-get (plist-get message :metadata) :error)))))
+     (benedict-session-messages benedict-chat--session))))
 
 (defun benedict-chat--ensure-chat-buffer ()
   "Return the active Benedict chat buffer, creating one if needed."
@@ -3866,31 +3823,185 @@ thinking blocks nested under that assistant section."
   (interactive)
   (benedict-chat--status-stop-timer)
   (setq benedict-chat--loop-canceled t)
-  (when benedict-chat--pending-request
-    (benedict-provider-abort benedict-chat--pending-request)
-    (setq benedict-chat--pending-request nil))
+  (when (and benedict-chat--session
+             (benedict-session-request-active-p benedict-chat--session))
+    (let ((handle (plist-get (benedict-session-inflight benedict-chat--session) :request)))
+      (when handle
+        (benedict-provider-abort handle)))
+    (benedict-session-cancel benedict-chat--session))
   (message "Benedict: loop/request canceled by user"))
 
 ;; benedict-chat-mode is now defined in benedict-chat-mode.el
+
+;;; Session Event Subscription
+
+(defun benedict-chat--subscribe-to-session (session)
+  "Subscribe current buffer to SESSION events.
+Returns a function suitable for adding to `benedict-session-event-hook'."
+  (let ((buffer (current-buffer)))
+    (lambda (sess event-type payload)
+      (when (and (eq sess session)
+                 (buffer-live-p buffer))
+        (with-current-buffer buffer
+          (benedict-chat--handle-session-event event-type payload))))))
+
+(defun benedict-chat--unsubscribe-from-session ()
+  "Unsubscribe current buffer from session events."
+  (when benedict-chat--session-subscription
+    (remove-hook 'benedict-session-event-hook
+                 benedict-chat--session-subscription)
+    (setq benedict-chat--session-subscription nil)))
+
+(defun benedict-chat--handle-session-event (event-type payload)
+  "Dispatch session EVENT-TYPE with PAYLOAD to appropriate handler."
+  (pcase event-type
+    ('state-changed
+     (benedict-chat--observe-state-changed
+      (plist-get payload :old) (plist-get payload :new)))
+    ('message-added
+     (benedict-chat--observe-message-added (plist-get payload :message)))
+    ('draft-started
+     (benedict-chat--observe-draft-started))
+    ('draft-updated
+     (benedict-chat--observe-draft-updated payload))
+    ('draft-finalized
+     (benedict-chat--observe-draft-finalized payload))
+    ('destroyed
+     (benedict-chat--observe-session-destroyed))))
+
+;; Observer functions (placeholders for Phase 3 implementation)
+
+(defun benedict-chat--dispatching-current-request-p (session)
+  "Return non-nil when current buffer initiated SESSION's active request."
+  (let ((inflight (and session (benedict-session-inflight session))))
+    (and inflight
+         benedict-chat--last-dispatch
+         (or (equal (plist-get inflight :request-id)
+                    (plist-get benedict-chat--last-dispatch :request-id))
+             (null (plist-get benedict-chat--last-dispatch :request-id))))))
+
+(defun benedict-chat--draft-payload (session)
+  "Return a payload plist for rendering SESSION's draft."
+  (list :provider (benedict-session-provider session)
+        :model (benedict-session-model session)))
+
+(defun benedict-chat--apply-draft-snapshot (session draft)
+  "Render DRAFT snapshot for SESSION into the current buffer."
+  (let ((payload (benedict-chat--draft-payload session)))
+    (benedict-chat--streaming-reset (current-buffer))
+    (benedict-chat--streaming-ensure-message (current-buffer) payload)
+    (let ((content (or (plist-get draft :content) "")))
+      (unless (string-empty-p content)
+        (benedict-chat--streaming-append-text (current-buffer) payload content)))))
+
+(defun benedict-chat--finalize-streaming-from-message (buffer message)
+  "Finalize streaming state in BUFFER using MESSAGE data."
+  (with-current-buffer buffer
+    (when-let ((state benedict-chat--streaming-message)
+               (record (plist-get state :message)))
+      (let* ((content (or (plist-get message :content) ""))
+             (display (or (plist-get message :display-content) content))
+             (metadata (plist-get message :metadata)))
+        (plist-put record :content content)
+        (plist-put record :display-content (plist-get message :display-content))
+        (plist-put record :metadata metadata)
+        (when (plist-member message :tool-calls)
+          (plist-put record :tool-calls (plist-get message :tool-calls)))
+        (when (plist-member message :time)
+          (plist-put record :time (plist-get message :time)))
+        (benedict-chat--replace-message-content buffer record display)
+        (when-let ((item (plist-get record :item)))
+          (plist-put item :metadata metadata)
+          (benedict-chat--refresh-message-header item)))
+      (benedict-chat--streaming-reset buffer))))
+
+(defun benedict-chat--observe-state-changed (old-state new-state)
+  "Handle session state transition from OLD-STATE to NEW-STATE."
+  (pcase new-state
+    ('idle
+     (when (eq old-state 'streaming)
+       ;; Request finished - telemetry accumulated by headless handler
+       )
+     (benedict-chat--status-reset)
+     (benedict-chat--status-stop-timer))
+    ('streaming
+     (benedict-chat--status-reset)
+     (benedict-chat--status-start-timer))
+    ('error
+     (benedict-chat--status-reset)
+     (benedict-chat--status-stop-timer))
+    ('cancelled
+     (benedict-chat--status-reset)
+     (benedict-chat--status-stop-timer)))
+  ;; Refresh header line
+  (force-mode-line-update))
+
+(defun benedict-chat--observe-message-added (message)
+  "Handle new MESSAGE added to session.
+Renders the message unless it's the finalization of a streaming response
+that was already rendered by the direct buffer handlers."
+  (let ((msg-role (plist-get message :role)))
+    (cond
+     ;; Skip if this buffer initiated the streaming request; direct handler
+     ;; already updates the streaming item in-place.
+     ((and (memq msg-role '(assistant Assistant))
+           (benedict-chat--dispatching-current-request-p benedict-chat--session))
+      nil)
+     ;; If we have a streaming placeholder, finalize it from the session message.
+     ((and (memq msg-role '(assistant Assistant))
+           benedict-chat--streaming-message)
+      (benedict-chat--finalize-streaming-from-message (current-buffer) message))
+     (t
+      (benedict-chat--render-message (current-buffer) message)))))
+
+(defun benedict-chat--observe-draft-started ()
+  "Handle streaming draft started."
+  (unless (benedict-chat--dispatching-current-request-p benedict-chat--session)
+    (when-let ((session benedict-chat--session)
+               (draft (benedict-session-draft session)))
+      (benedict-chat--apply-draft-snapshot session draft))))
+
+(defun benedict-chat--observe-draft-updated (payload)
+  "Handle draft update with PAYLOAD (:delta or :tool-call)."
+  (unless (benedict-chat--dispatching-current-request-p benedict-chat--session)
+    (when-let ((session benedict-chat--session))
+      (when-let ((delta (plist-get payload :delta)))
+        (let ((stream-payload (benedict-chat--draft-payload session)))
+          (benedict-chat--streaming-ensure-message (current-buffer) stream-payload)
+          (benedict-chat--streaming-append-text (current-buffer) stream-payload delta)))
+      (when (plist-get payload :tool-call)
+        ;; Tool-call streaming UI is handled on finalization.
+        nil))))
+
+(defun benedict-chat--observe-draft-finalized (payload)
+  "Handle draft finalized (PAYLOAD may have :discarded t)."
+  (unless (benedict-chat--dispatching-current-request-p benedict-chat--session)
+    (when (plist-get payload :discarded)
+      (benedict-chat--streaming-reset (current-buffer)))))
+
+(defun benedict-chat--observe-session-destroyed ()
+  "Handle session destruction.
+When the session is destroyed, the buffer becomes orphaned."
+  ;; For now, just detach the session reference.
+  ;; The buffer remains open but can no longer interact with the session.
+  (setq benedict-chat--session nil))
 
 (defun benedict-chat--detach-session ()
   "Detach the current buffer from its session.
 The session persists independently and can be reattached later."
   (when benedict-chat--session
+    (benedict-chat--unsubscribe-from-session)
     (benedict-session--remove-frontend benedict-chat--session (current-buffer))))
 
 (defun benedict-chat--init-buffer ()
   "Initialize buffer-local state for Benedict chat."
   (setq-local benedict-chat--buffer (current-buffer))
-  (setq-local benedict-chat--messages nil)
   (setq-local benedict-chat--items nil)
   (setq-local benedict-chat--item-counter 0)
   (setq-local benedict-chat--has-rendered-block nil)
   (setq-local benedict-chat--thinking-items (make-hash-table :test 'equal))
-  (setq-local benedict-chat--active-request-id nil)
   (setq-local benedict-chat--request-seq 0)
   (setq-local benedict-chat--thinking-temp-counter 0)
-  (setq-local benedict-chat--pending-request nil)
   (setq-local benedict-chat--last-dispatch nil)
   (setq-local benedict-chat--context-slices nil)
   (setq-local benedict-chat--compose-buffer nil)
@@ -3902,16 +4013,29 @@ The session persists independently and can be reattached later."
   (setq-local benedict-chat--flywire-event-unsubscribe nil)
   (setq-local benedict-chat-profile (or benedict-chat-profile
                                         (benedict-chat--default-profile)))
-  ;; Create and attach session
-  (setq-local benedict-chat--session
-              (benedict-session-create
-               :title (buffer-name)
-               :profile benedict-chat-profile
-               :root (when (project-current) (project-root (project-current)))))
+  (let* ((profile benedict-chat-profile)
+         (provider (benedict-chat--resolve-provider profile))
+         (model (benedict-chat--resolve-model
+                 provider profile benedict-chat--compose-model-override)))
+    ;; Create and attach session
+    (setq-local benedict-chat--session
+                (benedict-session-create
+                 :title (buffer-name)
+                 :profile profile
+                 :provider provider
+                 :model model
+                 :root (when (project-current)
+                         (project-root (project-current)))))
+    )
   (benedict-session--add-frontend benedict-chat--session (current-buffer))
+  ;; Subscribe to session events
+  (setq-local benedict-chat--session-subscription
+              (benedict-chat--subscribe-to-session benedict-chat--session))
+  (add-hook 'benedict-session-event-hook
+            benedict-chat--session-subscription)
   (setq-local header-line-format '(:eval (benedict-chat--header-line-status)))
   (visual-line-mode 1)
-  (benedict-chat--telemetry-reset)
+  (benedict-chat--status-reset)
   (add-hook 'kill-buffer-hook #'benedict-chat--status-stop-timer nil t)
   (add-hook 'kill-buffer-hook #'benedict-chat--flywire-teardown-session nil t)
   (add-hook 'kill-buffer-hook #'benedict-chat--detach-session nil t)
@@ -3977,21 +4101,61 @@ Buffers are keyed by session ID in the buffer name."
         (with-current-buffer buf
           (when (bound-and-true-p benedict-chat--session)
             ;; A session was created by init-buffer, remove it
+            ;; First unsubscribe from old session's events
+            (benedict-chat--unsubscribe-from-session)
             (benedict-session-destroy benedict-chat--session))
           (setq-local benedict-chat--session session)
           (benedict-session--add-frontend session (current-buffer))
-          (benedict-chat--render-session-history session))
+          ;; Subscribe to the correct session's events
+          (setq-local benedict-chat--session-subscription
+                      (benedict-chat--subscribe-to-session session))
+          (add-hook 'benedict-session-event-hook
+                    benedict-chat--session-subscription)
+          (benedict-chat--sync-from-session session))
         buf))))
+
+(defun benedict-chat--sync-from-session (session)
+  "Synchronize buffer state from SESSION.
+Renders messages and current streaming draft."
+  (when (benedict-session-p session)
+    (let ((inhibit-read-only t))
+      (erase-buffer)
+      (setq benedict-chat--items nil
+            benedict-chat--item-counter 0
+            benedict-chat--has-rendered-block nil
+            benedict-chat--thinking-items (make-hash-table :test 'equal)
+            benedict-chat--conversation-section nil
+            benedict-chat--current-turn-section nil
+            magit-root-section nil)
+      (benedict-chat--status-reset)
+      (benedict-chat--streaming-reset (current-buffer))
+      (insert (propertize
+               (format "Benedict Chat — provider: %s\n"
+                       (benedict-chat--provider-label
+                        (or (benedict-session-provider session)
+                            (benedict-chat--resolve-provider))))
+               'face 'benedict-chat-system
+               'benedict-region-kind 'system))
+      (insert (propertize
+               "Commands: C-c C-s send · g r retry-last · w copy-last · benedict-chat-ask-{region,defun,buffer,project,git-context} open compose (C-c C-c to send)\n"
+               'face 'benedict-chat-system
+               'benedict-region-kind 'system))
+      (insert "\n")
+      (benedict-chat--ensure-conversation-root)
+      (dolist (msg (benedict-session-messages-chronological session))
+        (benedict-chat--render-message (current-buffer) msg))
+      (when (eq (benedict-session-state session) 'streaming)
+        (when-let ((draft (benedict-session-draft session)))
+          (benedict-chat--apply-draft-snapshot session draft)))
+      (if (eq (benedict-session-state session) 'streaming)
+          (benedict-chat--status-start-timer)
+        (benedict-chat--status-stop-timer))
+      (goto-char (point-max)))))
 
 (defun benedict-chat--render-session-history (session)
   "Render SESSION's message history into current buffer.
 Assumes buffer is already in benedict-chat-mode with session attached."
-  (when (benedict-session-p session)
-    (dolist (msg (benedict-session-messages-chronological session))
-      (benedict-chat--record-message (current-buffer) msg)))
-  ;; Render all messages to buffer
-  (dolist (msg (reverse benedict-chat--messages))
-    (benedict-chat--render-message (current-buffer) msg)))
+  (benedict-chat--sync-from-session session))
 
 ;;;###autoload
 (defun benedict-chat (&optional prefix)
