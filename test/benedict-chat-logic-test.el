@@ -240,7 +240,6 @@
                                             :name 'demo-tool
                                             :arguments '(:foo "bar"))))))
        ((symbol-function benedict--prompt-for-approval) (lambda (&rest _args) t))
-       ((symbol-function benedict-chat--loop-step) (lambda (&rest _args) nil))
        ((symbol-function benedict-tool-invoke)
         (lambda (&rest _args)
           (signal 'wrong-type-argument (list 'stringp 123)))))

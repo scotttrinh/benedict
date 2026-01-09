@@ -712,7 +712,7 @@ Move the autonomous agent loop from chat to session.
 - Initialize with sensible defaults
 
 **Success Criteria**:
-- [ ] `nix run .#test -- test/benedict-session-test.el` passes
+- [x] `nix run .#test -- test/benedict-session-test.el` passes
 
 ### Phase 3.2: Add Loop Constraint Checking
 
@@ -785,7 +785,7 @@ Move the autonomous agent loop from chat to session.
 - Include all relevant info in event payload
 
 **Success Criteria**:
-- [ ] `nix run .#test -- test/benedict-session-test.el` passes
+- [x] `nix run .#test -- test/benedict-session-test.el` passes
 
 ### Phase 3.3: Add Loop Step and Run Functions
 
@@ -881,7 +881,7 @@ CONFIG is loop config plist (:max-turns :max-time :max-tokens)."
 - `dispatch-needed` event bridges to chat until Phase 4
 
 **Success Criteria**:
-- [ ] `nix run .#test -- test/benedict-session-test.el` passes
+- [x] `nix run .#test -- test/benedict-session-test.el` passes
 
 ### Phase 3.4: Add Loop Tests
 
@@ -942,7 +942,7 @@ CONFIG is loop config plist (:max-turns :max-time :max-tokens)."
 ```
 
 **Success Criteria**:
-- [ ] `nix run .#test -- test/benedict-session-test.el` passes with loop tests
+- [x] `nix run .#test -- test/benedict-session-test.el` passes with loop tests
 
 ### Phase 3.5: Delete Loop Functions from Chat, Add Event Handlers
 
@@ -982,8 +982,8 @@ CONFIG is loop config plist (:max-turns :max-time :max-tokens)."
 - No loop state in chat module
 
 **Success Criteria**:
-- [ ] `nix run .#test -- test/benedict-session-test.el` passes (loop tests)
-- [ ] `grep -r "loop-step\|check-loop-constraints\|check-repetition-guard" benedict-chat.el` returns nothing
+- [x] `nix run .#test -- test/benedict-session-test.el` passes (loop tests)
+- [x] `grep -r "loop-step\|check-loop-constraints\|check-repetition-guard" benedict-chat.el` returns nothing
 
 ---
 

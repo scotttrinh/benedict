@@ -22,7 +22,11 @@
   (accumulated-seconds 0.0)  ; float: total elapsed time
   last-phase                 ; symbol: complete/error/canceled/idle
   last-usage                 ; raw usage payload from last request
-  last-elapsed)              ; float: last request elapsed seconds
+  last-elapsed               ; float: last request elapsed seconds
+  ;; Loop state
+  (loop-turn-count 0)
+  loop-start-time
+  loop-config)               ; plist: :max-turns :max-time :max-tokens
 
 ;;; Registry
 
@@ -440,6 +444,132 @@ Returns list of result plists."
         (benedict-session-add-message session message)
         (push result results)))
     (nreverse results)))
+
+;;; Loop Management
+
+(defvar benedict-session-checkpoint-handler nil
+  "Function called when checkpoint is requested.
+Called as (funcall fn SESSION REASON).
+Should return non-nil to continue, nil to stop.
+If nil, loop waits for `benedict-session-continue' call.")
+
+(defun benedict-session--check-repetition (session tool-calls)
+  "Return non-nil if TOOL-CALLS match previous assistant message."
+  (let* ((messages (benedict-session-messages session))
+         (assistants (cl-remove-if-not
+                      (lambda (m) (eq (plist-get m :role) 'assistant))
+                      messages))
+         (previous (cadr assistants)))
+    (when previous
+      (equal tool-calls (plist-get previous :tool-calls)))))
+
+(defun benedict-session--check-turn-limit (session)
+  "Return non-nil if turn limit reached. Emits checkpoint-requested if so."
+  (let* ((config (benedict-session-loop-config session))
+         (limit (plist-get config :max-turns))
+         (count (benedict-session-loop-turn-count session)))
+    (when (and limit (> count 0) (= 0 (mod count limit)))
+      (benedict-session--emit session 'checkpoint-requested
+                              :reason 'turn-limit
+                              :turn-count count
+                              :limit limit)
+      t)))
+
+(defun benedict-session--check-time-limit (session)
+  "Return non-nil if time limit reached. Emits checkpoint-requested if so."
+  (let* ((config (benedict-session-loop-config session))
+         (limit (plist-get config :max-time))
+         (start (benedict-session-loop-start-time session)))
+    (when (and limit start)
+      (let ((elapsed (float-time (time-subtract (current-time) start))))
+        (when (> elapsed limit)
+          (benedict-session--emit session 'checkpoint-requested
+                                  :reason 'time-limit
+                                  :elapsed elapsed
+                                  :limit limit)
+          t)))))
+
+(defun benedict-session--check-token-limit (session)
+  "Return non-nil if token limit reached. Emits checkpoint-requested if so."
+  (let* ((config (benedict-session-loop-config session))
+         (limit (plist-get config :max-tokens))
+         (usage (benedict-session-accumulated-usage session))
+         (total (or (plist-get usage :total) 0)))
+    (when (and limit (> total limit))
+      (benedict-session--emit session 'checkpoint-requested
+                              :reason 'token-limit
+                              :total-tokens total
+                              :limit limit)
+      t)))
+
+(defun benedict-session--check-constraints (session)
+  "Check all loop constraints. Returns non-nil if any limit reached."
+  (or (benedict-session--check-turn-limit session)
+      (benedict-session--check-time-limit session)
+      (benedict-session--check-token-limit session)))
+
+(defun benedict-session--should-continue (session assistant-message)
+  "Decide whether loop should continue after ASSISTANT-MESSAGE.
+Returns: 'continue, 'stop, or 'checkpoint."
+  (let ((tool-calls (plist-get assistant-message :tool-calls)))
+    (cond
+     ((not tool-calls) 'stop)
+     ((benedict-session--check-repetition session tool-calls)
+      (benedict-session--emit session 'loop-stopped :reason 'repetition)
+      'stop)
+     ((benedict-session--check-constraints session) 'checkpoint)
+     (t 'continue))))
+
+(defun benedict-session--loop-step (session)
+  "Execute one step of the agent loop.
+Processes tool calls from last message, then dispatches if should continue."
+  (let* ((messages (benedict-session-messages session))
+         (last-msg (car messages))
+         (tool-calls (plist-get last-msg :tool-calls)))
+    (when tool-calls
+      (benedict-session--process-tool-calls session tool-calls)
+      (let ((decision (benedict-session--should-continue session last-msg)))
+        (pcase decision
+          ('continue
+           (cl-incf (benedict-session-loop-turn-count session))
+           (benedict-session--dispatch-next session))
+          ('checkpoint
+           (benedict-session-set-state session 'checkpoint))
+          ('stop
+           (benedict-session-set-state session 'idle)))))))
+
+(defun benedict-session--dispatch-next (session)
+  "Dispatch next request in the loop.
+Builds request from session state and dispatches."
+  (benedict-session--emit session 'dispatch-needed))
+
+(defun benedict-session-continue (session)
+  "Continue SESSION after a checkpoint.
+Resets time limit and continues the loop."
+  (when (eq (benedict-session-state session) 'checkpoint)
+    (setf (benedict-session-loop-start-time session) (current-time))
+    (benedict-session-set-state session 'running)
+    (benedict-session--dispatch-next session)))
+
+(defun benedict-session-stop (session)
+  "Stop SESSION's agent loop."
+  (benedict-session-set-state session 'idle)
+  (benedict-session--emit session 'loop-stopped :reason 'user-stopped))
+
+(cl-defun benedict-session-run (session &key request config)
+  "Start the agent loop for SESSION.
+REQUEST is the initial request plist.
+CONFIG is loop config plist (:max-turns :max-time :max-tokens)."
+  (when (benedict-session-busy-p session)
+    (error "Session is busy"))
+  (setf (benedict-session-loop-turn-count session) 0)
+  (setf (benedict-session-loop-start-time session) (current-time))
+  (when config
+    (setf (benedict-session-loop-config session) config))
+  (benedict-session-set-state session 'running)
+  (if request
+      (benedict-session-dispatch session request)
+    (benedict-session--dispatch-next session)))
 
 ;;; Telemetry Accumulation
 

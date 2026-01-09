@@ -374,7 +374,7 @@
        (benedict-provider-fake-latency-seconds 0.01)
        (benedict-provider-fake-streaming-chunk-delay 0.01)
        (benedict-provider-fake-script
-        (list
+       (list
          (list :type 'success
                :content "Final response"
                :chunks (list "Final " "response")
@@ -385,8 +385,7 @@
                                        :name 'demo-tool
                                        :arguments '(:foo "bar"))))))
        ((symbol-function benedict-tool-invoke)
-        (lambda (&rest _args) "Tool output"))
-       ((symbol-function benedict-chat--loop-step) (lambda (&rest _args) nil)))
+        (lambda (&rest _args) "Tool output")))
     (let ((buffer (generate-new-buffer "*Benedict Agent Ordering*")))
       (unwind-protect
           (with-current-buffer buffer

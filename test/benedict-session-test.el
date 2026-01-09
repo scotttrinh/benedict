@@ -428,6 +428,56 @@
           (should (eq 'assistant (plist-get (car history) :role)))
           (should (eq 'tool (plist-get (cadr history) :role))))))))
 
+;;; Loop Management Tests
+
+(ert-deftest benedict-session-test-check-repetition ()
+  "Repetition detection finds duplicate tool calls."
+  (let ((benedict-session--registry (make-hash-table :test 'equal)))
+    (let ((session (benedict-session-create)))
+      (benedict-session-add-message
+       session '(:role assistant :content "" :tool-calls [(:name foo)]))
+      (benedict-session-add-message
+       session '(:role tool :content "result"))
+      (benedict-session-add-message
+       session '(:role assistant :content "" :tool-calls [(:name foo)]))
+      (should (benedict-session--check-repetition session '[(:name foo)])))))
+
+(ert-deftest benedict-session-test-check-turn-limit ()
+  "Turn limit emits checkpoint event."
+  (let ((benedict-session--registry (make-hash-table :test 'equal))
+        (events nil))
+    (let ((session (benedict-session-create)))
+      (add-hook 'benedict-session-event-hook
+                (lambda (_s type payload) (push (cons type payload) events)))
+      (setf (benedict-session-loop-config session) '(:max-turns 5))
+      (setf (benedict-session-loop-turn-count session) 5)
+      (should (benedict-session--check-turn-limit session))
+      (should (cl-find 'checkpoint-requested events :key #'car)))))
+
+(ert-deftest benedict-session-test-continue-after-checkpoint ()
+  "Session can continue after checkpoint."
+  (let ((benedict-session--registry (make-hash-table :test 'equal))
+        (events nil))
+    (let ((session (benedict-session-create)))
+      (add-hook 'benedict-session-event-hook
+                (lambda (_s type payload) (push (cons type payload) events)))
+      (benedict-session-set-state session 'checkpoint)
+      (benedict-session-continue session)
+      (should (eq 'running (benedict-session-state session)))
+      (should (cl-find 'dispatch-needed events :key #'car)))))
+
+(ert-deftest benedict-session-test-stop-loop ()
+  "Session can be stopped."
+  (let ((benedict-session--registry (make-hash-table :test 'equal))
+        (events nil))
+    (let ((session (benedict-session-create)))
+      (add-hook 'benedict-session-event-hook
+                (lambda (_s type payload) (push (cons type payload) events)))
+      (benedict-session-set-state session 'running)
+      (benedict-session-stop session)
+      (should (eq 'idle (benedict-session-state session)))
+      (should (cl-find 'loop-stopped events :key #'car)))))
+
 ;;; Frontend Tests
 
 (ert-deftest benedict-session-test-add-frontend ()

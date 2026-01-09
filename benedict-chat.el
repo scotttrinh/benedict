@@ -727,15 +727,6 @@ The agent frame provides isolation for flywire-backed tools."
   "Buffer-local provider override for the current chat.
 When non-nil, this symbol takes precedence over profile :provider and global benedict-provider.")
 
-(defvar-local benedict-chat--loop-start-time nil
-  "Float time marking the start of the current autonomous loop.")
-
-(defvar-local benedict-chat--loop-turn-count 0
-  "Number of turns executed in the current autonomous loop.")
-
-(defvar-local benedict-chat--loop-canceled nil
-  "Non-nil when the user has requested the current loop to stop.")
-
 (defvar-local benedict-chat-profile nil
   "Active profile symbol for the current chat, controls prompt preamble.")
 
@@ -768,79 +759,6 @@ THINKING is non-nil when reasoning blocks accompanied the response."
   (if thinking
       benedict-chat--empty-response-thinking-placeholder
     benedict-chat--empty-response-placeholder))
-
-;; -------------------------------------------------------------------
-;; Loop Constraints and Safeguards
-
-(defun benedict-chat--check-loop-constraints ()
-  "Check loop safeguards (checkpoints, time, tokens).
-Returns t if the loop should continue, or nil if it should stop.
-Prompts the user to authorize extensions when limits are reached."
-  (if benedict-chat--loop-canceled
-      nil
-    (let ((continue t)
-          (limit-turns (benedict-chat--effective-limit :max-turns benedict-chat-loop-checkpoint-interval))
-          (limit-time (benedict-chat--effective-limit :max-time benedict-chat-loop-max-time))
-          (limit-tokens (benedict-chat--effective-limit :max-tokens benedict-chat-loop-max-tokens)))
-      ;; 1. Turn Checkpoint
-      (when (and limit-turns
-                 (> benedict-chat--loop-turn-count 0)
-                 (= 0 (mod benedict-chat--loop-turn-count
-                           limit-turns)))
-        (unless (y-or-n-p (format "Benedict has run %d autonomous steps.  Continue? "
-                                  benedict-chat--loop-turn-count))
-          (setq continue nil)))
-      
-      ;; 2. Time Limit
-      (when (and continue
-                 limit-time
-                 benedict-chat--loop-start-time
-                 (> (float-time (time-since benedict-chat--loop-start-time))
-                    limit-time))
-        (if (y-or-n-p (format "Time limit (%.1fs) reached.  Continue? "
-                              limit-time))
-            ;; Reset the timer to give another full window.
-            (setq benedict-chat--loop-start-time (float-time))
-          (setq continue nil)))
-      
-      ;; 3. Token Limit (Best effort based on session telemetry)
-      (when (and continue
-                 limit-tokens)
-        (let* ((usage (and benedict-chat--session
-                           (benedict-session-accumulated-usage benedict-chat--session)))
-               (total (or (plist-get usage :total) 0)))
-          (when (> total limit-tokens)
-            (unless (y-or-n-p (format "Token limit (%d) exceeded (current: %d).  Continue? "
-                                      limit-tokens total))
-              (setq continue nil)))))
-      
-      continue)))
-
-(defun benedict-chat--check-repetition-guard (current-tool-calls history)
-  "Return non-nil if CURRENT-TOOL-CALLS match the previous assistant message in HISTORY."
-  (let* ((assistants (cl-remove-if-not
-                      (lambda (m) (eq (benedict-chat--normalize-role (plist-get m :role)) 'assistant))
-                      history))
-         ;; assistants is (current prev ...) because we are called after recording
-         (previous (cadr assistants)))
-    (when previous
-      (equal current-tool-calls (plist-get previous :tool-calls)))))
-
-(defun benedict-chat--loop-step (assistant-message)
-  "Decide whether to continue the autonomous loop after ASSISTANT-MESSAGE."
-  (let ((tool-calls (plist-get assistant-message :tool-calls))
-        (history (when benedict-chat--session
-                   (benedict-session-messages benedict-chat--session))))
-    (when tool-calls
-      ;; Check for repetition
-      (if (benedict-chat--check-repetition-guard tool-calls history)
-          (message "Benedict: loop stopped (repetition detected)")
-        ;; Check constraints
-        (when (benedict-chat--check-loop-constraints)
-          (setq benedict-chat--loop-turn-count (1+ benedict-chat--loop-turn-count))
-          (benedict-chat--start-dispatch
-           (or benedict-chat--buffer (current-buffer))
-           (benedict-chat--build-request)))))))
 
 ;; -------------------------------------------------------------------
 ;; Flywire Session Management
@@ -2837,9 +2755,6 @@ TEXT is the prompt to dispatch.  BUFFER is the target chat buffer."
       (when (string-blank-p text)
         (user-error "Prompt is empty"))
       (benedict-chat--ensure-not-busy)
-      (setq benedict-chat--loop-start-time (float-time))
-      (setq benedict-chat--loop-turn-count 0)
-      (setq benedict-chat--loop-canceled nil)
       (benedict-chat--record-message
        chat
        (list :role 'user :content text :time (current-time)))
@@ -3650,13 +3565,16 @@ thinking blocks nested under that assistant section."
   "Cancel the current autonomous loop or in-flight request."
   (interactive)
   (benedict-chat--status-stop-timer)
-  (setq benedict-chat--loop-canceled t)
   (when (and benedict-chat--session
              (benedict-session-request-active-p benedict-chat--session))
     (let ((handle (plist-get (benedict-session-inflight benedict-chat--session) :request)))
       (when handle
         (benedict-provider-abort handle)))
     (benedict-session-cancel benedict-chat--session))
+  (when (and benedict-chat--session
+             (memq (benedict-session-state benedict-chat--session)
+                   '(running checkpoint)))
+    (benedict-session-stop benedict-chat--session))
   (message "Benedict: loop/request canceled by user"))
 
 ;; benedict-chat-mode is now defined in benedict-chat-mode.el
@@ -3694,6 +3612,23 @@ Returns a function suitable for adding to `benedict-session-event-hook'."
      (benedict-chat--observe-draft-updated payload))
     ('draft-finalized
      (benedict-chat--observe-draft-finalized payload))
+    ('checkpoint-requested
+     (when-let ((session benedict-chat--session))
+       (let* ((reason (plist-get payload :reason))
+              (prompt (pcase reason
+                        ('turn-limit
+                         (format "Benedict has run %d autonomous steps. Continue? "
+                                 (plist-get payload :turn-count)))
+                        ('time-limit
+                         (format "Time limit (%.1fs) reached. Continue? "
+                                 (plist-get payload :limit)))
+                        ('token-limit
+                         (format "Token limit (%d) exceeded. Continue? "
+                                 (plist-get payload :limit)))
+                        (_ "Continue autonomous loop? "))))
+         (if (y-or-n-p prompt)
+             (benedict-session-continue session)
+           (benedict-session-stop session)))))
     ('tool-started
      (when-let ((session benedict-chat--session)
                 (tool-call (plist-get payload :tool-call)))
@@ -3749,6 +3684,8 @@ Returns a function suitable for adding to `benedict-session-event-hook'."
                 (benedict-chat--tool-result-content normalized text))))))))
     ('request-completed
      (benedict-chat--observe-request-completed payload))
+    ('loop-stopped
+     (message "Benedict: loop stopped (%s)" (plist-get payload :reason)))
     ('destroyed
      (benedict-chat--observe-session-destroyed))))
 
@@ -3906,9 +3843,6 @@ The session persists independently and can be reattached later."
   (setq-local benedict-chat--context-slices nil)
   (setq-local benedict-chat--compose-buffer nil)
   (setq-local benedict-chat--provider-override nil)
-  (setq-local benedict-chat--loop-start-time nil)
-  (setq-local benedict-chat--loop-turn-count 0)
-  (setq-local benedict-chat--loop-canceled nil)
   (setq-local benedict-chat--flywire-session nil)
   (setq-local benedict-chat--flywire-event-unsubscribe nil)
   (setq-local benedict-chat-profile (or benedict-chat-profile
