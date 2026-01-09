@@ -436,7 +436,7 @@
       (let* ((root benedict-chat--conversation-section)
              (root-end (and root (ignore-errors (oref root end))))
              (after-first nil))
-        (should (benedict-chat--section-p root))
+        (should (benedict-chat-sections--section-p root))
         (should (markerp root-end))
         (let ((initial (marker-position root-end)))
           (benedict-chat--record-message

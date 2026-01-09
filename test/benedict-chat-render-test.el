@@ -112,9 +112,9 @@
           (setq-local magit-root-section nil)
           (let ((inhibit-read-only t))
             (erase-buffer)
-            (benedict-chat--ensure-conversation-root))
+            (benedict-chat-sections--ensure-root))
           ;; Use the section wrapper to create a magit-section for the tool
-          (benedict-chat--with-section item
+          (benedict-chat-sections--with item
             (benedict-chat--render-tool-item (current-buffer) item))
           (let ((section (plist-get item :section)))
             (should section)

@@ -1,0 +1,2 @@
+[2026-01-09 14:47] Phase 1: extracted section infrastructure into benedict-chat-sections.el, updated benedict-chat.el/benedict-chat-render.el requires and declarations. nix run .#test passes; emacs --batch -l benedict-chat-sections.el and -l benedict-chat.el fail locally due to missing magit-section in bare Emacs.
+[2026-01-09 14:50] Renamed section helpers to module-prefixed benedict-chat-sections--* and updated call sites/tests. Updated benedict-chat-sections.el internal helpers and restored benedict-chat--current-turn-section usage. Ran nix run .#test (pass).

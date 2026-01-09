@@ -13,9 +13,10 @@
 (require 'subr-x)
 (require 'json)
 (require 'benedict)
+(require 'benedict-chat-sections)
 
 (declare-function benedict-chat--badge "benedict-chat")
-(declare-function benedict-chat--set-section-folded "benedict-chat")
+(declare-function benedict-chat-sections--set-folded "benedict-chat-sections")
 
 (defvar benedict-chat-tool-toggle-map
    (let ((map (make-sparse-keymap)))
@@ -543,7 +544,7 @@ Guards against operations on killed buffers."
 (defun benedict-chat--update-tool-visibility (item)
   "Update body visibility for ITEM using magit-section."
   (when-let ((section (plist-get item :section)))
-    (benedict-chat--set-section-folded section (plist-get item :tool-folded))))
+    (benedict-chat-sections--set-folded section (plist-get item :tool-folded))))
 
 (defun benedict-chat--write-message-item-content (item content)
   "Replace ITEM's content region with CONTENT.
