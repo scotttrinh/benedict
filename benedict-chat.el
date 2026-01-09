@@ -2757,8 +2757,7 @@ Returns non-nil when an active streaming entry handled the error."
   (benedict-chat--send-text text))
 
 (defun benedict-chat--send-text (text &optional buffer)
-  "Helper implementing the logic behind `benedict-chat-send-prompt'.
-TEXT is the prompt to dispatch.  BUFFER is the target chat buffer."
+  "Send TEXT to provider via SESSION."
   (let ((chat (or buffer (benedict-chat--resolve-chat-buffer))))
     (unless (and chat (buffer-live-p chat))
       (user-error "Not in a Benedict chat buffer"))
@@ -2767,11 +2766,25 @@ TEXT is the prompt to dispatch.  BUFFER is the target chat buffer."
         (user-error "Not in a Benedict chat buffer"))
       (when (string-blank-p text)
         (user-error "Prompt is empty"))
-      (benedict-chat--ensure-not-busy)
-      (benedict-chat--record-message
-       chat
-       (list :role 'user :content text :time (current-time)))
-      (benedict-chat--start-dispatch chat (benedict-chat--build-request)))))
+      (let ((session benedict-chat--session))
+        (unless session
+          (user-error "No session attached"))
+        (when (benedict-session-busy-p session)
+          (user-error "A provider request is already in flight"))
+        ;; Reset UI state
+        (setq benedict-chat--request-seq (1+ benedict-chat--request-seq))
+        (benedict-chat--streaming-reset chat)
+        (benedict-chat--status-reset)
+        (benedict-chat--status-start-timer)
+        ;; Add user message to session
+        (benedict-session-add-message session
+                                      (list :role 'user :content text :time (current-time)))
+        ;; Configure and run session
+        (benedict-chat--configure-session)
+        (setq benedict-chat--last-dispatch
+              (list :request (benedict-chat--build-request)
+                    :timestamp (current-time)))
+        (benedict-session-run session)))))
 
 ;; -------------------------------------------------------------------
 ;; Compose buffer flow (context-aware prompts)
@@ -3610,6 +3623,16 @@ Returns a function suitable for adding to `benedict-session-event-hook'."
     ('state-changed
      (benedict-chat--observe-state-changed
       (plist-get payload :old) (plist-get payload :new)))
+    ('request-started
+     (benedict-chat--status-reset)
+     (benedict-chat--status-start-timer)
+     (benedict-chat--status-refresh)
+     (when (and benedict-chat--last-dispatch
+                (plist-get payload :request-id))
+       (setq benedict-chat--last-dispatch
+             (plist-put benedict-chat--last-dispatch
+                        :request-id
+                        (plist-get payload :request-id)))))
     ('message-added
      (benedict-chat--observe-message-added (plist-get payload :message)))
     ('draft-started

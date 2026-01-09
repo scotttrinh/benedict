@@ -1254,7 +1254,7 @@ By this point, most code has already been moved/deleted in earlier phases. This 
 ```
 
 **Success Criteria**:
-- [ ] `nix run .#test -- test/benedict-chat-*-test.el` passes
+- [x] `nix run .#test -- test/benedict-chat-*-test.el` passes
 
 ### Phase 5.2: Verify Complete Event Handler Coverage
 
@@ -1302,8 +1302,8 @@ grep -E "loop-start-time|loop-turn-count|loop-canceled" benedict-chat.el
 All should return empty.
 
 **Success Criteria**:
-- [ ] `nix run .#test` passes (full test suite)
-- [ ] All grep checks return empty
+- [x] `nix run .#test` passes (full test suite)
+- [x] All grep checks return empty
 - [ ] `wc -l benedict-chat.el` shows significant line count reduction
 
 ---
