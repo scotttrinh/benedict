@@ -16,6 +16,7 @@
   messages (message-seq 0)
   (state 'idle) draft pending-question inflight last-error last-request
   root provider model profile meta
+  tools system-prompt autonomy verbosity
   flywire-session attached-frontends
   ;; Telemetry fields
   (accumulated-usage nil)    ; plist: :prompt :completion :total :cost
@@ -41,7 +42,8 @@
   (format "ses-%s-%s" (format-time-string "%Y%m%d%H%M%S")
           (substring (md5 (format "%s%s" (random) (current-time))) 0 8)))
 
-(cl-defun benedict-session-create (&key id title root provider model profile meta)
+(cl-defun benedict-session-create (&key id title root provider model profile meta
+                                        tools system-prompt autonomy verbosity)
   "Create and register a new session.
 
 Optional keyword arguments:
@@ -51,7 +53,11 @@ Optional keyword arguments:
   :provider - Provider symbol
   :model - Model identifier
   :profile - Profile symbol
-  :meta - Additional metadata plist"
+  :meta - Additional metadata plist
+  :tools - Tool definitions
+  :system-prompt - List of system messages
+  :autonomy - Autonomy level symbol
+  :verbosity - Verbosity level symbol"
   (let* ((now (current-time))
          (session-id (or id (benedict-session--generate-id)))
          (session (benedict-session--create
@@ -63,9 +69,68 @@ Optional keyword arguments:
                    :provider provider
                    :model model
                    :profile profile
-                   :meta meta)))
+                   :meta meta
+                   :tools tools
+                   :system-prompt system-prompt
+                   :autonomy autonomy
+                   :verbosity verbosity)))
     (puthash session-id session benedict-session--registry)
     session))
+
+(defun benedict-session-configure (session &rest config)
+  "Update SESSION configuration.
+CONFIG is a plist with keys: :provider :model :profile :tools
+:system-prompt :autonomy :verbosity :loop-config."
+  (cl-loop for (key value) on config by #'cddr
+           do (pcase key
+                (:provider (setf (benedict-session-provider session) value))
+                (:model (setf (benedict-session-model session) value))
+                (:profile (setf (benedict-session-profile session) value))
+                (:tools (setf (benedict-session-tools session) value))
+                (:system-prompt (setf (benedict-session-system-prompt session) value))
+                (:autonomy (setf (benedict-session-autonomy session) value))
+                (:verbosity (setf (benedict-session-verbosity session) value))
+                (:loop-config (setf (benedict-session-loop-config session) value))))
+  (benedict-session-touch session)
+  session)
+
+;;; Request Building
+
+(defun benedict-session--message->provider (message)
+  "Convert internal MESSAGE to provider format."
+  (let* ((role (plist-get message :role))
+         (content (plist-get message :content))
+         (tool-calls (plist-get message :tool-calls))
+         (tool-call-id (plist-get message :tool-call-id))
+         (name (plist-get message :name))
+         (payload (list :role role :content (or content ""))))
+    (when tool-calls
+      (setq payload (plist-put payload :tool-calls tool-calls)))
+    (when tool-call-id
+      (setq payload (plist-put payload :tool-call-id tool-call-id)))
+    (when name
+      (setq payload (plist-put payload :name name)))
+    payload))
+
+(defun benedict-session--build-request (session)
+  "Build a provider request plist from SESSION state."
+  (let* ((provider (benedict-session-provider session))
+         (model (benedict-session-model session))
+         (profile (benedict-session-profile session))
+         (tools (benedict-session-tools session))
+         (system (benedict-session-system-prompt session))
+         (autonomy (benedict-session-autonomy session))
+         (verbosity (benedict-session-verbosity session))
+         (history (mapcar #'benedict-session--message->provider
+                          (benedict-session-messages-chronological session)))
+         (messages (if system (append system history) history)))
+    (list :provider provider
+          :model model
+          :profile profile
+          :tools tools
+          :autonomy autonomy
+          :verbosity verbosity
+          :messages messages)))
 
 (defun benedict-session-get (id)
   "Get session by ID from registry."
@@ -541,7 +606,11 @@ Processes tool calls from last message, then dispatches if should continue."
 (defun benedict-session--dispatch-next (session)
   "Dispatch next request in the loop.
 Builds request from session state and dispatches."
-  (benedict-session--emit session 'dispatch-needed))
+  (let ((request (benedict-session--build-request session)))
+    (if (and (plist-get request :provider)
+             (plist-get request :model))
+        (benedict-session-dispatch session request)
+      (benedict-session--emit session 'dispatch-needed))))
 
 (defun benedict-session-continue (session)
   "Continue SESSION after a checkpoint.

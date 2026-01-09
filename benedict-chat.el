@@ -1001,13 +1001,7 @@ Resolution order: buffer override → profile :provider → global `benedict-pro
          (profile (cdr (assoc choice candidates))))
     (with-current-buffer chat
       (setq benedict-chat-profile profile)
-      (let* ((provider (benedict-chat--resolve-provider profile))
-             (model (benedict-chat--resolve-model
-                     provider profile benedict-chat--compose-model-override)))
-        (when benedict-chat--session
-          (setf (benedict-session-profile benedict-chat--session) profile)
-          (setf (benedict-session-provider benedict-chat--session) provider)
-          (setf (benedict-session-model benedict-chat--session) model)))
+      (benedict-chat--configure-session)
       (benedict-chat--status-refresh)
       (benedict-chat--refresh-compose-header))
     (message "Benedict profile set to %s" (benedict-chat--profile-label profile))))
@@ -1033,12 +1027,7 @@ Resolution order: buffer override → profile :provider → global `benedict-pro
         (provider (cdr (assoc choice candidates))))
   (with-current-buffer chat
    (setq benedict-chat--provider-override provider)
-   (let* ((model (benedict-chat--resolve-model
-                  provider (benedict-chat--effective-profile) 
-                  benedict-chat--compose-model-override)))
-     (when benedict-chat--session
-       (setf (benedict-session-provider benedict-chat--session) provider)
-       (setf (benedict-session-model benedict-chat--session) model)))
+   (benedict-chat--configure-session)
    (benedict-chat--status-refresh)
    (benedict-chat--refresh-compose-header))
   (message "Benedict provider set to %s" (or (benedict-provider-display-name provider)
@@ -1309,11 +1298,7 @@ Handles errors related to killed buffers gracefully."
     (with-current-buffer chat
       (setq benedict-chat--compose-model-override
             (unless (string-empty-p selection) selection))
-      (when benedict-chat--session
-        (setf (benedict-session-provider benedict-chat--session) provider)
-        (setf (benedict-session-model benedict-chat--session)
-              (benedict-chat--resolve-model
-               provider profile benedict-chat--compose-model-override)))
+      (benedict-chat--configure-session)
       (benedict-chat--status-refresh)
       (benedict-chat--refresh-compose-header))
     (if (string-empty-p selection)
@@ -2493,6 +2478,33 @@ Returns non-nil when an active streaming entry handled the error."
       (setq payload (plist-put payload :tool-call-id tool-call-id)))
     payload))
 
+(defun benedict-chat--configure-session ()
+  "Configure the session with current buffer settings."
+  (when-let ((session benedict-chat--session))
+    (let* ((profile (benedict-chat--effective-profile))
+           (provider (benedict-chat--resolve-provider profile))
+           (model (benedict-chat--resolve-model
+                   provider profile benedict-chat--compose-model-override))
+           (tools (benedict-chat--resolve-tools profile))
+           (system (benedict-chat--system-messages profile))
+           (autonomy (benedict-chat--profile-autonomy profile))
+           (verbosity (benedict-chat--profile-verbosity profile))
+           (loop-config (list :max-turns (benedict-chat--effective-limit
+                                          :max-turns benedict-chat-loop-checkpoint-interval)
+                              :max-time (benedict-chat--effective-limit
+                                         :max-time benedict-chat-loop-max-time)
+                              :max-tokens (benedict-chat--effective-limit
+                                           :max-tokens benedict-chat-loop-max-tokens))))
+      (benedict-session-configure session
+                                  :provider provider
+                                  :model model
+                                  :profile profile
+                                  :tools tools
+                                  :system-prompt system
+                                  :autonomy autonomy
+                                  :verbosity verbosity
+                                  :loop-config loop-config))))
+
 (defun benedict-chat--build-request ()
   "Build a provider request plist from session state."
   (let* ((profile (benedict-chat--effective-profile))
@@ -2714,6 +2726,7 @@ Returns non-nil when an active streaming entry handled the error."
            (session benedict-chat--session))
       (unless session
         (user-error "No session attached to buffer"))
+      (benedict-chat--configure-session)
       ;; Reset UI state
       (setq benedict-chat--request-seq (1+ benedict-chat--request-seq))
       (setq benedict-chat--thinking-temp-counter 0)
@@ -3003,14 +3016,7 @@ Returns a plist (:slice :replacing) where :slice carries the final handle."
     (kill-buffer benedict-chat--compose-buffer))
   (setq benedict-chat--compose-model-override nil)
   (setq benedict-chat--compose-buffer nil)
-  (let* ((provider (benedict-chat--resolve-provider))
-         (model (benedict-chat--resolve-model
-                 provider
-                 (benedict-chat--effective-profile)
-                 benedict-chat--compose-model-override)))
-    (when benedict-chat--session
-      (setf (benedict-session-provider benedict-chat--session) provider)
-      (setf (benedict-session-model benedict-chat--session) model)))
+  (benedict-chat--configure-session)
   (benedict-chat--status-refresh))
 
 (defun benedict-chat-compose-send ()
@@ -3860,7 +3866,7 @@ The session persists independently and can be reattached later."
                  :model model
                  :root (when (project-current)
                          (project-root (project-current)))))
-    )
+    (benedict-chat--configure-session))
   (benedict-session--add-frontend benedict-chat--session (current-buffer))
   ;; Subscribe to session events
   (setq-local benedict-chat--session-subscription

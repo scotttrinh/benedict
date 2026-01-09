@@ -1050,7 +1050,7 @@ CONFIG is a plist with keys: :provider :model :profile :tools
 ```
 
 **Success Criteria**:
-- [ ] `nix run .#test -- test/benedict-session-test.el` passes
+- [x] `nix run .#test -- test/benedict-session-test.el` passes
 
 ### Phase 4.2: Add Request Building to Session
 
@@ -1104,7 +1104,7 @@ CONFIG is a plist with keys: :provider :model :profile :tools
 - Match format expected by provider
 
 **Success Criteria**:
-- [ ] `nix run .#test -- test/benedict-session-test.el` passes
+- [x] `nix run .#test -- test/benedict-session-test.el` passes
 
 ### Phase 4.3: Update dispatch-next to Build Request
 
@@ -1129,7 +1129,7 @@ Builds request from session state and dispatches."
 - Fall back to event if not configured
 
 **Success Criteria**:
-- [ ] `nix run .#test -- test/benedict-session-test.el` passes
+- [x] `nix run .#test -- test/benedict-session-test.el` passes
 
 ### Phase 4.4: Add Request Building Tests
 
@@ -1166,7 +1166,7 @@ Builds request from session state and dispatches."
 ```
 
 **Success Criteria**:
-- [ ] `nix run .#test -- test/benedict-session-test.el` passes
+- [x] `nix run .#test -- test/benedict-session-test.el` passes
 
 ### Phase 4.5: Update Chat to Configure Session
 
@@ -1208,7 +1208,7 @@ Builds request from session state and dispatches."
 - Session stores resolved values
 
 **Success Criteria**:
-- [ ] `nix run .#test -- test/benedict-chat-*-test.el` passes
+- [x] `nix run .#test -- test/benedict-chat-*-test.el` passes
 
 ---
 

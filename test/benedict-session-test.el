@@ -478,6 +478,33 @@
       (should (eq 'idle (benedict-session-state session)))
       (should (cl-find 'loop-stopped events :key #'car)))))
 
+;;; Request Building Tests
+
+(ert-deftest benedict-session-test-build-request ()
+  "Request building uses session state."
+  (let ((benedict-session--registry (make-hash-table :test 'equal)))
+    (let ((session (benedict-session-create
+                    :provider 'openrouter
+                    :model "claude-3"
+                    :tools '((:name read_file)))))
+      (benedict-session-add-message session '(:role user :content "Hello"))
+      (let ((request (benedict-session--build-request session)))
+        (should (eq 'openrouter (plist-get request :provider)))
+        (should (string= "claude-3" (plist-get request :model)))
+        (should (= 1 (length (plist-get request :messages))))))))
+
+(ert-deftest benedict-session-test-configure ()
+  "Configuration updates session state."
+  (let ((benedict-session--registry (make-hash-table :test 'equal)))
+    (let ((session (benedict-session-create)))
+      (benedict-session-configure session
+                                  :provider 'anthropic
+                                  :model "claude-4"
+                                  :loop-config '(:max-turns 10))
+      (should (eq 'anthropic (benedict-session-provider session)))
+      (should (string= "claude-4" (benedict-session-model session)))
+      (should (= 10 (plist-get (benedict-session-loop-config session) :max-turns))))))
+
 ;;; Frontend Tests
 
 (ert-deftest benedict-session-test-add-frontend ()
