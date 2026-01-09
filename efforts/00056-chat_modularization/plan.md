@@ -343,8 +343,8 @@ Extract from `benedict-chat.el` lines 783-940:
 ### Success Criteria
 
 #### Automated Verification
-- [ ] `nix run .#test` passes all tests
-- [ ] Profile resolution tests pass: `benedict-chat-resolves-provider-and-model`
+- [x] `nix run .#test` passes all tests
+- [x] Profile resolution tests pass: `benedict-chat-resolves-provider-and-model`
 
 #### Manual Verification
 - [ ] `M-x benedict-chat-choose-profile` works
@@ -406,8 +406,8 @@ Extract from `benedict-chat.el` lines 1057-1252:
 ### Success Criteria
 
 #### Automated Verification
-- [ ] `nix run .#test` passes all tests
-- [ ] `benedict-chat-session-accumulates-seconds` test passes
+- [x] `nix run .#test` passes all tests
+- [x] `benedict-chat-session-accumulates-seconds` test passes
 
 #### Manual Verification
 - [ ] Status line shows spinner during streaming

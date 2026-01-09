@@ -4,6 +4,7 @@
 (require 'ert-async)
 (require 'cl-lib)
 (require 'benedict-chat)
+(require 'benedict-chat-status)
 (require 'benedict-provider-fake)
 (require 'benedict-test-helpers)
 
@@ -48,10 +49,10 @@
       (benedict-chat-mode)
       (benedict-chat--init-buffer)
 
-      ;; Avoid real timers; we manually call `benedict-chat--status-tick' to
+      ;; Avoid real timers; we manually call `benedict-chat-status--status-tick' to
       ;; simulate header refresh interleaving with delta insertions.
-      (cl-letf (((symbol-function 'benedict-chat--status-start-timer) #'ignore)
-                ((symbol-function 'benedict-chat--status-refresh) #'ignore))
+      (cl-letf (((symbol-function 'benedict-chat-status--status-start-timer) #'ignore)
+                ((symbol-function 'benedict-chat-status--status-refresh) #'ignore))
         (let* ((request (list :provider 'fake :model "fake-model" :messages nil))
                (session benedict-chat--session)
                (benedict-chat--request-seq 0)
@@ -81,7 +82,7 @@
             (should (string= (funcall body) "Hello **bo"))
 
             ;; Timer tick updates the header while stream is in-flight.
-            (benedict-chat--status-tick (current-buffer))
+            (benedict-chat-status--status-tick (current-buffer))
             (should (string= (funcall body) "Hello **bo"))
 
             (benedict-chat--handle-provider-delta
@@ -89,7 +90,7 @@
              (list :kind 'content-delta :provider 'fake :model "fake-model" :text "ld**"))
             (should (string= (funcall body) "Hello **bold**"))
 
-            (benedict-chat--status-tick (current-buffer))
+            (benedict-chat-status--status-tick (current-buffer))
             (should (string= (funcall body) "Hello **bold**"))
 
             ;; Completion updates metadata + replaces the body with final content.
@@ -130,8 +131,8 @@
       (rename-buffer "*Benedict Streaming Point Integration*" t)
       (benedict-chat-mode)
       (benedict-chat--init-buffer)
-      (cl-letf (((symbol-function 'benedict-chat--status-start-timer) #'ignore)
-                ((symbol-function 'benedict-chat--status-refresh) #'ignore))
+      (cl-letf (((symbol-function 'benedict-chat-status--status-start-timer) #'ignore)
+                ((symbol-function 'benedict-chat-status--status-refresh) #'ignore))
         (let* ((request (list :provider 'fake :model "fake-model" :messages nil))
                (session benedict-chat--session)
                (benedict-chat--request-seq 0)
@@ -155,7 +156,7 @@
             ;; Put point somewhere that will obviously change if the header
             ;; rewrite doesn't preserve it.
             (goto-char (point-min))
-            (benedict-chat--status-tick (current-buffer))
+            (benedict-chat-status--status-tick (current-buffer))
             (should (= (point) (marker-position body-end)))))))))
 
 (ert-deftest benedict-chat-integration-streaming-delta-targets-stable-buffer ()
@@ -168,8 +169,8 @@
         (with-current-buffer chat-buffer
           (benedict-chat-mode)
           (benedict-chat--init-buffer)
-          (cl-letf (((symbol-function 'benedict-chat--status-start-timer) #'ignore)
-                    ((symbol-function 'benedict-chat--status-refresh) #'ignore))
+          (cl-letf (((symbol-function 'benedict-chat-status--status-start-timer) #'ignore)
+                    ((symbol-function 'benedict-chat-status--status-refresh) #'ignore))
             (let* ((request (list :provider 'fake :model "fake-model" :messages nil))
                    (session benedict-chat--session)
                    (benedict-chat--request-seq 0)
@@ -203,8 +204,8 @@
         (with-current-buffer chat-buffer
           (benedict-chat-mode)
           (benedict-chat--init-buffer)
-          (cl-letf (((symbol-function 'benedict-chat--status-start-timer) #'ignore)
-                    ((symbol-function 'benedict-chat--status-refresh) #'ignore))
+          (cl-letf (((symbol-function 'benedict-chat-status--status-start-timer) #'ignore)
+                    ((symbol-function 'benedict-chat-status--status-refresh) #'ignore))
             (let* ((call (list :id "call-1" :name "demo" :arguments '(:foo "bar")))
                    (metadata (list :status 'running :provider 'fake))
                    (item (benedict-chat--record-tool-block chat-buffer call metadata)))
@@ -259,8 +260,8 @@
                (with-current-buffer chat-buffer
                  (benedict-chat-mode)
                  (benedict-chat--init-buffer)
-                 (cl-letf (((symbol-function 'benedict-chat--status-start-timer) #'ignore)
-                           ((symbol-function 'benedict-chat--status-refresh) #'ignore))
+                 (cl-letf (((symbol-function 'benedict-chat-status--status-start-timer) #'ignore)
+                           ((symbol-function 'benedict-chat-status--status-refresh) #'ignore))
                    (let* ((request (list :provider 'fake :model "fake-model" :messages nil))
                           (session benedict-chat--session)
                           (benedict-chat--request-seq 0)
@@ -309,8 +310,8 @@
       (rename-buffer "*Benedict Block Gap Integration*" t)
       (benedict-chat-mode)
       (benedict-chat--init-buffer)
-      (cl-letf (((symbol-function 'benedict-chat--status-start-timer) #'ignore)
-                ((symbol-function 'benedict-chat--status-refresh) #'ignore))
+      (cl-letf (((symbol-function 'benedict-chat-status--status-start-timer) #'ignore)
+                ((symbol-function 'benedict-chat-status--status-refresh) #'ignore))
         (let* ((request (list :provider 'fake :model "fake-model" :messages nil))
                (session benedict-chat--session)
                (benedict-chat--request-seq 0)

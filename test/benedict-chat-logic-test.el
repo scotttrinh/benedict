@@ -3,6 +3,7 @@
 (require 'ert)
 (require 'ert-async)
 (require 'benedict-chat)
+(require 'benedict-chat-profiles)
 (require 'benedict-provider-fake)
 (require 'benedict-test-helpers)
 
@@ -54,14 +55,14 @@
             (benedict-chat-mode)
             (benedict-chat--init-buffer)
             (setq benedict-chat-profile 'custom)
-            (should (eq (benedict-chat--resolve-provider) 'openrouter))
-            (should (equal (benedict-chat--resolve-model) "profile/model"))
+            (should (eq (benedict-chat-profiles--resolve-provider) 'openrouter))
+            (should (equal (benedict-chat-profiles--resolve-model) "profile/model"))
             (setq benedict-chat--compose-model-override "override/model")
-            (should (equal (benedict-chat--resolve-model) "override/model"))
+            (should (equal (benedict-chat-profiles--resolve-model) "override/model"))
             (setq benedict-chat--compose-model-override nil)
             (setq benedict-chat-profile nil)
-            (should (eq (benedict-chat--resolve-provider) 'fake))
-            (should (equal (benedict-chat--resolve-model)
+            (should (eq (benedict-chat-profiles--resolve-provider) 'fake))
+            (should (equal (benedict-chat-profiles--resolve-model)
                            benedict-provider-fake-default-model)))
         (when (buffer-live-p buffer)
           (kill-buffer buffer))))))
@@ -107,7 +108,7 @@
           (unwind-protect
               (when (buffer-live-p chat)
                 (with-current-buffer chat
-                  (let* ((profile (benedict-chat--effective-profile))
+                  (let* ((profile (benedict-chat-profiles--effective-profile))
                          (request (plist-get benedict-chat--last-dispatch :request))
                          (messages (and request (plist-get request :messages)))
                          (user (cl-find-if (lambda (msg)
@@ -291,13 +292,13 @@
             (benedict-chat--init-buffer)
             ;; Profile specifies openrouter, but override takes precedence
             (setq benedict-chat-profile 'custom)
-            (should (eq (benedict-chat--resolve-provider) 'openrouter))
+            (should (eq (benedict-chat-profiles--resolve-provider) 'openrouter))
             ;; Set override
             (setq benedict-chat--provider-override 'fake)
-            (should (eq (benedict-chat--resolve-provider) 'fake))
+            (should (eq (benedict-chat-profiles--resolve-provider) 'fake))
             ;; Clear override reverts to profile
             (setq benedict-chat--provider-override nil)
-            (should (eq (benedict-chat--resolve-provider) 'openrouter)))
+            (should (eq (benedict-chat-profiles--resolve-provider) 'openrouter)))
         (when (buffer-live-p buffer)
           (kill-buffer buffer))))))
 
