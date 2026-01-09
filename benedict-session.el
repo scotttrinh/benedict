@@ -227,6 +227,143 @@ Returns t if there was something to cancel."
   "Return non-nil if SESSION has an active inflight request."
   (not (null (benedict-session-inflight session))))
 
+;;; Internal Dispatch Callbacks
+
+(defun benedict-session--on-delta (session data)
+  "Handle streaming delta DATA for SESSION.
+Updates draft content. Internal callback for dispatch."
+  (when session
+    (let ((kind (plist-get data :kind))
+          (text (plist-get data :text)))
+      (pcase kind
+        ('content-delta
+         (when text
+           (benedict-session-append-draft session text)))
+        ('thinking-delta
+         (benedict-session--emit session 'draft-updated :payload data))))))
+
+(defun benedict-session--on-success (session result)
+  "Handle successful response RESULT for SESSION.
+Finalizes draft, accumulates telemetry. Internal callback for dispatch."
+  (when session
+    (let* ((inflight (benedict-session-inflight session))
+           (request-id (and inflight (plist-get inflight :request-id)))
+           (message (plist-get result :message))
+           (content (or (plist-get message :content) ""))
+           (tool-calls (plist-get message :tool-calls))
+           (usage (plist-get result :usage))
+           (metadata (list :provider (plist-get result :provider)
+                           :model (plist-get result :model)
+                           :latency (plist-get result :latency)
+                           :usage usage)))
+      ;; Update session provider/model from response
+      (when-let ((provider (plist-get result :provider)))
+        (setf (benedict-session-provider session) provider))
+      (when-let ((model (plist-get result :model)))
+        (setf (benedict-session-model session) model))
+      ;; Accumulate telemetry before clearing request
+      (when-let ((started (and inflight (plist-get inflight :started-at))))
+        (let* ((elapsed (float-time (time-subtract (current-time) started)))
+               (duration (or (plist-get result :latency) elapsed)))
+          (setf (benedict-session-last-phase session) 'complete)
+          (setf (benedict-session-last-elapsed session) elapsed)
+          (setf (benedict-session-last-usage session) usage)
+          (benedict-session-accumulate-usage session usage duration)))
+      ;; Finalize or create message
+      (if (and (benedict-session-draft session)
+               (> (length (plist-get (benedict-session-draft session) :content)) 0))
+          (benedict-session-finalize-draft session metadata)
+        (when (benedict-session-draft session)
+          (setf (benedict-session-draft session) nil)
+          (benedict-session-set-state session 'idle))
+        (benedict-session-add-message
+         session
+         (list :role 'assistant
+               :content content
+               :tool-calls tool-calls
+               :metadata metadata)))
+      ;; Emit completion event
+      (benedict-session--emit session 'request-completed
+                              :success t
+                              :result result
+                              :request-id request-id)
+      ;; Clear request state after notifying observers.
+      (benedict-session-clear-request session))))
+
+(defun benedict-session--on-error (session payload)
+  "Handle error PAYLOAD for SESSION.
+Clears request, discards draft. Internal callback for dispatch."
+  (when session
+    (let* ((inflight (benedict-session-inflight session))
+           (request-id (and inflight (plist-get inflight :request-id))))
+      (when-let ((provider (plist-get payload :provider)))
+        (setf (benedict-session-provider session) provider))
+      (when-let ((started (and inflight (plist-get inflight :started-at))))
+        (setf (benedict-session-last-phase session) 'error)
+        (setf (benedict-session-last-elapsed session)
+              (float-time (time-subtract (current-time) started)))
+        (setf (benedict-session-last-usage session) nil))
+      (benedict-session-discard-draft session)
+      (setf (benedict-session-last-error session) payload)
+      (benedict-session-set-state session 'error)
+      (benedict-session--emit session 'request-completed
+                              :success nil
+                              :error payload
+                              :request-id request-id)
+      (benedict-session-clear-request session))))
+
+;;; Dispatch API
+
+(defun benedict-session-busy-p (session)
+  "Return non-nil if SESSION has an active request or is streaming."
+  (or (benedict-session-request-active-p session)
+      (eq (benedict-session-state session) 'streaming)))
+
+(cl-defun benedict-session-dispatch (session request &key dispatch-fn)
+  "Send REQUEST through the provider for SESSION.
+Updates session state and emits events throughout the lifecycle.
+
+REQUEST is a plist with at minimum :provider, :model, :messages.
+DISPATCH-FN is the provider dispatch function (default: benedict-provider-dispatch).
+
+Returns the request ID on success.
+Signals error if session is busy.
+
+Events emitted:
+- `request-started` with (:request-id N) after dispatch begins
+- `draft-started` when streaming begins
+- `draft-updated` for each content delta
+- `request-completed` with (:success BOOL) after success/error
+- `message-added` when response is finalized"
+  (when (benedict-session-busy-p session)
+    (error "Session is busy with an active request"))
+  (let* ((dispatch (or dispatch-fn
+                       (and (fboundp 'benedict-provider-dispatch)
+                            #'benedict-provider-dispatch)))
+         (handle (funcall dispatch
+                          request
+                          :on-success (lambda (result)
+                                        (benedict-session--on-success session result))
+                          :on-error (lambda (payload)
+                                      (benedict-session--on-error session payload))
+                          :on-delta (lambda (&rest payload)
+                                      (let ((data (if (and (listp payload)
+                                                           (not (keywordp (car payload)))
+                                                           (listp (car payload)))
+                                                      (car payload)
+                                                    payload)))
+                                        (benedict-session--on-delta session data)))))
+         (request-id (benedict-session-start-request session handle)))
+    (benedict-session-start-draft session)
+    (when-let ((provider (plist-get request :provider)))
+      (setf (benedict-session-provider session) provider))
+    (when-let ((model (plist-get request :model)))
+      (setf (benedict-session-model session) model))
+    (when-let ((profile (plist-get request :profile)))
+      (setf (benedict-session-profile session) profile))
+    (benedict-session--emit session 'request-started :request-id request-id)
+    request-id))
+
 ;;; Telemetry Accumulation
 
 (defun benedict-session--usage-value (usage key)

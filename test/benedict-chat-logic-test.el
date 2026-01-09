@@ -23,7 +23,7 @@
               (benedict-session-start-request session 'handle)
               (benedict-session-start-draft session))
             (cl-letf (((symbol-function 'current-time) (lambda () finish)))
-              (benedict-chat--handle-provider-success-headless
+              (benedict-session--on-success
                session
                (list :provider 'fake
                      :model "fake-model"
@@ -34,7 +34,7 @@
             (cl-letf (((symbol-function 'current-time) (lambda () finish)))
               (benedict-session-start-request session 'handle)
               (benedict-session-start-draft session)
-              (benedict-chat--handle-provider-error-headless
+              (benedict-session--on-error
                session (list :provider 'fake :message "fail")))
             (should (= (benedict-session-accumulated-seconds session) 1.25))))
       (when (buffer-live-p buffer)

@@ -234,6 +234,108 @@
       (should-not (benedict-session-request-active-p session))
       (should-not (benedict-session-draft session)))))
 
+;;; Dispatch Tests
+
+(ert-deftest benedict-session-test-busy-p-idle ()
+  "Idle session is not busy."
+  (let ((benedict-session--registry (make-hash-table :test 'equal)))
+    (let ((session (benedict-session-create)))
+      (should-not (benedict-session-busy-p session)))))
+
+(ert-deftest benedict-session-test-busy-p-streaming ()
+  "Streaming session is busy."
+  (let ((benedict-session--registry (make-hash-table :test 'equal)))
+    (let ((session (benedict-session-create)))
+      (benedict-session-start-draft session)
+      (should (benedict-session-busy-p session)))))
+
+(ert-deftest benedict-session-test-busy-p-request ()
+  "Session with active request is busy."
+  (let ((benedict-session--registry (make-hash-table :test 'equal)))
+    (let ((session (benedict-session-create)))
+      (benedict-session-start-request session 'handle)
+      (should (benedict-session-busy-p session)))))
+
+(ert-deftest benedict-session-test-dispatch-rejects-busy ()
+  "Dispatch signals error when session is busy."
+  (let ((benedict-session--registry (make-hash-table :test 'equal)))
+    (let ((session (benedict-session-create)))
+      (benedict-session-start-request session 'handle)
+      (should-error
+       (benedict-session-dispatch session '(:provider test :model test :messages []))))))
+
+(ert-deftest benedict-session-test-dispatch-headless ()
+  "Dispatch works without any buffer (headless operation)."
+  (let ((benedict-session--registry (make-hash-table :test 'equal))
+        (captured-callbacks nil)
+        (events nil))
+    (let ((session (benedict-session-create)))
+      (add-hook 'benedict-session-event-hook
+                (lambda (_s type payload) (push (cons type payload) events)))
+      (let ((mock-dispatch
+             (lambda (request &rest callbacks)
+               (setq captured-callbacks callbacks)
+               'mock-handle)))
+        (let ((request-id (benedict-session-dispatch
+                           session
+                           '(:provider mock :model mock :messages [(:role user :content "test")])
+                           :dispatch-fn mock-dispatch)))
+          (should (numberp request-id))
+          (should (benedict-session-busy-p session))
+          (should (cl-find 'request-started events :key #'car))
+          (funcall (plist-get captured-callbacks :on-delta)
+                   '(:kind content-delta :text "Hello "))
+          (funcall (plist-get captured-callbacks :on-delta)
+                   '(:kind content-delta :text "world"))
+          (should (string= "Hello world"
+                           (plist-get (benedict-session-draft session) :content)))
+          (funcall (plist-get captured-callbacks :on-success)
+                   '(:message (:role assistant :content "Hello world")
+                     :provider mock :model mock
+                     :usage (:prompt_tokens 10 :completion_tokens 5 :total_tokens 15)))
+          (should-not (benedict-session-busy-p session))
+          (should (eq 'idle (benedict-session-state session)))
+          (should (= 1 (length (benedict-session-messages session))))
+          (should (cl-find 'request-completed events :key #'car)))))))
+
+(ert-deftest benedict-session-test-dispatch-error-headless ()
+  "Dispatch handles errors correctly without buffer."
+  (let ((benedict-session--registry (make-hash-table :test 'equal))
+        (captured-callbacks nil))
+    (let ((session (benedict-session-create)))
+      (let ((mock-dispatch
+             (lambda (_request &rest callbacks)
+               (setq captured-callbacks callbacks)
+               'mock-handle)))
+        (benedict-session-dispatch
+         session '(:provider mock :model mock :messages [])
+         :dispatch-fn mock-dispatch)
+        (funcall (plist-get captured-callbacks :on-error)
+                 '(:type api :message "Rate limited" :retryable t))
+        (should-not (benedict-session-busy-p session))
+        (should (eq 'error (benedict-session-state session)))
+        (should (equal "Rate limited"
+                       (plist-get (benedict-session-last-error session) :message)))))))
+
+(ert-deftest benedict-session-test-dispatch-non-streaming ()
+  "Dispatch handles non-streaming responses."
+  (let ((benedict-session--registry (make-hash-table :test 'equal))
+        (captured-callbacks nil))
+    (let ((session (benedict-session-create)))
+      (let ((mock-dispatch
+             (lambda (_request &rest callbacks)
+               (setq captured-callbacks callbacks)
+               'mock-handle)))
+        (benedict-session-dispatch
+         session '(:provider mock :model mock :messages [])
+         :dispatch-fn mock-dispatch)
+        (funcall (plist-get captured-callbacks :on-success)
+                 '(:message (:role assistant :content "Direct response")
+                   :provider mock :model mock))
+        (should (= 1 (length (benedict-session-messages session))))
+        (should (string= "Direct response"
+                         (plist-get (car (benedict-session-messages session)) :content)))))))
+
 ;;; Frontend Tests
 
 (ert-deftest benedict-session-test-add-frontend ()
