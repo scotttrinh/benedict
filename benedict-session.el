@@ -287,6 +287,8 @@ Finalizes draft, accumulates telemetry. Internal callback for dispatch."
                               :success t
                               :result result
                               :request-id request-id)
+      (when tool-calls
+        (benedict-session--process-tool-calls session tool-calls))
       ;; Clear request state after notifying observers.
       (benedict-session-clear-request session))))
 
@@ -363,6 +365,81 @@ Events emitted:
       (setf (benedict-session-profile session) profile))
     (benedict-session--emit session 'request-started :request-id request-id)
     request-id))
+
+;;; Tool Execution
+
+(defvar benedict-session-tool-invoke-fn nil
+  "Function to invoke tools. Set by tool module.
+Called as (funcall fn TOOL-ID ARGUMENTS).
+Returns tool output or signals error.")
+
+(defun benedict-session--invoke-tool (session tool-call)
+  "Execute TOOL-CALL plist for SESSION.
+Returns plist (:status :output :error).
+Emits tool-started and tool-completed events."
+  (let* ((tool-id (or (plist-get tool-call :name)
+                      (plist-get tool-call :tool)))
+         (call-id (plist-get tool-call :id))
+         (arguments (plist-get tool-call :arguments))
+         (status 'success)
+         (output nil)
+         (error-info nil))
+    (benedict-session--emit session 'tool-started
+                            :tool-call tool-call
+                            :tool-id tool-id)
+    (condition-case err
+        (if benedict-session-tool-invoke-fn
+            (setq output (funcall benedict-session-tool-invoke-fn tool-id arguments))
+          (error "No tool invoke function configured"))
+      (error
+       (setq status 'failure)
+       (setq error-info (list :message (error-message-string err)
+                              :type (car err)
+                              :data (cdr err)))))
+    (benedict-session--emit session 'tool-completed
+                            :tool-call tool-call
+                            :tool-id tool-id
+                            :status status
+                            :output output
+                            :error error-info)
+    (list :status status
+          :output output
+          :error error-info
+          :call-id call-id
+          :tool-id tool-id)))
+
+(defun benedict-session--format-tool-result (tool-id call-id output error-info)
+  "Format tool result as message for provider.
+Returns plist suitable for adding to message history."
+  (let* ((status (if error-info 'failure 'success))
+         (content (if error-info
+                      (format "Tool error: %s" (plist-get error-info :message))
+                    (cond
+                     ((stringp output) output)
+                     ((plist-get output :text) (plist-get output :text))
+                     ((plist-get output :content) (plist-get output :content))
+                     (t (format "%S" output))))))
+    (list :role 'tool
+          :tool-call-id call-id
+          :name tool-id
+          :content content
+          :metadata (list :status status :error error-info))))
+
+(defun benedict-session--process-tool-calls (session tool-calls)
+  "Execute TOOL-CALLS for SESSION and record results.
+Returns list of result plists."
+  (let (results)
+    (dolist (call tool-calls)
+      (let* ((result (benedict-session--invoke-tool session call))
+             (call-id (plist-get result :call-id))
+             (tool-id (plist-get result :tool-id))
+             (output (plist-get result :output))
+             (error-info (plist-get result :error))
+             (message (benedict-session--format-tool-result
+                       tool-id call-id output error-info)))
+        (benedict-session-add-message session message)
+        (push result results)))
+    (nreverse results)))
 
 ;;; Telemetry Accumulation
 

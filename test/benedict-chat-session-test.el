@@ -332,8 +332,17 @@
                      ;; Session should have recorded the tool call in the message
                      (should (eq 'idle (benedict-session-state session)))
                      (should (>= (length (benedict-session-messages session)) 2))
-                     (let ((assistant-msg (car (benedict-session-messages session))))
-                       (should (eq 'assistant (plist-get assistant-msg :role)))
+                     (let* ((messages (benedict-session-messages session))
+                            (assistant-msg
+                             (cl-find-if (lambda (message)
+                                           (eq 'assistant (plist-get message :role)))
+                                         messages))
+                            (tool-msg
+                             (cl-find-if (lambda (message)
+                                           (eq 'tool (plist-get message :role)))
+                                         messages)))
+                       (should assistant-msg)
+                       (should tool-msg)
                        ;; Tool calls are recorded in session
                        (should (plist-get assistant-msg :tool-calls))
                        ;; Verify tool call structure

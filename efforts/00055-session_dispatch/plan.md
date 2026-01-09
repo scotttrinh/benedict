@@ -554,7 +554,7 @@ Returns list of result plists."
 - DO NOT include UI-specific formatting (that stays in chat)
 
 **Success Criteria**:
-- [ ] `nix run .#test -- test/benedict-session-test.el` passes
+- [x] `nix run .#test -- test/benedict-session-test.el` passes
 
 ### Phase 2.2: Add Tool Execution Tests
 
@@ -611,7 +611,7 @@ Returns list of result plists."
 ```
 
 **Success Criteria**:
-- [ ] `nix run .#test -- test/benedict-session-test.el` passes with tool tests
+- [x] `nix run .#test -- test/benedict-session-test.el` passes with tool tests
 
 ### Phase 2.3: Wire Tool Invoke Function
 
@@ -638,7 +638,7 @@ Returns list of result plists."
 - Keep it optional—session should work without tools
 
 **Success Criteria**:
-- [ ] `nix run .#test` passes
+- [x] `nix run .#test` passes
 
 ### Phase 2.4: Move Tool Processing to Session, Delete from Chat
 
@@ -672,8 +672,8 @@ Returns list of result plists."
 - No tool execution code in chat module
 
 **Success Criteria**:
-- [ ] `nix run .#test -- test/benedict-session-test.el` passes (tool tests)
-- [ ] `grep -r "invoke-tool-call\|process-tool-calls" benedict-chat.el` returns nothing (except possibly UI helpers)
+- [x] `nix run .#test -- test/benedict-session-test.el` passes (tool tests)
+- [x] `grep -r "invoke-tool-call\|process-tool-calls" benedict-chat.el` returns nothing (except possibly UI helpers)
 
 ---
 

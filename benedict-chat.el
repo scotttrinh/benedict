@@ -2083,71 +2083,16 @@ RAW, when non-nil, is attached for debugging/forwarding."
       (plist-put entry :raw raw))
     entry))
 
-(defun benedict-chat--invoke-tool-call (buffer call metadata item)
-  "Execute CALL (plist) using METADATA and update ITEM in BUFFER."
-  (with-current-buffer buffer
-    (let* ((tool-id (benedict-chat--normalize-tool-id
-                     (or (plist-get call :name) (plist-get call :tool))))
-           (arguments (or (plist-get call :arguments) nil))
-           (status 'success)
-           (output nil))
-      (message "[Benedict] Invoking tool: %s with args: %S" tool-id arguments)
-      (condition-case err
-          (progn
-            (message "[Benedict] Tool invocation started for %s" tool-id)
-            (setq output (benedict-tool-invoke tool-id arguments))
-            (message "[Benedict] Tool %s returned successfully: %S" tool-id (type-of output)))
-        (error
-         (setq status 'failure)
-         (message "[Benedict] Tool %s failed with error: %S (type: %s)" 
-                  tool-id err (type-of err))
-         (message "[Benedict] Error details: %s" (error-message-string err))
-         (let* ((details (benedict-chat--tool-error-details tool-id call arguments err))
-                (summary (benedict-chat--tool-error-summary tool-id details))
-                (json (benedict-chat--tool-error-json details))
-                (ui-body (benedict-chat--tool-error-ui-body summary details)))
-           (setq output (list :text (string-join (list summary json) "\n\n")
-                              :ui (list :body ui-body)
-                              :raw details)))))
-      (message "[Benedict] Normalizing tool output for %s" tool-id)
-      (let* ((normalized-output (benedict-chat--normalize-tool-output output))
-             (text (plist-get normalized-output :text))
-             (ui (plist-get normalized-output :ui))
-             (raw (plist-get normalized-output :raw))
-             (result-metadata (benedict-chat--tool-call-metadata tool-id call status metadata)))
-        (message "[Benedict] Normalized output: text=%s, ui=%S" (type-of text) (type-of ui))
-        (when (and (eq status 'failure) raw)
-          (plist-put result-metadata :error raw))
-        (when item
-          (message "[Benedict] Updating tool block for %s" tool-id)
-          (condition-case block-err
-              (benedict-chat--update-tool-block
-               buffer item result-metadata ui
-               (benedict-chat--tool-result-content call text))
-            (error
-             (message "[Benedict] ERROR updating tool block: %S" block-err))))
-        (message "[Benedict] Storing tool result for %s" tool-id)
-        (condition-case hist-err
-            (let ((entry (benedict-chat--tool-result-history-entry
-                          tool-id call text result-metadata raw)))
-              ;; Record in session (observer will render via message-added event)
-              (when-let ((session benedict-chat--session))
-                (benedict-session-add-message session entry)))
-          (error
-           (message "[Benedict] ERROR storing tool result: %S" hist-err)))))))
-
-(defun benedict-chat--process-tool-calls (buffer message tool-calls metadata)
-  "Render TOOL-CALLS for MESSAGE and execute each tool using METADATA in BUFFER."
-  (let (normalized-calls)
-    (dolist (call tool-calls)
-      (let* ((tool-id (benedict-chat--normalize-tool-id (or (plist-get call :name)
-                                                            (plist-get call :tool))))
-             (normalized (plist-put (copy-sequence call) :name tool-id))
-             (call-metadata (benedict-chat--tool-call-metadata tool-id normalized 'in-progress metadata))
-             (item (benedict-chat--record-tool-block buffer normalized call-metadata)))
-        (push normalized normalized-calls)
-        (benedict-chat--invoke-tool-call buffer normalized metadata item)))
-    (plist-put message :tool-calls (nreverse normalized-calls))))
+(defun benedict-chat--find-tool-item (call-id)
+  "Return tool item matching CALL-ID, or nil."
+  (when call-id
+    (cl-find-if
+     (lambda (item)
+       (and (benedict-chat--tool-item-p item)
+            (let* ((call (plist-get item :tool-call))
+                   (item-id (plist-get call :id)))
+              (and item-id (equal item-id call-id)))))
+     benedict-chat--items)))
 
 ;; -------------------------------------------------------------------
 ;; Thinking detail helpers
@@ -2803,11 +2748,6 @@ Returns non-nil when an active streaming entry handled the error."
                 (setq first-id nil))
               (benedict-chat--display-thinking-detail buffer detail metadata)))))
 
-      ;; Handle tool calls after thinking so sections remain grouped
-      (when (and final-record tool-calls)
-        (benedict-chat--process-tool-calls buffer final-record tool-calls metadata)
-        (benedict-chat--loop-step final-record))
-      
       (message "Benedict: %s replied via %s" 
                (or model "provider") 
                (benedict-chat--provider-label provider)))))
@@ -3754,6 +3694,59 @@ Returns a function suitable for adding to `benedict-session-event-hook'."
      (benedict-chat--observe-draft-updated payload))
     ('draft-finalized
      (benedict-chat--observe-draft-finalized payload))
+    ('tool-started
+     (when-let ((session benedict-chat--session)
+                (tool-call (plist-get payload :tool-call)))
+       (let* ((tool-id (benedict-chat--normalize-tool-id
+                        (or (plist-get payload :tool-id)
+                            (plist-get tool-call :name)
+                            (plist-get tool-call :tool))))
+              (normalized (plist-put (copy-sequence tool-call) :name tool-id))
+              (metadata (benedict-chat--tool-call-metadata
+                         tool-id normalized 'in-progress
+                         (benedict-chat--metadata
+                          :provider (benedict-session-provider session)
+                          :model (benedict-session-model session)))))
+         (benedict-chat--record-tool-block (current-buffer) normalized metadata))))
+    ('tool-completed
+     (when-let ((session benedict-chat--session)
+                (tool-call (plist-get payload :tool-call)))
+       (let* ((tool-id (benedict-chat--normalize-tool-id
+                        (or (plist-get payload :tool-id)
+                            (plist-get tool-call :name)
+                            (plist-get tool-call :tool))))
+              (normalized (plist-put (copy-sequence tool-call) :name tool-id))
+              (status (plist-get payload :status))
+              (error-info (plist-get payload :error))
+              (raw-output (plist-get payload :output))
+              (output (if (and error-info (null raw-output))
+                          (format "Tool error: %s" (plist-get error-info :message))
+                        raw-output))
+              (normalized-output (benedict-chat--normalize-tool-output output))
+              (text (plist-get normalized-output :text))
+              (ui (plist-get normalized-output :ui))
+              (raw (plist-get normalized-output :raw))
+              (metadata (benedict-chat--tool-call-metadata
+                         tool-id normalized status
+                         (benedict-chat--metadata
+                          :provider (benedict-session-provider session)
+                          :model (benedict-session-model session))))
+              (call-id (plist-get normalized :id))
+              (item (benedict-chat--find-tool-item call-id)))
+         (when (and (memq status '(failure error)) error-info)
+           (plist-put metadata :error error-info))
+         (when raw
+           (plist-put metadata :raw raw))
+         (if item
+             (benedict-chat--update-tool-block
+              (current-buffer) item metadata ui
+              (benedict-chat--tool-result-content normalized text))
+           (let ((new-item (benedict-chat--record-tool-block
+                            (current-buffer) normalized metadata ui)))
+             (when new-item
+               (benedict-chat--update-tool-block
+                (current-buffer) new-item metadata ui
+                (benedict-chat--tool-result-content normalized text))))))))
     ('request-completed
      (benedict-chat--observe-request-completed payload))
     ('destroyed
@@ -3901,6 +3894,7 @@ The session persists independently and can be reattached later."
 
 (defun benedict-chat--init-buffer ()
   "Initialize buffer-local state for Benedict chat."
+  (setq benedict-session-tool-invoke-fn #'benedict-tool-invoke)
   (setq-local benedict-chat--buffer (current-buffer))
   (setq-local benedict-chat--items nil)
   (setq-local benedict-chat--item-counter 0)

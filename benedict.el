@@ -188,5 +188,9 @@
 (require 'benedict-provider-fake)
 (require 'benedict-provider-ollama)
 
+(with-eval-after-load 'benedict-session
+  (with-eval-after-load 'benedict-tools
+    (setq benedict-session-tool-invoke-fn #'benedict-tool-invoke)))
+
 (provide 'benedict)
 ;;; benedict.el ends here

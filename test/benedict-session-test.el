@@ -336,6 +336,98 @@
         (should (string= "Direct response"
                          (plist-get (car (benedict-session-messages session)) :content)))))))
 
+;;; Tool Execution Tests
+
+(ert-deftest benedict-session-test-invoke-tool-success ()
+  "Tool invocation records result and emits events."
+  (let ((benedict-session--registry (make-hash-table :test 'equal))
+        (benedict-session-tool-invoke-fn (lambda (id _args)
+                                           (format "Result for %s" id)))
+        (events nil))
+    (let ((session (benedict-session-create)))
+      (add-hook 'benedict-session-event-hook
+                (lambda (_s type payload) (push (cons type payload) events)))
+      (let ((result (benedict-session--invoke-tool
+                     session '(:id "call-1" :name read_file :arguments (:path "/tmp")))))
+        (should (eq 'success (plist-get result :status)))
+        (should (string-match "Result for" (plist-get result :output)))
+        (should (cl-find 'tool-started events :key #'car))
+        (should (cl-find 'tool-completed events :key #'car))))))
+
+(ert-deftest benedict-session-test-invoke-tool-failure ()
+  "Tool failure is captured and emitted."
+  (let ((benedict-session--registry (make-hash-table :test 'equal))
+        (benedict-session-tool-invoke-fn (lambda (_id _args)
+                                           (error "Tool failed")))
+        (events nil))
+    (let ((session (benedict-session-create)))
+      (add-hook 'benedict-session-event-hook
+                (lambda (_s type payload) (push (cons type payload) events)))
+      (let ((result (benedict-session--invoke-tool
+                     session '(:id "call-1" :name broken_tool :arguments nil))))
+        (should (eq 'failure (plist-get result :status)))
+        (should (plist-get result :error))
+        (should (cl-find 'tool-completed events :key #'car))))))
+
+(ert-deftest benedict-session-test-process-tool-calls ()
+  "Processing multiple tool calls records all results."
+  (let ((benedict-session--registry (make-hash-table :test 'equal))
+        (benedict-session-tool-invoke-fn (lambda (id _args)
+                                           (format "Output from %s" id))))
+    (let ((session (benedict-session-create)))
+      (benedict-session--process-tool-calls
+       session
+       '((:id "call-1" :name tool_a :arguments nil)
+         (:id "call-2" :name tool_b :arguments nil)))
+      (should (= 2 (length (benedict-session-messages session))))
+      (should (eq 'tool (plist-get (car (benedict-session-messages session)) :role))))))
+
+(ert-deftest benedict-session-test-tool-event-ordering ()
+  "Tool events fire after request completion and preserve message order."
+  (let ((benedict-session--registry (make-hash-table :test 'equal))
+        (benedict-session-tool-invoke-fn (lambda (_id _args) "OK"))
+        (events nil)
+        (captured-callbacks nil))
+    (let ((session (benedict-session-create)))
+      (add-hook 'benedict-session-event-hook
+                (lambda (_s type payload) (push (cons type payload) events)))
+      (let ((mock-dispatch
+             (lambda (_request &rest callbacks)
+               (setq captured-callbacks callbacks)
+               'mock-handle)))
+        (benedict-session-dispatch
+         session
+         '(:provider mock :model mock :messages [])
+         :dispatch-fn mock-dispatch)
+        (funcall (plist-get captured-callbacks :on-success)
+                 '(:message (:role assistant
+                            :content "Done"
+                            :tool-calls ((:id "call-1"
+                                          :name demo-tool
+                                          :arguments (:foo "bar"))))
+                   :provider mock :model mock))
+        (let* ((ordered (nreverse events))
+               (types (mapcar #'car ordered))
+               (assistant-idx (cl-position 'message-added types))
+               (request-idx (cl-position 'request-completed types))
+               (tool-start-idx (cl-position 'tool-started types))
+               (tool-complete-idx (cl-position 'tool-completed types))
+               (tool-msg-idx (cl-position 'message-added types
+                                          :start (1+ assistant-idx))))
+          (should assistant-idx)
+          (should request-idx)
+          (should tool-start-idx)
+          (should tool-complete-idx)
+          (should tool-msg-idx)
+          (should (< assistant-idx request-idx))
+          (should (< request-idx tool-start-idx))
+          (should (< tool-start-idx tool-complete-idx))
+          (should (< tool-complete-idx tool-msg-idx)))
+        (let ((history (benedict-session-messages-chronological session)))
+          (should (= 2 (length history)))
+          (should (eq 'assistant (plist-get (car history) :role)))
+          (should (eq 'tool (plist-get (cadr history) :role))))))))
+
 ;;; Frontend Tests
 
 (ert-deftest benedict-session-test-add-frontend ()

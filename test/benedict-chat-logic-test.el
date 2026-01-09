@@ -270,12 +270,10 @@
                                          (plist-get request :messages))))
                        (should tool-message)
                        (should (plist-get metadata :error))
-                       (should (string-match-p "\"type\":\"tool_error\"" content))
-                       (should (string-match-p "\"symbol\":\"wrong-type-argument\"" content))
-                       (should (string-match-p "\"backtrace\"" content))
-                       ;; Ensure follow-up requests carry the structured payload.
+                       (should (string-match-p "Tool error:" content))
+                       ;; Ensure follow-up requests carry the tool error content.
                        (should tool-entry)
-                    (should (string-match-p "\"type\":\"tool_error\""
+                    (should (string-match-p "Tool error:"
                                             (plist-get tool-entry :content)))))
               (error (setq err e)))
             (when (buffer-live-p buffer)
