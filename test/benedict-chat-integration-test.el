@@ -93,8 +93,8 @@
             (should (string= (funcall body) "Hello **bold**"))
 
             ;; Completion updates metadata + replaces the body with final content.
-            (benedict-chat--handle-provider-success
-             (current-buffer)
+            (benedict-session--on-success
+             session
              (list :provider 'fake
                    :model "fake-model"
                    :latency 0.42
@@ -285,13 +285,14 @@
                (kill-buffer other-buffer))
              (when (buffer-live-p chat-buffer)
                (kill-buffer chat-buffer)))))
-    (run-case "*Benedict Stream Success*" 
+    (run-case "*Benedict Stream Success*"
               (lambda (buffer)
-                (benedict-chat--handle-provider-success
-                 buffer
-                 (list :provider 'fake
-                       :model "fake-model"
-                       :message (list :role 'assistant :content "Final success"))))
+                (with-current-buffer buffer
+                  (benedict-session--on-success
+                   benedict-chat--session
+                   (list :provider 'fake
+                         :model "fake-model"
+                         :message (list :role 'assistant :content "Final success")))))
               "Final success")
     (run-case "*Benedict Stream Error*"
               (lambda (buffer)

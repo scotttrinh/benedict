@@ -262,7 +262,7 @@
                                            (benedict-session-messages benedict-chat--session))))
                             (content (and tool-message (plist-get tool-message :content)))
                             (metadata (and tool-message (plist-get tool-message :metadata)))
-                            (request (benedict-chat--build-request))
+                            (request (benedict-session--build-request benedict-chat--session))
                             (tool-entry
                              (cl-find-if (lambda (message)
                                            (eq (plist-get message :role) 'tool))

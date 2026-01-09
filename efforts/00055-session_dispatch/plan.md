@@ -8,6 +8,19 @@ Extract dispatch logic from `benedict-chat.el` into `benedict-session.el` to mak
 
 The session module is **complete as a state container** but **incomplete as an agent dispatcher** (see `research.md:26-33`).
 
+### Additional Findings to Address
+
+Notes from the latest review of session migration:
+
+- **Duplicate keymap definitions**: `benedict-chat-mode-map` is defined twice with overlapping bindings (`benedict-chat.el:442-458` and `benedict-chat.el:3562-3581`). Decide on a single definition and remove the other.
+- **Request-building duplication**: `benedict-chat--message->provider`, `benedict-chat--usage-value`, and `benedict-chat--build-request` duplicate session equivalents (`benedict-session--message->provider`, `benedict-session--usage-value`, `benedict-session--build-request`). Phase 4 should remove chat copies after session owns request building.
+- **Session configuration is correct, but request building is duplicated**: `benedict-chat--configure-session` should remain (it resolves UI/profile settings), but it must not assemble provider requests once session takes over.
+- **Stale cleanup comments**: remove obsolete comments noting deleted variables (`benedict-chat--messages`, `benedict-chat--pending-request`, `benedict-chat--active-request-id`, `benedict-chat--history-store`) to avoid confusion.
+- **Duplicate buffer helper**: `benedict-chat--ensure-chat-buffer` appears twice with different implementations (`benedict-chat.el:2817` and `benedict-chat.el:3286`). Consolidate to one definition.
+- **Non-reactive chat behavior**: `benedict-chat--handle-provider-success`, `benedict-chat--handle-provider-error`, and `benedict-chat--start-dispatch` still mutate state that should live in session. These should move to a pure "render from events" approach in Phase 1/5.
+- **Streaming state duplication**: `benedict-chat--streaming-*` maintains local content state that overlaps with session drafts. Keep UI rendering, but avoid duplicating content accumulation already in session.
+- **Tool event handling coupling**: `benedict-chat--handle-session-event` tool handlers rebuild metadata using `benedict-chat--last-dispatch`. Prefer using session payload data to avoid rebuilding request metadata in chat.
+
 ### Current Architecture Problems
 
 1. **Chat buffer calls provider directly** (`benedict-chat.el:2953-2978`)
