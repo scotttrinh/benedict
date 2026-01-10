@@ -857,6 +857,9 @@ NIL represents infinity (no limit). Uses `benedict-chat-profile`."
   "Return the default model string for PROVIDER."
   (pcase provider
     ('openrouter benedict-provider-openrouter-default-model)
+    ('ollama benedict-provider-ollama-default-model)
+    ('vercel benedict-provider-vercel-default-model)
+    ('gemini benedict-provider-gemini-default-model)
     ('fake benedict-provider-fake-default-model)
     (_ nil)))
 
@@ -3589,6 +3592,9 @@ Returns a function suitable for adding to `benedict-session-event-hook'."
      (benedict-chat--observe-request-completed payload))
     ('loop-stopped
      (message "Benedict: loop stopped (%s)" (plist-get payload :reason)))
+    ('dispatch-needed
+     (benedict-chat--status-stop-timer)
+     (message "Benedict: cannot dispatch - provider or model not configured"))
     ('destroyed
      (benedict-chat--observe-session-destroyed))))
 

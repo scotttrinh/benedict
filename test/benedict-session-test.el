@@ -455,7 +455,9 @@
       (should (cl-find 'checkpoint-requested events :key #'car)))))
 
 (ert-deftest benedict-session-test-continue-after-checkpoint ()
-  "Session can continue after checkpoint."
+  "Session can continue after checkpoint.
+When provider/model are not configured, dispatch-needed is emitted and
+session returns to idle state."
   (let ((benedict-session--registry (make-hash-table :test 'equal))
         (events nil))
     (let ((session (benedict-session-create)))
@@ -463,7 +465,8 @@
                 (lambda (_s type payload) (push (cons type payload) events)))
       (benedict-session-set-state session 'checkpoint)
       (benedict-session-continue session)
-      (should (eq 'running (benedict-session-state session)))
+      ;; Without provider/model, dispatch fails and session goes idle
+      (should (eq 'idle (benedict-session-state session)))
       (should (cl-find 'dispatch-needed events :key #'car)))))
 
 (ert-deftest benedict-session-test-stop-loop ()

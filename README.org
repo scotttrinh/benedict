@@ -131,8 +131,8 @@ The snippet below is an annotated, copy‑pasteable Doom Emacs setup. Drop it in
 
 ;; Optional: tweak chat behavior and profiles
 (after! benedict
-  (setq benedict-chat-token-display 'prompt+completion   ; or 'total / 'none
-        benedict-chat-default-profile 'coding
+  (setq benedict-chat-status-token-display 'prompt+completion   ; or 'total / 'none
+        benedict-chat-profiles-default-profile 'coding
         benedict-chat-profiles
         '((coding :label "Coding"
                   :preamble "You assist with code inside Emacs.")

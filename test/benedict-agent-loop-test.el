@@ -43,7 +43,9 @@
       (should-not (memq 'dispatch-needed events)))))
 
 (ert-deftest benedict-chat-checkpoint-accepts ()
-  "Chat handler continues session on checkpoint acceptance."
+  "Chat handler continues session on checkpoint acceptance.
+Without provider/model configured, dispatch-needed is emitted and
+session returns to idle."
   (let ((benedict-session--registry (make-hash-table :test 'equal))
         (events nil)
         (last-prompt nil))
@@ -61,7 +63,8 @@
            'checkpoint-requested
            '(:reason turn-limit :turn-count 3 :limit 3))))
       (should (string-match-p "run 3 autonomous steps" last-prompt))
-      (should (eq 'running (benedict-session-state session)))
+      ;; Without provider/model, dispatch fails and session goes idle
+      (should (eq 'idle (benedict-session-state session)))
       (should (memq 'dispatch-needed events)))))
 
 (ert-deftest benedict-chat-checkpoint-declines ()

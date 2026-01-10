@@ -610,6 +610,8 @@ Builds request from session state and dispatches."
     (if (and (plist-get request :provider)
              (plist-get request :model))
         (benedict-session-dispatch session request)
+      ;; Cannot dispatch without provider/model - reset to idle
+      (benedict-session-set-state session 'idle)
       (benedict-session--emit session 'dispatch-needed))))
 
 (defun benedict-session-continue (session)
