@@ -469,8 +469,8 @@ Create a new module with shared rendering infrastructure for collapsible blocks 
 ### Success Criteria
 
 #### Automated Verification
-- [ ] `nix run .#test` passes all tests
-- [ ] New module loads without error
+- [x] `nix run .#test` passes all tests
+- [ ] New module loads without error (fails in batch: missing `magit-section` on load-path)
 
 #### Manual Verification
 - [ ] (Deferred to Phase 5/6 when tool-ui and thinking use this)

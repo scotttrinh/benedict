@@ -2,3 +2,5 @@
 [2026-01-09 14:50] Renamed section helpers to module-prefixed benedict-chat-sections--* and updated call sites/tests. Updated benedict-chat-sections.el internal helpers and restored benedict-chat--current-turn-section usage. Ran nix run .#test (pass).
 [2026-01-09 14:59] Phase 2 done: moved profile resolution into benedict-chat-profiles.el with renamed helpers/defcustoms, updated call sites and docs/tests, and removed profile helpers from benedict-chat.el. Ran nix run .#test (all pass).
 [2026-01-09 15:07] Phase 3: extracted status UI into benedict-chat-status.el, updated chat/test references, and ran nix run .#test. Manual status-line verification still pending.
+[2026-01-10 10:07] Phase 4: added benedict-chat-blocks.el with shared collapsible header/fold helpers; nix run .#test failed (missing benedict-chat-profiles--effective-profile, benedict-chat-status--status-tick); emacs --batch -L . -l benedict-chat-blocks.el failed due to missing magit-section on load-path.
+[2026-01-10 10:11] Fixed tests to require benedict-chat-profiles and benedict-chat-status after Phase 2/3 extractions; resolved void-function failures and re-ran nix run .#test (pass).
