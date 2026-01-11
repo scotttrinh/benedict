@@ -24,6 +24,7 @@
 (require 'benedict-chat-stream)
 (require 'benedict-chat-thinking)
 (require 'benedict-chat-tool-ui)
+(require 'benedict-chat-compose)
 (require 'benedict-session)
 
 ;;; Mode definition and setup
@@ -221,12 +222,6 @@ Values:
           (const :tag "Hide token usage" none))
   :group 'benedict)
 
-(defcustom benedict-chat-compose-buffer-name-format "*Benedict Compose: %s*"
-  "Format string used to name compose buffers for chat threads.
-The chat buffer name is substituted into the single %s placeholder."
-  :type 'string
-  :group 'benedict)
-
 (defcustom benedict-chat-profiles
   '((planning
      :label "Planning"
@@ -321,11 +316,6 @@ Additional optional keys (all are ignored when absent):
   :type '(alist :key-type string :value-type symbol)
   :group 'benedict)
 
-(defcustom benedict-chat-context-retain-after-send nil
-  "When non-nil, keep pending context slices after sending from compose."
-  :type 'boolean
-  :group 'benedict)
-
 (defcustom benedict-chat-base-system-prompt
   "You are Benedict, an expert AI engineering agent integrated into Emacs.
 Your goal is to help the user build high-quality software efficiently.
@@ -380,14 +370,6 @@ The agent frame provides isolation for flywire-backed tools."
 (defconst benedict-chat--spinner-frames ["◐" "◓" "◑" "◒"]
   "Spinner frames used while a provider request is active.")
 
-(defvar benedict-chat--profile-button-map
-  (let ((map (make-sparse-keymap)))
-    (define-key map [header-line mouse-1] #'benedict-chat-choose-profile)
-    (define-key map [down-mouse-1] #'benedict-chat-choose-profile)
-    (define-key map (kbd "RET") #'benedict-chat-choose-profile)
-    map)
-  "Keymap for interacting with the profile display in compose headers.")
-
 (defvar benedict-chat--model-button-map
   (let ((map (make-sparse-keymap)))
     (define-key map [mode-line mouse-1] #'benedict-chat-choose-model)
@@ -396,14 +378,6 @@ The agent frame provides isolation for flywire-backed tools."
     (define-key map (kbd "RET") #'benedict-chat-choose-model)
     map)
   "Keymap for clicking the provider/model display in status lines.")
-
-(defvar benedict-chat--provider-button-map
-  (let ((map (make-sparse-keymap)))
-    (define-key map [header-line mouse-1] #'benedict-chat-choose-provider)
-    (define-key map [down-mouse-1] #'benedict-chat-choose-provider)
-    (define-key map (kbd "RET") #'benedict-chat-choose-provider)
-    map)
-  "Keymap for interacting with the provider display in compose headers.")
 
 (defvar benedict-chat-model-history nil
   "Minibuffer history for `benedict-chat-choose-model'.")
@@ -442,16 +416,6 @@ See `benedict-session' for the in-memory session data structure.")
 
 (defvar-local benedict-chat--session-subscription nil
   "Function to call to unsubscribe from session events.")
-
-(defconst benedict-chat--compose-separator "----\n"
-  "Separator line between compose header and body.")
-
-(defconst benedict-chat--handle-regexp "^[A-Za-z0-9._:-]+$"
-  "Valid pattern for context handles referenced via [[handle]].")
-
-(defconst benedict-chat--anchor-guidance
-  "The user may refer to context slices using Org-style notation. Each context block is labeled with an anchor like <<foo>>. Inside the user's instructions, [[foo]] refers to that same context slice. When reasoning about their request, resolve [[foo]] to the corresponding <<foo>> block in the Context section above."
-  "System guidance explaining how to resolve [[handle]] links to context anchors.")
 
 (defun benedict-chat--empty-response-text (thinking)
   "Return placeholder text for empty responses.
@@ -613,7 +577,7 @@ Resolution order: buffer override → profile :provider → global `benedict-pro
   "Return combined system content for PROFILE."
   (let ((parts nil))
     (dolist (piece (list benedict-chat-base-system-prompt
-                         benedict-chat--anchor-guidance
+                         benedict-chat-compose--anchor-guidance
                          (benedict-chat--profile-preamble profile)))
       (when (and piece (stringp piece)
                  (not (string-empty-p (string-trim piece))))
@@ -706,7 +670,7 @@ Resolution order: buffer override → profile :provider → global `benedict-pro
       (setq benedict-chat-profile profile)
       (benedict-chat--configure-session)
       (benedict-chat--status-refresh)
-      (benedict-chat--refresh-compose-header))
+      (benedict-chat-compose--refresh-header))
     (message "Benedict profile set to %s" (benedict-chat--profile-label profile))))
 
 (defun benedict-chat-choose-provider ()
@@ -732,7 +696,7 @@ Resolution order: buffer override → profile :provider → global `benedict-pro
    (setq benedict-chat--provider-override provider)
    (benedict-chat--configure-session)
    (benedict-chat--status-refresh)
-   (benedict-chat--refresh-compose-header))
+   (benedict-chat-compose--refresh-header))
   (message "Benedict provider set to %s" (or (benedict-provider-display-name provider)
                                             (symbol-name provider)))))
 
@@ -1003,7 +967,7 @@ Handles errors related to killed buffers gracefully."
             (unless (string-empty-p selection) selection))
       (benedict-chat--configure-session)
       (benedict-chat--status-refresh)
-      (benedict-chat--refresh-compose-header))
+      (benedict-chat-compose--refresh-header))
     (if (string-empty-p selection)
         (message "Benedict: cleared compose model override")
       (message "Benedict: model override set to %s" selection))))
@@ -1401,321 +1365,11 @@ For assistant messages during streaming, renders directly (streaming UI)."
         (benedict-session-run session)))))
 
 ;; -------------------------------------------------------------------
-;; Compose buffer flow (context-aware prompts)
-
-(defvar-local benedict-chat-compose--chat-buffer nil
-  "Parent chat buffer associated with this compose buffer.")
-
-(defvar-local benedict-chat-compose--body-start nil
-  "Marker pointing to the start of the editable body in compose buffers.")
-
-(defvar benedict-chat-compose-mode-map
-  (let ((m (make-sparse-keymap)))
-    (define-key m (kbd "C-c C-c") #'benedict-chat-compose-send)
-    (define-key m (kbd "C-c C-k") #'benedict-chat-compose-cancel)
-    m)
-  "Keymap for `benedict-chat-compose-mode'.")
-
-(define-derived-mode benedict-chat-compose-mode text-mode "Benedict-Compose"
-  "Major mode for composing Benedict prompts with context."
-  (setq-local benedict-chat-compose--chat-buffer nil)
-  (setq-local benedict-chat-compose--body-start (make-marker))
-  (setq-local mode-line-process nil)
-  (setq-local header-line-format nil)
-  (visual-line-mode 1))
-
-(defun benedict-chat--compose-buffer-name (chat-buffer)
-  "Return a compose buffer name for CHAT-BUFFER."
-  (format benedict-chat-compose-buffer-name-format (buffer-name chat-buffer)))
-
-(defun benedict-chat--compose-header-text (chat-buffer)
-  "Return header text for CHAT-BUFFER's compose buffer."
-  (with-current-buffer chat-buffer
-    (let* ((profile (benedict-chat--effective-profile))
-           (profile-label (propertize (benedict-chat--profile-label profile)
-                                      'mouse-face 'mode-line-highlight
-                                      'help-echo "Choose a Benedict profile (click)"
-                                      'local-map benedict-chat--profile-button-map))
-           (provider (benedict-chat--resolve-provider profile))
-           (provider-label (propertize (benedict-chat--provider-label provider)
-                                       'mouse-face 'mode-line-highlight
-                                       'help-echo "Choose a Benedict provider (click)"
-                                       'local-map benedict-chat--provider-button-map))
-           (model (benedict-chat--resolve-model
-                   provider profile benedict-chat--compose-model-override))
-           (override (and (stringp benedict-chat--compose-model-override)
-                          (not (string-empty-p benedict-chat--compose-model-override))))
-           (model-label (propertize (or (and override
-                                             (format "%s (compose override)"
-                                                     benedict-chat--compose-model-override))
-                                        (or model "n/a"))
-                                    'mouse-face 'mode-line-highlight
-                                    'help-echo "Set a per-compose model override (click)"
-                                    'local-map benedict-chat--model-button-map))
-           (project (or (benedict-chat--project-root) "n/a"))
-           (summary (or (benedict-context-summary (or benedict-chat--context-slices nil))
-                        "n/a")))
-      (format "Profile: %s    Provider: %s    Model: %s    Project: %s    Context: %s\n"
-              profile-label provider-label model-label project summary))))
-
-(defun benedict-chat--sanitize-handle (handle)
-  "Return HANDLE trimmed and with unsafe characters replaced."
-  (let* ((trimmed (string-trim (or handle "")))
-         (spaced (replace-regexp-in-string "[[:space:]]+" "-" trimmed))
-         (clean (replace-regexp-in-string "[^A-Za-z0-9._:-]" "-" spaced)))
-    (replace-regexp-in-string "-+" "-" clean)))
-
-(defun benedict-chat--valid-handle-p (handle)
-  "Return non-nil when HANDLE matches `benedict-chat--handle-regexp'."
-  (and (stringp handle)
-       (string-match-p benedict-chat--handle-regexp handle)))
-
-(defun benedict-chat--preferred-handle (candidate)
-  "Return a sanitized HANDLE string derived from CANDIDATE or fallback."
-  (let* ((sanitized (benedict-chat--sanitize-handle candidate))
-         (fallback (benedict-chat--sanitize-handle "context")))
-    (or (and (benedict-chat--valid-handle-p sanitized) sanitized)
-        fallback)))
-
-(defun benedict-chat--context-handles (slices)
-  "Return a list of handles present in SLICES."
-  (delq nil (mapcar (lambda (slice) (plist-get slice :handle)) slices)))
-
-(defun benedict-chat--prepare-context-slice (slice existing-handles)
-  "Prompt for a handle for SLICE, respecting EXISTING-HANDLES.
-Returns a plist (:slice :replacing) where :slice carries the final handle."
-  (let* ((default (or (plist-get slice :handle-default)
-                      (plist-get slice :handle)
-                      (plist-get slice :label)
-                      "context"))
-         (proposal (benedict-chat--preferred-handle default))
-         (handles (cl-remove-if-not #'identity existing-handles))
-         (final-handle nil))
-    (if noninteractive
-        (setq final-handle proposal)
-      (while (not final-handle)
-        (let* ((input (string-trim (read-string
-                                    (format "Context handle (default %s): " proposal)
-                                    nil nil proposal)))
-               (candidate (if (string-empty-p input) proposal input))
-               (sanitized (benedict-chat--sanitize-handle candidate)))
-          (cond
-           ((not (benedict-chat--valid-handle-p sanitized))
-            (message "Handle must match %s" benedict-chat--handle-regexp))
-           ((and (member sanitized handles)
-                 (not (yes-or-no-p (format "Handle %s already in use. Replace it? "
-                                           sanitized))))
-            (setq proposal sanitized))
-           (t (setq final-handle sanitized))))))
-    (let* ((handle final-handle)
-           (replacing (member handle handles))
-           (final-slice (plist-put (copy-sequence slice) :handle handle)))
-      (list :slice final-slice :replacing replacing))))
-
-(defun benedict-chat--upsert-context-slice (slices slice)
-  "Insert or replace SLICE in SLICES keyed by :handle."
-  (let* ((handle (plist-get slice :handle))
-         (updated nil)
-         (result (mapcar (lambda (existing)
-                           (if (and handle
-                                    (string= handle (plist-get existing :handle)))
-                               (progn
-                                 (setq updated t)
-                                 slice)
-                             existing))
-                         slices)))
-    (if updated
-        result
-      (append result (list slice)))))
-
-(defun benedict-chat--insert-handle-link (handle)
-  "Insert [[HANDLE]] at point inside the compose body."
-  (insert (format "[[%s]]" handle)))
-
-(defun benedict-chat--extract-handle-links (text)
-  "Return a list of handle names referenced as [[handle]] in TEXT."
-  (let (result (start 0))
-    (while (string-match "\\[\\[\\([A-Za-z0-9._:-]+\\)\\]\\]" text start)
-      (push (match-string 1 text) result)
-      (setq start (match-end 0)))
-    (nreverse (cl-delete-duplicates result :test #'string=))))
-
-(defun benedict-chat--warn-unknown-handles (body-handles slices)
-  "Warn when BODY-HANDLES are not present in SLICES."
-  (let* ((known (benedict-chat--context-handles slices))
-         (unknown (cl-set-difference body-handles known :test #'string=)))
-    (when unknown
-      (message "Benedict: unknown context handles: %s" (string-join unknown ", ")))
-    unknown))
-
-(defun benedict-chat-compose--render-header ()
-  "Render or refresh the compose header for the current buffer."
-  (let* ((body-start (or (and benedict-chat-compose--body-start
-                              (marker-position benedict-chat-compose--body-start))
-                         (point-min)))
-         (body-point (let ((pos (point)))
-                       (when (>= pos body-start)
-                         (- pos body-start))))
-         (body (buffer-substring-no-properties body-start (point-max)))
-         (chat benedict-chat-compose--chat-buffer)
-         (header (if (buffer-live-p chat)
-                     (benedict-chat--compose-header-text chat)
-                   "Profile: n/a    Project: n/a    Context: n/a\n"))
-         (context-preview (when (and chat (buffer-live-p chat))
-                            (with-current-buffer chat
-                              (when benedict-chat--context-slices
-                                (concat "Context (preview):\n"
-                                        (benedict-context-format-for-compose
-                                         benedict-chat--context-slices)
-                                        "\n")))))
-         (inhibit-read-only t))
-    (erase-buffer)
-    (insert header benedict-chat--compose-separator)
-    (when context-preview
-      (insert context-preview benedict-chat--compose-separator))
-    (setq benedict-chat-compose--body-start (copy-marker (point)))
-    (set-marker-insertion-type benedict-chat-compose--body-start nil)
-    (add-text-properties (point-min) benedict-chat-compose--body-start
-                         '(read-only t front-sticky t rear-nonsticky t))
-    (insert body)
-    (goto-char (min (point-max)
-                    (+ (marker-position benedict-chat-compose--body-start)
-                       (or body-point (length body)))))))
-
-(defun benedict-chat--refresh-compose-header ()
-  "Refresh compose buffer header for the current chat."
-  (when (and benedict-chat--compose-buffer
-             (buffer-live-p benedict-chat--compose-buffer))
-    (with-current-buffer benedict-chat--compose-buffer
-      (benedict-chat-compose--render-header))))
-
-(defun benedict-chat--ensure-compose-buffer ()
-  "Return the compose buffer for the current chat, creating it if needed."
-  (let ((chat (current-buffer)))
-    (unless (derived-mode-p 'benedict-chat-mode)
-      (user-error "Compose buffers are only available from Benedict chat"))
-    (unless (and benedict-chat--compose-buffer
-                 (buffer-live-p benedict-chat--compose-buffer))
-      (let ((buffer (get-buffer-create (benedict-chat--compose-buffer-name chat))))
-        (setq benedict-chat--compose-buffer buffer)
-        (with-current-buffer buffer
-          (benedict-chat-compose-mode)
-          (setq-local benedict-chat-compose--chat-buffer chat)
-          (benedict-chat-compose--render-header))))
-    benedict-chat--compose-buffer))
-
-(defun benedict-chat-compose-open ()
-  "Open or focus the compose buffer for the current chat."
-  (interactive)
-  (let* ((chat (benedict-chat--ensure-chat-buffer))
-         (compose (with-current-buffer chat
-                    (benedict-chat--ensure-compose-buffer))))
-    (pop-to-buffer compose)
-    (goto-char (point-max))
-    (message "Compose buffer ready. C-c C-c to send; C-c C-k to cancel.")))
-
-(defun benedict-chat-compose--body-text ()
-  "Return the editable body text from the current compose buffer."
-  (buffer-substring-no-properties
-   (or (marker-position benedict-chat-compose--body-start) (point-min))
-   (point-max)))
-
-(defun benedict-chat--assemble-message-text (prompt slices)
-  "Return final user message text combining PROMPT and SLICES."
-  (let* ((context (benedict-context-format-for-send slices))
-         (body (string-trim prompt)))
-    (string-join (delq nil (list context body)) "\n\n")))
-
-(defun benedict-chat--clear-compose-state ()
-  "Clear compose buffer reference for the current chat."
-  (when (and benedict-chat--compose-buffer
-             (buffer-live-p benedict-chat--compose-buffer))
-    (kill-buffer benedict-chat--compose-buffer))
-  (setq benedict-chat--compose-model-override nil)
-  (setq benedict-chat--compose-buffer nil)
-  (benedict-chat--configure-session)
-  (benedict-chat--status-refresh))
-
-(defun benedict-chat-compose-send ()
-  "Send the composed prompt to the associated chat buffer."
-  (interactive)
-  (unless (derived-mode-p 'benedict-chat-compose-mode)
-    (user-error "Not in a Benedict compose buffer"))
-  (unless (buffer-live-p benedict-chat-compose--chat-buffer)
-    (user-error "Parent chat buffer is unavailable"))
-  (let* ((compose (current-buffer))
-         (prompt (string-trim (benedict-chat-compose--body-text))))
-    (when (string-blank-p prompt)
-      (user-error "Prompt is empty"))
-    (let* ((chat benedict-chat-compose--chat-buffer)
-           (stable-chat (with-current-buffer chat
-                          (or benedict-chat--buffer chat)))
-           (slices (with-current-buffer stable-chat
-                     benedict-chat--context-slices))
-           (body-handles (benedict-chat--extract-handle-links prompt))
-           (text (benedict-chat--assemble-message-text prompt slices)))
-      (benedict-chat--warn-unknown-handles body-handles slices)
-      (with-current-buffer stable-chat
-        (benedict-chat--send-text text stable-chat)
-        (unless benedict-chat-context-retain-after-send
-          (setq benedict-chat--context-slices nil))
-        (benedict-chat--clear-compose-state))
-      (when (buffer-live-p stable-chat)
-        (pop-to-buffer stable-chat))
-      (when (buffer-live-p compose)
-        (kill-buffer compose))
-      (message "Benedict: sent prompt with context"))))
-
-(defun benedict-chat-compose-cancel ()
-  "Cancel composition and discard pending context."
-  (interactive)
-  (unless (derived-mode-p 'benedict-chat-compose-mode)
-    (user-error "Not in a Benedict compose buffer"))
-  (let ((chat benedict-chat-compose--chat-buffer))
-    (when (buffer-live-p chat)
-      (with-current-buffer chat
-        (setq benedict-chat--context-slices nil)
-        (benedict-chat--clear-compose-state))))
-  (when (buffer-live-p benedict-chat-compose--chat-buffer)
-    (pop-to-buffer benedict-chat-compose--chat-buffer))
-  (when (buffer-live-p (current-buffer))
-    (kill-buffer (current-buffer)))
-  (message "Benedict: canceled compose buffer"))
-
-(defun benedict-chat--deliver-context-slices (slices)
-  "Attach SLICES to the compose buffer for the current chat."
-  (let* ((chat (benedict-chat--ensure-chat-buffer))
-         (compose (with-current-buffer chat
-                    (benedict-chat--ensure-compose-buffer)))
-         (prepared nil))
-    (with-current-buffer chat
-      (let ((existing (benedict-chat--context-handles benedict-chat--context-slices)))
-        (dolist (slice slices)
-          (let* ((entry (benedict-chat--prepare-context-slice slice existing))
-                 (final (plist-get entry :slice)))
-            (push entry prepared)
-            (setq benedict-chat--context-slices
-                  (benedict-chat--upsert-context-slice benedict-chat--context-slices final))
-            (setq existing (benedict-chat--context-handles benedict-chat--context-slices)))))
-      (setq prepared (nreverse prepared)))
-    (when (buffer-live-p compose)
-      (with-current-buffer compose
-        (benedict-chat-compose--render-header)
-        (when (and benedict-chat-compose--body-start
-                   (< (point) (marker-position benedict-chat-compose--body-start)))
-          (goto-char (marker-position benedict-chat-compose--body-start)))
-        (dolist (entry prepared)
-          (let ((handle (plist-get (plist-get entry :slice) :handle)))
-            (when (and handle (not (plist-get entry :replacing)))
-              (benedict-chat--insert-handle-link handle))))))
-    (pop-to-buffer compose)))
-
-;; -------------------------------------------------------------------
 ;; Context capture commands
 
 (defun benedict-chat--slice-with-handle-default (slice handle)
   "Return SLICE tagged with a default HANDLE suggestion."
-  (plist-put slice :handle-default (benedict-chat--preferred-handle handle)))
+  (plist-put slice :handle-default (benedict-chat-compose--preferred-handle handle)))
 
 (defun benedict-chat--buffer-label (&optional buffer)
   "Return a short label for BUFFER (defaults to current buffer)."
@@ -1839,7 +1493,7 @@ Returns a plist (:slice :replacing) where :slice carries the final handle."
   (unless (use-region-p)
     (user-error "No active region"))
   (let ((slice (benedict-chat--slice-from-region start end)))
-    (benedict-chat--deliver-context-slices (list slice))
+    (benedict-chat-compose--deliver-context-slices (list slice))
     (message "Added region to Benedict compose buffer")))
 
 ;;;###autoload
@@ -1847,7 +1501,7 @@ Returns a plist (:slice :replacing) where :slice carries the final handle."
   "Add the defun at point to the Benedict compose context."
   (interactive)
   (let ((slice (benedict-chat--slice-from-defun)))
-    (benedict-chat--deliver-context-slices (list slice))
+    (benedict-chat-compose--deliver-context-slices (list slice))
     (message "Added defun to Benedict compose buffer")))
 
 ;;;###autoload
@@ -1855,7 +1509,7 @@ Returns a plist (:slice :replacing) where :slice carries the final handle."
   "Add the entire buffer to the Benedict compose context."
   (interactive)
   (let ((slice (benedict-chat--slice-from-buffer)))
-    (benedict-chat--deliver-context-slices (list slice))
+    (benedict-chat-compose--deliver-context-slices (list slice))
     (message "Added buffer to Benedict compose buffer")))
 
 ;;;###autoload
@@ -1863,7 +1517,7 @@ Returns a plist (:slice :replacing) where :slice carries the final handle."
   "Add basic project information to the compose context."
   (interactive)
   (let ((slice (benedict-chat--slice-from-project)))
-    (benedict-chat--deliver-context-slices (list slice))
+    (benedict-chat-compose--deliver-context-slices (list slice))
     (message "Added project context to Benedict compose buffer")))
 
 ;;;###autoload
@@ -1872,7 +1526,7 @@ Returns a plist (:slice :replacing) where :slice carries the final handle."
   (interactive)
   (if-let ((slice (benedict-chat--slice-from-git)))
       (progn
-        (benedict-chat--deliver-context-slices (list slice))
+        (benedict-chat-compose--deliver-context-slices (list slice))
         (message "Added Git context to Benedict compose buffer"))
     (user-error "No Git context available here")))
 

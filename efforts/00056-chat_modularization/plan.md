@@ -885,7 +885,12 @@ Final cleanup of `benedict-chat.el`: remove vestigial code, ensure pure reactive
 3. **Remove duplicate state in observers**
    - `benedict-chat--request-seq` if duplicating session's request tracking
 
-4. **Audit remaining functions**
+4. **Audit and Common Module Extraction**
+   - Identify "orphan" utility functions that were missed in previous phases (e.g., `benedict-chat--provider-label` which is used by `compose` but lives in core).
+   - Move these to their logical homes (`benedict-chat-profiles.el`, `benedict-chat-status.el`) or create a `benedict-chat-common.el` if they are truly shared utilities.
+   - Evaluate creating `benedict-chat-vars.el` (or `common`) to hold shared buffer-local variable definitions (`benedict-chat--session`, `benedict-chat--buffer`) to eliminate `defvar` / `declare-function` circularity noise if it becomes excessive.
+
+5. **Audit remaining functions**
    - Ensure all remaining code is:
      - Mode definition
      - Buffer initialization
