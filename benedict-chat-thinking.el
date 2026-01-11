@@ -15,7 +15,7 @@
 
 (declare-function benedict-chat--make-item "benedict-chat")
 (declare-function benedict-chat--track-item "benedict-chat")
-(declare-function benedict-chat--current-assistant-section "benedict-chat")
+(declare-function benedict-chat-nav--current-assistant-section "benedict-chat-nav")
 (declare-function benedict-chat--maybe-insert-item-gap "benedict-chat")
 
 (defvar benedict-chat--thinking-items)
@@ -103,7 +103,7 @@ message history."
       (unless (plist-member item :thinking-folded)
         (plist-put item :thinking-folded t))
       (benedict-chat--track-item item)
-      (let ((parent (benedict-chat--current-assistant-section)))
+      (let ((parent (benedict-chat-nav--current-assistant-section)))
         (when parent
           (plist-put item :parent-section parent))
         (let ((inhibit-read-only t))

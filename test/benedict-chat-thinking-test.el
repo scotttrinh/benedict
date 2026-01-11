@@ -58,7 +58,7 @@
     (benedict-chat--init-buffer)
     (benedict-chat--record-message (current-buffer)
                                    (list :role 'assistant :content "Hello"))
-    (let* ((assistant-item (benedict-chat--last-assistant-item))
+    (let* ((assistant-item (benedict-chat-nav--last-assistant-item))
            (assistant-section (plist-get assistant-item :section))
            (thinking (benedict-chat-thinking--record-block (current-buffer) "analysis" (list :provider 'fake)))
            (thinking-section (plist-get thinking :section))
@@ -121,11 +121,11 @@
              (start-2 (plist-get thinking-2 :header-start)))
         (should (and (markerp start-1) (markerp start-2)))
         (goto-char (point-min))
-        (benedict-chat-next-thinking)
+        (benedict-chat-nav-next-thinking)
         (should (= (point) (marker-position start-1)))
-        (benedict-chat-next-thinking)
+        (benedict-chat-nav-next-thinking)
         (should (= (point) (marker-position start-2)))
-        (benedict-chat-previous-thinking)
+        (benedict-chat-nav-previous-thinking)
         (should (= (point) (marker-position start-1)))))))
 
 (ert-deftest benedict-chat-thinking-toggle-under-assistant-ui ()
@@ -135,35 +135,40 @@
     (benedict-chat--init-buffer)
     (benedict-chat--record-message (current-buffer)
                                    (list :role 'assistant :content "Hello"))
-    (let* ((assistant (benedict-chat--last-assistant-item))
+    (let* ((assistant (benedict-chat-nav--last-assistant-item))
            (assistant-start (plist-get assistant :header-start))
            (thinking (benedict-chat-thinking--record-block (current-buffer) "analysis" (list :provider 'fake)))
            (thinking-section (plist-get thinking :section)))
       (should (and (markerp assistant-start) (markerp (plist-get thinking :header-start))))
       (should (plist-get thinking :thinking-folded))
       (goto-char (marker-position assistant-start))
-      (benedict-chat-toggle-thinking)
+      (benedict-chat-nav-toggle-thinking)
       (should-not (plist-get thinking :thinking-folded))
       (should (benedict-chat-sections--section-p thinking-section))
       (should-not (oref thinking-section hidden)))))
 
-(ert-deftest benedict-chat-jump-to-last-assistant-with-tools-finds-parent ()
-  "Jump-to-last-assistant-with-tools goes to the last assistant with tool blocks."
+(ert-deftest benedict-chat-nav-jump-to-last-assistant-with-tools-finds-parent ()
+  "Test that jump-to-last-assistant-with-tools correctly navigates to the parent assistant message."
   (with-temp-buffer
     (benedict-chat-mode)
     (benedict-chat--init-buffer)
+    
+    ;; Assistant 1: No tools
     (benedict-chat--record-message (current-buffer)
-                                   (list :role 'assistant :content "With tools"))
-    (let* ((assistant-1 (benedict-chat--last-assistant-item))
-           (assistant-1-start (plist-get assistant-1 :header-start)))
+                                   (list :role 'assistant :content "Assistant 1"))
+    
+    ;; Assistant 2: Has tools
+    (benedict-chat--record-message (current-buffer)
+                                   (list :role 'assistant :content "Assistant 2"))
+    (let ((assistant-2 (benedict-chat-nav--last-assistant-item)))
       (benedict-chat-tool-ui--record-block (current-buffer)
-                                        (list :id "call-1" :name "demo")
-                                        (list :provider 'fake :status 'success))
-      (benedict-chat--record-message (current-buffer)
-                                     (list :role 'assistant :content "No tools"))
-      (goto-char (point-max))
-      (benedict-chat-jump-to-last-assistant-with-tools)
-      (should (= (point) (marker-position assistant-1-start))))))
+                                           (list :id "call-1" :name "test")
+                                           (list :provider 'fake :status 'success))
+      
+      (goto-char (point-min))
+      (benedict-chat-nav-jump-to-last-assistant-with-tools)
+      
+      (should (equal (benedict-chat-nav--item-at-point) assistant-2)))))
 
 (provide 'test/benedict-chat-thinking-test)
 ;;; benedict-chat-thinking-test.el ends here

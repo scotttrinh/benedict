@@ -26,6 +26,7 @@
 (require 'benedict-chat-tool-ui)
 (require 'benedict-chat-compose)
 (require 'benedict-chat-context-capture)
+(require 'benedict-chat-nav)
 (require 'benedict-chat-profiles)
 (require 'benedict-session)
 
@@ -1189,21 +1190,7 @@ For assistant messages during streaming, renders directly (streaming UI)."
         (benedict-chat--render-message buffer message))))
   message)
 
-(defun benedict-chat--assistant-message-item-p (item)
-  "Return non-nil when ITEM represents an assistant message."
-  (and (eq (plist-get item :kind) 'message)
-       (eq (benedict-chat--normalize-role (plist-get item :role)) 'assistant)))
 
-(defun benedict-chat--last-assistant-item ()
-  "Return the most recently rendered assistant message item, or nil."
-  (cl-loop for item in (reverse benedict-chat--items)
-           when (benedict-chat--assistant-message-item-p item)
-           return item))
-
-(defun benedict-chat--current-assistant-section ()
-  "Return the magit-section for the most recent assistant message, or nil."
-  (when-let ((item (benedict-chat--last-assistant-item)))
-    (plist-get item :section)))
 
 (defun benedict-chat--message-history ()
   "Return message history for current buffer's session."
@@ -1260,7 +1247,7 @@ For assistant messages during streaming, renders directly (streaming UI)."
   "Render RESULT metadata that is not represented in session messages."
   (with-current-buffer buffer
     (let* ((session benedict-chat--session)
-           (message (and session (benedict-chat--find-last-assistant)))
+           (message (and session (benedict-chat-nav--find-last-assistant)))
            (message-metadata (and message (plist-get message :metadata)))
            (provider (or (plist-get result :provider)
                          (and session (benedict-session-provider session))
@@ -1366,16 +1353,7 @@ For assistant messages during streaming, renders directly (streaming UI)."
                     :timestamp (current-time)))
         (benedict-session-run session)))))
 
-(defun benedict-chat--find-last-assistant (&optional include-errors)
-  "Return the most recent assistant message from session.
-When INCLUDE-ERRORS is nil, skip entries flagged with :error metadata."
-  (when benedict-chat--session
-    (cl-find-if
-     (lambda (message)
-       (and (eq (benedict-chat--normalize-role (plist-get message :role)) 'assistant)
-            (or include-errors
-                (not (plist-get (plist-get message :metadata) :error)))))
-     (benedict-session-messages benedict-chat--session))))
+
 
 (defun benedict-chat--ensure-chat-buffer ()
   "Return the active Benedict chat buffer, creating one if needed."
@@ -1387,286 +1365,26 @@ When INCLUDE-ERRORS is nil, skip entries flagged with :error metadata."
         (get-buffer benedict-chat-buffer-name))
       (user-error "Not in a Benedict chat buffer")))
 
-(defun benedict-chat--item-at-point ()
-  "Return the chat item covering point, or nil.
-Checks both the item's start/end range and header markers to handle
-navigation that lands on item headers."
-  (or ;; First try: find item whose start/end range contains point
-   (cl-find-if
-    (lambda (item)
-      (let ((start (plist-get item :start))
-            (end (plist-get item :end)))
-        (and (markerp start) (markerp end)
-             (marker-position start) (marker-position end)
-             (<= (marker-position start) (point))
-             (<= (point) (marker-position end)))))
-    benedict-chat--items)
-   ;; Second try: find item whose header contains point
-   ;; (for navigation that lands on header markers)
-   (cl-find-if
-    (lambda (item)
-      (let ((header-start (plist-get item :header-start))
-            (header-end (plist-get item :header-end)))
-        (and (markerp header-start) (markerp header-end)
-             (marker-position header-start) (marker-position header-end)
-             (<= (marker-position header-start) (point))
-             (<= (point) (marker-position header-end)))))
-    benedict-chat--items)))
 
-(defun benedict-chat--item-index (item)
-  "Return ITEM index within `benedict-chat--items', or nil."
-  (when item
-    (cl-position item benedict-chat--items :test #'eq)))
-
-(defun benedict-chat--seek-item (predicate direction)
-  "Return next item matching PREDICATE in DIRECTION.
-DIRECTION is either 'forward or 'backward."
-  (let* ((items benedict-chat--items)
-         (current-index (or (benedict-chat--item-index (benedict-chat--item-at-point)) -1))
-         (indices (if (eq direction 'forward)
-                      (number-sequence (1+ current-index) (1- (length items)))
-                    (number-sequence (1- current-index) 0 -1))))
-    (cl-loop for idx in indices
-             for candidate = (nth idx items)
-             when (and candidate (funcall predicate candidate))
-             return candidate)))
-
-(defun benedict-chat--goto-item (item)
-  "Move point to ITEM header.
-Uses magit-section-goto when section exists, then ensures point lands
-on the header marker for tests that verify exact positions."
-  (if-let ((section (plist-get item :section)))
-      (progn
-        (magit-section-goto section)
-        ;; After magit-section-goto, ensure we're on the header marker
-        ;; for tests that verify exact point positions
-        (when-let ((header-start (plist-get item :header-start)))
-          (when (and (markerp header-start)
-                     (marker-buffer header-start)
-                     (marker-position header-start))
-            (goto-char (marker-position header-start)))))
-    (when-let ((pos (or (plist-get item :header-start)
-                       (plist-get item :start))))
-      (when (and (markerp pos)
-                 (marker-buffer pos)
-                 (marker-position pos))
-        (goto-char (marker-position pos)))))
-  item)
-
-(defun benedict-chat--navigate (predicate direction label)
-  "Move to item matching PREDICATE in DIRECTION or echo LABEL when missing."
-  (let ((chat (benedict-chat--ensure-chat-buffer)))
-    (unless (eq (current-buffer) chat)
-      (pop-to-buffer-same-window chat))
-    (with-current-buffer chat
-      (if-let ((target (benedict-chat--seek-item predicate direction)))
-          (benedict-chat--goto-item target)
-        (message "Benedict: no %s %s" label (if (eq direction 'forward) "ahead" "behind"))
-        nil))))
-
-(defun benedict-chat--tool-item-p (item)
-  "Return non-nil when ITEM represents a tool block."
-  (eq (plist-get item :kind) 'tool))
-
-(defun benedict-chat--assistant-item-for-tool (tool-item)
-  "Return the assistant message item associated with TOOL-ITEM, or nil."
-  (let ((items benedict-chat--items)
-        (parent (plist-get tool-item :parent-section)))
-    (or (and parent
-             (cl-find-if (lambda (item)
-                           (and (benedict-chat--assistant-message-item-p item)
-                                (eq (plist-get item :section) parent)))
-                         items))
-        (let ((index (benedict-chat--item-index tool-item)))
-          (when index
-            (cl-loop for idx downfrom (1- index) to 0
-                     for candidate = (nth idx items)
-                     when (benedict-chat--assistant-message-item-p candidate)
-                     return candidate))))))
-
-(defun benedict-chat--last-assistant-with-tools-item ()
-  "Return the most recent assistant message that has tool blocks, or nil."
-  (cl-loop for item in (reverse benedict-chat--items)
-           when (benedict-chat--tool-item-p item)
-           do (when-let ((assistant (benedict-chat--assistant-item-for-tool item)))
-                (cl-return assistant))))
-
-(defun benedict-chat--tool-failure-item-p (item)
-  "Return non-nil when ITEM represents a failed tool block."
-  (and (benedict-chat--tool-item-p item)
-       (let ((status (plist-get (plist-get item :metadata) :status)))
-         (memq status '(failure error)))))
-
-(defun benedict-chat--error-item-p (item)
-  "Return non-nil when ITEM captures an error."
-  (let ((metadata (plist-get item :metadata)))
-    (or (plist-get metadata :error)
-        (eq (plist-get metadata :status) 'failure)
-        (eq (plist-get metadata :status) 'error))))
-
-(defun benedict-chat-jump-to-latest ()
-  "Jump to the newest chat item in the buffer."
-  (interactive)
-  (let ((chat (benedict-chat--ensure-chat-buffer)))
-    (unless (eq (current-buffer) chat)
-      (pop-to-buffer-same-window chat))
-    (with-current-buffer chat
-      (if benedict-chat--items
-          (benedict-chat--goto-item (car (last benedict-chat--items)))
-        (goto-char (point-max))
-        (message "Benedict: no chat items yet")))))
-
-(defun benedict-chat-jump-to-last-assistant ()
-  "Jump to the most recent assistant message in the chat buffer."
-  (interactive)
-  (let ((chat (benedict-chat--ensure-chat-buffer)))
-    (unless (eq (current-buffer) chat)
-      (pop-to-buffer-same-window chat))
-    (with-current-buffer chat
-      (if-let ((item (benedict-chat--last-assistant-item)))
-          (benedict-chat--goto-item item)
-        (message "Benedict: no assistant messages yet")
-        nil))))
-
-(defun benedict-chat-jump-to-last-assistant-with-tools ()
-  "Jump to the most recent assistant message that has tool blocks."
-  (interactive)
-  (let ((chat (benedict-chat--ensure-chat-buffer)))
-    (unless (eq (current-buffer) chat)
-      (pop-to-buffer-same-window chat))
-    (with-current-buffer chat
-      (if-let ((item (benedict-chat--last-assistant-with-tools-item)))
-          (benedict-chat--goto-item item)
-        (message "Benedict: no assistant messages with tools yet")
-        nil))))
-
-(defun benedict-chat-next-tool ()
-  "Move point to the next tool block."
-  (interactive)
-  (benedict-chat--navigate #'benedict-chat--tool-item-p 'forward "tool blocks"))
-
-(defun benedict-chat-previous-tool ()
-  "Move point to the previous tool block."
-  (interactive)
-  (benedict-chat--navigate #'benedict-chat--tool-item-p 'backward "tool blocks"))
-
-(defun benedict-chat-next-tool-failure ()
-  "Move point to the next failed tool block."
-  (interactive)
-  (benedict-chat--navigate #'benedict-chat--tool-failure-item-p 'forward "failed tool blocks"))
-
-(defun benedict-chat-previous-tool-failure ()
-  "Move point to the previous failed tool block."
-  (interactive)
-  (benedict-chat--navigate #'benedict-chat--tool-failure-item-p 'backward "failed tool blocks"))
-
-(defun benedict-chat-next-error ()
-  "Move point to the next error block."
-  (interactive)
-  (benedict-chat--navigate #'benedict-chat--error-item-p 'forward "errors"))
-
-(defun benedict-chat-previous-error ()
-  "Move point to the previous error block."
-  (interactive)
-  (benedict-chat--navigate #'benedict-chat--error-item-p 'backward "errors"))
-
-(defun benedict-chat-next-thinking ()
-  "Move point to the next thinking block."
-  (interactive)
-  (benedict-chat--navigate #'benedict-chat-thinking--item-p 'forward "thinking blocks"))
-
-(defun benedict-chat-previous-thinking ()
-  "Move point to the previous thinking block."
-  (interactive)
-  (benedict-chat--navigate #'benedict-chat-thinking--item-p 'backward "thinking blocks"))
-
-(defun benedict-chat-toggle-thinking (&optional all)
-  "Toggle thinking blocks at point.
-
-When ALL is non-nil (interactive prefix argument), toggle all thinking
-blocks in the current chat buffer.
-
-When point is inside an assistant message/tool block, this toggles all
-thinking blocks nested under that assistant section."
-  (interactive "P")
-  (let ((chat (benedict-chat--ensure-chat-buffer)))
-    (unless (eq (current-buffer) chat)
-      (pop-to-buffer-same-window chat))
-    (with-current-buffer chat
-      (let* ((item (benedict-chat--item-at-point))
-             (assistant-section (cond
-                                 ((benedict-chat--assistant-message-item-p item)
-                                  (plist-get item :section))
-                                 (t
-                                  (plist-get item :parent-section))))
-             (candidates
-              (cond
-               (all
-                (cl-remove-if-not #'benedict-chat-thinking--item-p benedict-chat--items))
-               ((benedict-chat-thinking--item-p item) (list item))
-               (assistant-section
-                (cl-remove-if-not
-                 (lambda (candidate)
-                   (and (benedict-chat-thinking--item-p candidate)
-                        (eq (plist-get candidate :parent-section) assistant-section)))
-                 benedict-chat--items))
-               (t nil))))
-        (cond
-         ((null candidates)
-          (message "Benedict: no thinking blocks here")
-          nil)
-         ((and (= (length candidates) 1)
-               (benedict-chat-thinking--item-p (car candidates)))
-          (let ((candidate (car candidates)))
-            (benedict-chat-thinking--set-folded candidate
-                                                (not (plist-get candidate :thinking-folded)))))
-         (t
-          (let ((folded (cl-every (lambda (candidate)
-                                    (plist-get candidate :thinking-folded))
-                                  candidates)))
-            (dolist (candidate candidates)
-              (benedict-chat-thinking--set-folded candidate (not folded))))))))))
-
-(defun benedict-chat-copy-last-response ()
-  "Copy the most recent assistant response (non-error) to the kill ring."
-  (interactive)
-  (let ((message (benedict-chat--find-last-assistant)))
-    (unless message
-      (user-error "No assistant responses to copy"))
-    (kill-new (plist-get message :content))
-    (message "Benedict: copied last response to kill ring")))
-
-(defun benedict-chat-retry-last ()
-  "Retry the most recent provider request."
-  (interactive)
-  (unless benedict-chat--last-dispatch
-    (user-error "No provider request to retry"))
-  (benedict-chat--ensure-not-busy)
-  (let ((request (plist-get benedict-chat--last-dispatch :request)))
-    (unless request
-      (user-error "Stored request is unavailable"))
-    (benedict-chat--start-dispatch
-     (or benedict-chat--buffer (current-buffer))
-     request t)))
 
 (defvar benedict-chat-mode-map
   (let ((m (make-sparse-keymap)))
     (set-keymap-parent m magit-section-mode-map)
     (define-key m (kbd "C-c C-s") #'benedict-chat-send-prompt)
-    (define-key m (kbd "g l") #'benedict-chat-jump-to-latest)
-    (define-key m (kbd "g a") #'benedict-chat-jump-to-last-assistant)
-    (define-key m (kbd "g A") #'benedict-chat-jump-to-last-assistant-with-tools)
-    (define-key m (kbd "g r") #'benedict-chat-retry-last)
-    (define-key m (kbd "w") #'benedict-chat-copy-last-response)
-    (define-key m (kbd "] t") #'benedict-chat-next-tool)
-    (define-key m (kbd "[ t") #'benedict-chat-previous-tool)
-    (define-key m (kbd "] f") #'benedict-chat-next-tool-failure)
-    (define-key m (kbd "[ f") #'benedict-chat-previous-tool-failure)
-    (define-key m (kbd "] e") #'benedict-chat-next-error)
-    (define-key m (kbd "[ e") #'benedict-chat-previous-error)
-    (define-key m (kbd "] h") #'benedict-chat-next-thinking)
-    (define-key m (kbd "[ h") #'benedict-chat-previous-thinking)
-    (define-key m (kbd "s") #'benedict-chat-toggle-thinking)
+    (define-key m (kbd "g l") #'benedict-chat-nav-jump-to-latest)
+    (define-key m (kbd "g a") #'benedict-chat-nav-jump-to-last-assistant)
+    (define-key m (kbd "g A") #'benedict-chat-nav-jump-to-last-assistant-with-tools)
+    (define-key m (kbd "g r") #'benedict-chat-nav-retry-last)
+    (define-key m (kbd "w") #'benedict-chat-nav-copy-last-response)
+    (define-key m (kbd "] t") #'benedict-chat-nav-next-tool)
+    (define-key m (kbd "[ t") #'benedict-chat-nav-previous-tool)
+    (define-key m (kbd "] f") #'benedict-chat-nav-next-tool-failure)
+    (define-key m (kbd "[ f") #'benedict-chat-nav-previous-tool-failure)
+    (define-key m (kbd "] e") #'benedict-chat-nav-next-error)
+    (define-key m (kbd "[ e") #'benedict-chat-nav-previous-error)
+    (define-key m (kbd "] h") #'benedict-chat-nav-next-thinking)
+    (define-key m (kbd "[ h") #'benedict-chat-nav-previous-thinking)
+    (define-key m (kbd "s") #'benedict-chat-nav-toggle-thinking)
     (define-key m (kbd "C-c C-k") #'benedict-chat-cancel)
     m)
   "Keymap for `benedict-chat-mode'.")

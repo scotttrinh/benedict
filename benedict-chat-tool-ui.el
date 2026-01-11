@@ -15,10 +15,11 @@
 
 (declare-function benedict-chat--make-item "benedict-chat")
 (declare-function benedict-chat--track-item "benedict-chat")
-(declare-function benedict-chat--current-assistant-section "benedict-chat")
+(declare-function benedict-chat-nav--current-assistant-section "benedict-chat-nav")
+(declare-function benedict-chat-nav--last-assistant-item "benedict-chat-nav")
 (declare-function benedict-chat--maybe-insert-item-gap "benedict-chat")
 (declare-function benedict-chat--metadata "benedict-chat")
-(declare-function benedict-chat--tool-item-p "benedict-chat")
+(declare-function benedict-chat-nav--tool-item-p "benedict-chat-nav")
 
 (defvar benedict-chat--items)
 (defvar benedict-chat--has-rendered-block)
@@ -438,7 +439,7 @@ Does NOT append a newline, as the region is expected to be followed by a sentine
                                            :content (benedict-chat-tool-ui--body-string initial-ui)
                                            :tool-folded t)))
       (benedict-chat--track-item item)
-      (let ((parent (benedict-chat--current-assistant-section)))
+      (let ((parent (benedict-chat-nav--current-assistant-section)))
         (when parent
           (plist-put item :parent-section parent))
         (let ((inhibit-read-only t))
@@ -536,7 +537,7 @@ RAW, when non-nil, is attached for debugging/forwarding."
   (when call-id
     (cl-find-if
      (lambda (item)
-       (and (benedict-chat--tool-item-p item)
+       (and (benedict-chat-nav--tool-item-p item)
             (let* ((call (plist-get item :tool-call))
                    (item-id (plist-get call :id)))
               (and item-id (equal item-id call-id)))))
