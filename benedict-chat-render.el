@@ -11,26 +11,10 @@
 
 (require 'cl-lib)
 (require 'subr-x)
-(require 'json)
 (require 'benedict)
 (require 'benedict-chat-sections)
 
 (declare-function benedict-chat--badge "benedict-chat")
-(declare-function benedict-chat-sections--set-folded "benedict-chat-sections")
-
-(defvar benedict-chat-tool-toggle-map
-   (let ((map (make-sparse-keymap)))
-     (define-key map [mouse-1] #'benedict-chat-tool-toggle)
-     (define-key map (kbd "RET") #'benedict-chat-tool-toggle)
-     map)
-   "Keymap for tool toggle buttons.")
-
-(defvar benedict-chat-tool-action-map
-   (let ((map (make-sparse-keymap)))
-     (define-key map [mouse-1] #'benedict-chat-tool-action-invoke)
-     (define-key map (kbd "RET") #'benedict-chat-tool-action-invoke)
-     map)
-   "Keymap for tool action buttons.")
 
 (defsubst benedict-chat-render--ui-active-p ()
   "Return non-nil when the section-based chat UI is active."
@@ -107,25 +91,6 @@ RIGHT may be a string (measured with `string-width') or a raw width."
           (setq width (1+ width)))
         (setq width (+ width (string-width label)))
         (setq first nil)))))
-
-(defun benedict-chat-tool-toggle (&optional event)
-   "Toggle tool details visibility at point. EVENT is the mouse event that triggered the command."
-   (interactive (list last-nonmenu-event))
-   (when event (goto-char (posn-point (event-start event))))
-   (let* ((item (get-text-property (point) 'benedict-chat-item)))
-     (when item
-       (let ((folded (plist-get item :tool-folded)))
-         (plist-put item :tool-folded (not folded))
-         (benedict-chat--update-tool-header item)
-         (benedict-chat--update-tool-visibility item)))))
-
-(defun benedict-chat-tool-action-invoke (&optional event)
-   "Invoke the action handler at point. EVENT is the mouse event that triggered the command."
-   (interactive (list last-nonmenu-event))
-   (when event (goto-char (posn-point (event-start event))))
-   (let* ((handler (get-text-property (point) 'benedict-chat-action)))
-     (when (and handler (functionp handler))
-       (funcall handler))))
 
 (defun benedict-chat--insert-message (message)
   "Insert MESSAGE (plist) into chat buffer at point.
@@ -261,84 +226,6 @@ the inserted text.  When KIND is `body', also runs `font-lock-flush' and
                   (font-lock-flush start end)
                   (font-lock-ensure start end))))))))))
 
-(defun benedict-chat--render-thinking-item (buffer item)
-  "Render thinking ITEM in BUFFER.
-ITEM should include optional :header string and :content text."
-  (with-current-buffer buffer
-    (let* ((header (or (plist-get item :header)
-                       (benedict-chat--format-thinking-header item)))
-           (content (or (plist-get item :content) ""))
-           (start (point-marker))
-           (inhibit-read-only t))
-      (let ((header-start (point-marker)))
-        (let ((header-beg (point)))
-          (insert header)
-          (add-text-properties header-beg (point)
-                               (list 'benedict-region-kind 'header
-                                     'benedict-chat-item item
-                                     'face 'benedict-chat-header)))
-        (insert (propertize "\n" 'benedict-region-kind 'header))
-        (set-marker-insertion-type header-start t)
-        (plist-put item :header-start header-start)
-        (plist-put item :header-end (copy-marker (1- (point)) t)))
-
-      (let ((content-start (point-marker)))
-        (set-marker-insertion-type content-start nil)
-        (let ((body-beg (point)))
-          (insert (propertize content
-                              'benedict-region-kind 'thinking
-                              'benedict-chat-item item
-                              'face 'benedict-chat-thinking))
-          (insert (propertize "\n" 'benedict-region-kind 'thinking))
-          (add-text-properties body-beg (1- (point))
-                               '(benedict-region-kind thinking)))
-        (plist-put item :content-start content-start)
-        (plist-put item :content-end (copy-marker (1- (point)) t)))
-
-      (set-marker-insertion-type start t)
-      (plist-put item :start start)
-      (plist-put item :end (copy-marker (1- (point)) t)))))
-
-(defun benedict-chat--format-thinking-header (item)
-  "Return formatted header string for thinking ITEM."
-  (let* ((label (or (plist-get item :thinking-label)
-                    "Thinking"))
-         (folded (plist-get item :thinking-folded))
-         (arrow (if folded "▶" "▼"))
-         (badge (benedict-chat-render--badge label 'benedict-chat-thinking)))
-    (setq badge (or badge (propertize (format "[%s]" label) 'face 'benedict-chat-thinking)))
-    (benedict-chat-render--join-badges
-     (list (propertize arrow 'face 'benedict-chat-tool-indicator)
-           badge))))
-
-(defun benedict-chat--update-thinking-header (item)
-  "Refresh the header text for thinking ITEM.
-
-This is primarily used by the magit-section UI to keep fold indicators in
-sync with `:thinking-folded'.
-Guards against operations on killed buffers."
-  (let ((start (plist-get item :header-start))
-        (end (plist-get item :header-end)))
-    (when (and start end (marker-position start))
-      (let ((buf (marker-buffer start)))
-        (when (buffer-live-p buf)
-          (with-current-buffer buf
-            (let* ((inhibit-read-only t)
-                   (text (benedict-chat--format-thinking-header item))
-                   (start-type (marker-insertion-type start)))
-              (save-excursion
-                (plist-put item :header text)
-                (set-marker-insertion-type start nil)
-                (delete-region start end)
-                (goto-char start)
-                (let ((header-beg (point)))
-                  (insert text)
-                  (add-text-properties header-beg (point)
-                                       (list 'benedict-region-kind 'header
-                                         'benedict-chat-item item
-                                         'face 'benedict-chat-header)))
-                (set-marker-insertion-type start start-type)))))))))
-
 (defun benedict-chat--write-message-item-body (item content)
   "Replace ITEM body region with CONTENT.
 
@@ -386,170 +273,6 @@ insert-after markers to work without swallowing subsequent blocks."
     ;; Currently blocks are separated by the chat loop?
     ;; Let's make the block end marker exclude the final newline of the footer.
     (plist-put item :end (copy-marker (1- (point)) t))))
-
-(defun benedict-chat--tool-status-icon (status)
-  "Return icon string for STATUS."
-  (pcase status
-    ('success "✓")
-    ('failure "✗")
-    ('running "◒")
-    (_ "?")))
-
-(defun benedict-chat--tool-status-face (status)
-  "Return face for STATUS."
-  (pcase status
-    ('success 'benedict-chat-tool-success)
-    ('failure 'benedict-chat-tool-error)
-    ('running 'benedict-chat-tool-running)
-    (_ 'benedict-chat-tool-indicator)))
-
-(defun benedict-chat--format-tool-header (item)
-  "Return formatted header string for tool ITEM."
-  (let* ((metadata (plist-get item :metadata))
-         (status (plist-get metadata :status))
-         (call (plist-get item :tool-call))
-         (name (or (plist-get call :name) "unknown"))
-         (ui (plist-get item :ui))
-         (ui-header (and ui (plist-get ui :header)))
-         (folded (plist-get item :tool-folded))
-         (icon (benedict-chat--tool-status-icon status))
-         (arrow (if folded "▶" "▼"))
-         (label (cond
-                 ((and ui-header (not (string-empty-p ui-header)))
-                  ui-header)
-                 ((eq status 'running)
-                  (let ((args (plist-get call :arguments)))
-                    (if args
-                        (format "%s %s..." name (json-encode args))
-                      (format "%s..." name))))
-                 (t name)))
-         (label-str (format "%s" label))
-         (status-badge (benedict-chat-render--badge
-                        (upcase (or (and status (symbol-name status)) "RUNNING"))
-                        (benedict-chat--tool-status-face status)))
-         (name-badge (benedict-chat-render--badge label-str 'benedict-chat-tool-label)))
-    (benedict-chat-render--join-badges
-     (list (propertize arrow 'face 'benedict-chat-tool-indicator)
-           status-badge
-           name-badge))))
-
-(defun benedict-chat--render-tool-actions (item)
-   "Insert action buttons for ITEM's tool call.
- Buttons are inserted after the header text, separated by spaces."
-   (let ((ui (plist-get item :ui))
-         (inhibit-read-only t))
-     (when ui
-       (let ((actions (plist-get ui :actions)))
-         (when actions
-           (when-let ((align (benedict-chat-render--header-align-space
-                              (benedict-chat-render--actions-width actions) 2)))
-             (insert align))
-           (let ((first t))
-             (dolist (action actions)
-               (unless first
-                 (insert (benedict-chat-render--badge-separator)))
-               (setq first nil)
-               (let ((label (plist-get action :label))
-                     (handler (plist-get action :handler)))
-                 (insert-text-button (format "%s" label)
-                                     'face 'benedict-chat-button
-                                     'mouse-face 'highlight
-                                     'keymap benedict-chat-tool-action-map
-                                     'benedict-chat-action handler
-                                     'follow-link t)))))))))
-
-(defun benedict-chat--render-tool-item (buffer item)
-   "Render tool ITEM in BUFFER.
- Uses the 'Sentinel Pattern': regions exclude the trailing newline to allow
- insert-after markers to work without swallowing subsequent blocks."
-  (with-current-buffer buffer
-    (let ((start (point-marker))
-          (inhibit-read-only t))
-      ;; start marker stays type nil during insertion, will be set to t at end
-      
-      ;; Header
-      (let ((header-start (point-marker))
-            (header-text (benedict-chat--format-tool-header item)))
-        (let ((header-beg (point)))
-          (insert header-text)
-          (add-text-properties header-beg (point)
-                               (list 'benedict-region-kind 'header
-                                     'benedict-chat-item item
-                                     'keymap benedict-chat-tool-toggle-map
-                                     'mouse-face 'highlight)))
-        ;; Render action buttons on the same line as header
-        (benedict-chat--render-tool-actions item)
-        ;; Sentinel newline
-        (insert (propertize "\n" 'benedict-region-kind 'header))
-
-        (set-marker-insertion-type header-start t)
-        (plist-put item :header-start header-start)
-        
-        ;; Header end excludes sentinel
-        (plist-put item :header-end (copy-marker (1- (point)) t)))
-      
-      ;; Body
-      (let ((content-start (point-marker)))
-        (set-marker-insertion-type content-start nil)
-        (insert (propertize (or (plist-get item :content) "")
-                            'benedict-region-kind 'tool-ui))
-        ;; Sentinel newline
-        (insert (propertize "\n" 'benedict-region-kind 'tool-ui))
-
-        (plist-put item :content-start content-start)
-
-        ;; Content end excludes sentinel
-        (plist-put item :content-end (copy-marker (1- (point)) t))
-        
-        (set-marker-insertion-type start t)
-        (plist-put item :start start)
-        
-        ;; Item end excludes sentinel (which is the content's sentinel here)
-        (plist-put item :end (copy-marker (1- (point)) t))
-
-        ;; Initial visibility
-        (benedict-chat--update-tool-visibility item)))))
-
-(defun benedict-chat--update-tool-header (item)
-   "Refresh the header text for ITEM.
-Guards against operations on killed buffers."
-  (let ((start (plist-get item :header-start))
-        (end (plist-get item :header-end)))
-    (when (and start end (marker-position start))
-      (let ((buf (marker-buffer start)))
-        (when (buffer-live-p buf)
-          (with-current-buffer buf
-            (let* ((inhibit-read-only t)
-                   (text (benedict-chat--format-tool-header item))
-                   (start-type (marker-insertion-type start)))
-              (save-excursion
-                ;; Keep start anchored at the beginning while we rewrite.
-                (set-marker-insertion-type start nil)
-                ;; Delete header text only; keep the sentinel newline so the tool
-                ;; body markers (which start after the newline) remain stable.
-                (delete-region start end)
-                (goto-char start)
-                ;; Re-insert header with same structure as render.
-                (let ((header-beg (point)))
-                  (insert text)
-                  (add-text-properties header-beg (point)
-                                       (list 'benedict-region-kind 'header
-                                             'benedict-chat-item item
-                                             'keymap benedict-chat-tool-toggle-map
-                                             'mouse-face 'highlight)))
-                ;; Re-render action buttons on same line.
-                (benedict-chat--render-tool-actions item)
-                (set-marker-insertion-type start start-type)))))))))
-
-(defun benedict-chat--update-tool-visibility (item)
-  "Update body visibility for ITEM using magit-section."
-  (when-let ((section (plist-get item :section)))
-    (benedict-chat-sections--set-folded section (plist-get item :tool-folded))))
-
-(defun benedict-chat--write-message-item-content (item content)
-  "Replace ITEM's content region with CONTENT.
-Does NOT append a newline, as the region is expected to be followed by a sentinel."
-  (benedict-chat-render--set-item-content item content 'tool-ui))
 
 (provide 'benedict-chat-render)
 ;;; benedict-chat-render.el ends here

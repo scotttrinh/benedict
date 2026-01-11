@@ -4,6 +4,7 @@
 (require 'cl-lib)
 (require 'benedict-chat)
 (require 'benedict-chat-render)
+(require 'benedict-chat-tool-ui)
 
 (ert-deftest benedict-chat-render-insert-message ()
   "Test inserting a message with role and content."
@@ -28,12 +29,12 @@
           (item2 (list :tool-call '(:name "tool2") :content "Output2")))
       
       ;; Render first tool
-      (benedict-chat--render-tool-item (current-buffer) item1)
+      (benedict-chat-tool-ui--render-item (current-buffer) item1)
       (should (string-match-p "tool1" (buffer-string)))
       (should (string-match-p "Output1" (buffer-string)))
       
       ;; Render second tool immediately after
-      (benedict-chat--render-tool-item (current-buffer) item2)
+      (benedict-chat-tool-ui--render-item (current-buffer) item2)
       (should (string-match-p "tool2" (buffer-string)))
       (should (string-match-p "Output2" (buffer-string)))
       
@@ -54,13 +55,13 @@
   "Test that updating tool content adjusts markers correctly."
   (with-temp-buffer
     (let ((item (list :tool-call '(:name "tool1") :content "Old")))
-      (benedict-chat--render-tool-item (current-buffer) item)
+      (benedict-chat-tool-ui--render-item (current-buffer) item)
       
       ;; Verify initial content
       (should (string-match-p "Old" (buffer-string)))
       
       ;; Update content
-      (benedict-chat--write-message-item-content item "NewContent")
+      (benedict-chat-tool-ui--write-item-content item "NewContent")
       (should (string-match-p "NewContent" (buffer-string)))
       (should-not (string-match-p "Old" (buffer-string)))
       
@@ -77,11 +78,11 @@
 	                       :content "Body"
 	                       :tool-folded t))
 	           (label "fold-me"))
-	      (benedict-chat--render-tool-item (current-buffer) item)
+	      (benedict-chat-tool-ui--render-item (current-buffer) item)
 	      ;; Toggle open then closed
 	      (goto-char (plist-get item :header-start))
-      (benedict-chat-tool-toggle)
-      (benedict-chat-tool-toggle)
+      (benedict-chat-tool-ui-toggle)
+      (benedict-chat-tool-ui-toggle)
       ;; Header markers should still wrap the header text
       (let ((start (plist-get item :header-start))
             (end (plist-get item :header-end)))
@@ -115,18 +116,18 @@
             (benedict-chat-sections--ensure-root))
           ;; Use the section wrapper to create a magit-section for the tool
           (benedict-chat-sections--with item
-            (benedict-chat--render-tool-item (current-buffer) item))
+            (benedict-chat-tool-ui--render-item (current-buffer) item))
           (let ((section (plist-get item :section)))
             (should section)
             ;; Tool body should start folded
             (should (oref section hidden))
             ;; Toggle open
             (goto-char (plist-get item :header-start))
-            (benedict-chat-tool-toggle)
+            (benedict-chat-tool-ui-toggle)
             (should-not (oref section hidden))
             ;; Toggle closed
             (goto-char (plist-get item :header-start))
-            (benedict-chat-tool-toggle)
+            (benedict-chat-tool-ui-toggle)
             (should (oref section hidden)))
           ;; Explicitly clear section to avoid cleanup issues when buffer is killed
           (when-let ((section (plist-get item :section)))

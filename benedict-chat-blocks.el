@@ -112,7 +112,7 @@ to the default header text properties."
                                                props)))
                 (benedict-chat-blocks--insert-actions actions)
                 (set-marker-insertion-type start start-type)
-                (plist-put item :header text))))))))))
+                (plist-put item :header text)))))))))
 
 (defun benedict-chat-blocks--set-folded (item folded &optional key)
   "Set ITEM fold state to FOLDED using KEY (or infer from ITEM)."

@@ -11,8 +11,8 @@
 (require 'magit-section)
 (require 'eieio)
 
-(declare-function benedict-chat--update-tool-header "benedict-chat")
-(declare-function benedict-chat--update-thinking-header "benedict-chat")
+(declare-function benedict-chat-tool-ui--update-header "benedict-chat-tool-ui")
+(declare-function benedict-chat-thinking--update-header "benedict-chat-thinking")
 
 ;;; Section Classes
 
@@ -185,12 +185,12 @@ Guards against operations on killed buffers."
             ('tool
              (when item
                (plist-put item :tool-folded hidden)
-               (benedict-chat--update-tool-header item)))
+               (benedict-chat-tool-ui--update-header item)))
             ('thinking
              (when item
                (plist-put item :thinking-folded hidden)
-               (when (fboundp 'benedict-chat--update-thinking-header)
-                 (benedict-chat--update-thinking-header item)))))))
+               (when (fboundp 'benedict-chat-thinking--update-header)
+                 (benedict-chat-thinking--update-header item)))))))
     ;; Silently ignore errors related to killed buffers
     ((buffer-read-only error) nil)))
 

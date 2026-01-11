@@ -534,8 +534,8 @@ Extract from `benedict-chat.el` lines 1558-1970:
 ### Success Criteria
 
 #### Automated Verification
-- [ ] `nix run .#test` passes all tests
-- [ ] Tool-related tests pass
+- [x] `nix run .#test` passes all tests
+- [x] Tool-related tests pass
 
 #### Manual Verification
 - [ ] Tool blocks render correctly
@@ -598,8 +598,8 @@ Extract from `benedict-chat.el` lines 1970-2210:
 ### Success Criteria
 
 #### Automated Verification
-- [ ] `nix run .#test` passes all tests
-- [ ] `benedict-chat-thinking-test.el` tests pass
+- [x] `nix run .#test` passes all tests
+- [x] `benedict-chat-thinking-test.el` tests pass
 
 #### Manual Verification
 - [ ] Thinking blocks render during streaming
@@ -659,8 +659,8 @@ The `benedict-chat--observe-draft-updated` should call into streaming module fun
 ### Success Criteria
 
 #### Automated Verification
-- [ ] `nix run .#test` passes all tests
-- [ ] `benedict-chat-stream-test.el` tests pass
+- [x] `nix run .#test` passes all tests
+- [x] `benedict-chat-stream-test.el` tests pass
 
 #### Manual Verification
 - [ ] Streaming responses render incrementally

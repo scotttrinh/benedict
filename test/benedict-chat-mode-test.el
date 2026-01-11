@@ -24,11 +24,11 @@ and `syntax-propertize-function' is valid."
     
     (let ((item (list :content-start (copy-marker (point-min) nil)
                       :content-end (copy-marker (point-min) t))))
-      (benedict-chat--stream-init (current-buffer) item))
+      (benedict-chat-stream--init (current-buffer) item))
     
     ;; Insert enough text to potentially trigger font-lock extension
-    (benedict-chat--stream-insert-delta benedict-stream-state "Some text\n")
-    (benedict-chat--stream-insert-delta benedict-stream-state "```python\nprint('hello')\n```\n")
+    (benedict-chat-stream--insert-delta benedict-chat-stream--state "Some text\n")
+    (benedict-chat-stream--insert-delta benedict-chat-stream--state "```python\nprint('hello')\n```\n")
     
     ;; Trigger fontification explicitly which calls extend-region functions
     (font-lock-ensure)

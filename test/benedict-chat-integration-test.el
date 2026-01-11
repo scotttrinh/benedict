@@ -5,6 +5,8 @@
 (require 'cl-lib)
 (require 'benedict-chat)
 (require 'benedict-chat-status)
+(require 'benedict-chat-thinking)
+(require 'benedict-chat-tool-ui)
 (require 'benedict-provider-fake)
 (require 'benedict-test-helpers)
 
@@ -64,7 +66,7 @@
           (benedict-chat--record-message (current-buffer)
                                          (list :role 'user :content "hi" :time (current-time)))
 
-          (benedict-chat--handle-provider-delta
+          (benedict-chat-stream--handle-provider-delta
            (current-buffer)
            (list :kind 'content-delta :provider 'fake :model "fake-model" :text "Hello **bo"))
 
@@ -85,7 +87,7 @@
             (benedict-chat-status--status-tick (current-buffer))
             (should (string= (funcall body) "Hello **bo"))
 
-            (benedict-chat--handle-provider-delta
+            (benedict-chat-stream--handle-provider-delta
              (current-buffer)
              (list :kind 'content-delta :provider 'fake :model "fake-model" :text "ld**"))
             (should (string= (funcall body) "Hello **bold**"))
@@ -141,7 +143,7 @@
           (when session
             (benedict-session-start-request session 'test-handle)
             (benedict-session-start-draft session))
-          (benedict-chat--handle-provider-delta
+          (benedict-chat-stream--handle-provider-delta
            (current-buffer)
            (list :kind 'content-delta :provider 'fake :model "fake-model" :text "Hello"))
           ;; During streaming, the assistant message is tracked in streaming-message
@@ -180,7 +182,7 @@
                 (benedict-session-start-request session 'test-handle)
                 (benedict-session-start-draft session))
               (with-current-buffer other-buffer
-                (benedict-chat--handle-provider-delta
+                (benedict-chat-stream--handle-provider-delta
                  chat-buffer
                  (list :kind 'content-delta :provider 'fake :model "fake-model"
                        :text "Hello from delta"))))
@@ -208,9 +210,9 @@
                     ((symbol-function 'benedict-chat-status--status-refresh) #'ignore))
             (let* ((call (list :id "call-1" :name "demo" :arguments '(:foo "bar")))
                    (metadata (list :status 'running :provider 'fake))
-                   (item (benedict-chat--record-tool-block chat-buffer call metadata)))
+                   (item (benedict-chat-tool-ui--record-block chat-buffer call metadata)))
               (with-current-buffer other-buffer
-                (benedict-chat--update-tool-block
+                (benedict-chat-tool-ui--update-block
                  chat-buffer
                  item
                  (list :status 'success :provider 'fake)
@@ -236,9 +238,9 @@
           (benedict-chat-mode)
           (benedict-chat--init-buffer)
           (let* ((metadata (list :provider 'fake))
-                 (item (benedict-chat--record-thinking chat-buffer "" metadata)))
+                 (item (benedict-chat-thinking--record-block chat-buffer "" metadata)))
             (with-current-buffer other-buffer
-              (benedict-chat--write-thinking-content chat-buffer item "Thinking update" t))
+              (benedict-chat-thinking--write-content chat-buffer item "Thinking update" t))
             (with-current-buffer chat-buffer
               (goto-char (point-min))
               (should (search-forward "Thinking update" nil t)))
@@ -270,7 +272,7 @@
                      (when session
                        (benedict-session-start-request session 'test-handle)
                        (benedict-session-start-draft session))
-                     (benedict-chat--handle-provider-delta
+                     (benedict-chat-stream--handle-provider-delta
                       chat-buffer
                       (list :kind 'content-delta :provider 'fake :model "fake-model"
                             :text "Partial"))
@@ -297,7 +299,7 @@
               "Final success")
     (run-case "*Benedict Stream Error*"
               (lambda (buffer)
-                (benedict-chat--handle-provider-error
+                (benedict-chat-stream--handle-provider-error
                  buffer
                  (list :provider 'fake :message "Oops error")))
               "Oops error")))))
@@ -322,7 +324,7 @@
             (benedict-session-start-draft session))
           (benedict-chat--record-message (current-buffer)
                                          (list :role 'user :content "hi" :time (current-time)))
-          (benedict-chat--handle-provider-delta
+          (benedict-chat-stream--handle-provider-delta
            (current-buffer)
            (list :kind 'content-delta :provider 'fake :model "fake-model" :text "Hello"))
 
@@ -330,7 +332,7 @@
           (let* ((streaming-msg benedict-chat--streaming-message)
                  (assistant (and streaming-msg (plist-get streaming-msg :message)))
                  (assistant-item (and assistant (plist-get assistant :item)))
-                 (tool-item (benedict-chat--record-tool-block
+                 (tool-item (benedict-chat-tool-ui--record-block
                              (current-buffer)
                              (list :id "call-1" :name 'demo :arguments '(:foo "bar"))
                              (list :status 'running)))
