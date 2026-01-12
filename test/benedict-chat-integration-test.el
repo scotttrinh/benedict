@@ -59,12 +59,14 @@
                (session benedict-chat--session)
                (benedict-chat--request-seq 0)
                (benedict-chat--last-dispatch (list :request request :timestamp (current-time))))
+          
+          (benedict-chat--record-message (current-buffer)
+                                         (list :role 'user :content "hi" :time (current-time)))
+
           ;; Set up session inflight state
           (when session
             (benedict-session-start-request session 'test-handle)
             (benedict-session-start-draft session))
-          (benedict-chat--record-message (current-buffer)
-                                         (list :role 'user :content "hi" :time (current-time)))
 
           (benedict-chat-stream--handle-provider-delta
            (current-buffer)

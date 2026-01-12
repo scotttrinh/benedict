@@ -3,22 +3,22 @@
 (require 'cl-lib)
 (require 'magit-section)
 (require 'benedict-chat-thinking) ; for benedict-chat-thinking--item-p
+(require 'benedict-session)
+(require 'benedict-chat-render)
 
 ;; Declare functions and variables from benedict-chat.el
 (defvar benedict-chat--items)
 (defvar benedict-chat--session)
-(defvar benedict-chat--last-dispatch)
 (defvar benedict-chat--buffer)
-(declare-function benedict-chat--normalize-role "benedict-chat")
+(declare-function benedict-chat-render--normalize-role "benedict-chat-render")
 (declare-function benedict-chat--ensure-chat-buffer "benedict-chat")
 (declare-function benedict-chat--ensure-not-busy "benedict-chat")
-(declare-function benedict-chat--start-dispatch "benedict-chat")
-(declare-function benedict-session-messages "benedict-session")
+(declare-function benedict-chat--sync-from-session "benedict-chat" (session))
 
 (defun benedict-chat-nav--assistant-message-item-p (item)
   "Return non-nil when ITEM represents an assistant message."
   (and (eq (plist-get item :kind) 'message)
-       (eq (benedict-chat--normalize-role (plist-get item :role)) 'assistant)))
+       (eq (benedict-chat-render--normalize-role (plist-get item :role)) 'assistant)))
 
 (defun benedict-chat-nav--last-assistant-item ()
   "Return the most recently rendered assistant message item, or nil."
@@ -37,7 +37,7 @@ When INCLUDE-ERRORS is nil, skip entries flagged with :error metadata."
   (when benedict-chat--session
     (cl-find-if
      (lambda (message)
-       (and (eq (benedict-chat--normalize-role (plist-get message :role)) 'assistant)
+       (and (eq (benedict-chat-render--normalize-role (plist-get message :role)) 'assistant)
             (or include-errors
                 (not (plist-get (plist-get message :metadata) :error)))))
      (benedict-session-messages benedict-chat--session))))
@@ -292,16 +292,19 @@ thinking blocks nested under that assistant section."
     (message "Benedict: copied last response to kill ring")))
 
 (defun benedict-chat-nav-retry-last ()
-  "Retry the most recent provider request."
+  "Retry the most recent provider request.
+Removes the last assistant message from the session (if any) and runs the
+agent loop again."
   (interactive)
-  (unless benedict-chat--last-dispatch
-    (user-error "No provider request to retry"))
   (benedict-chat--ensure-not-busy)
-  (let ((request (plist-get benedict-chat--last-dispatch :request)))
-    (unless request
-      (user-error "Stored request is unavailable"))
-    (benedict-chat--start-dispatch
-     (or benedict-chat--buffer (current-buffer))
-     request t)))
+  (let* ((session benedict-chat--session)
+         (messages (benedict-session-messages session))
+         (last-msg (car messages)))
+    (when (and last-msg (memq (plist-get last-msg :role) '(assistant Assistant)))
+      (pop (benedict-session-messages session))
+      ;; Sync UI to reflect removal
+      (benedict-chat--sync-from-session session))
+    (message "Benedict: retrying...")
+    (benedict-session-run session)))
 
 (provide 'benedict-chat-nav)

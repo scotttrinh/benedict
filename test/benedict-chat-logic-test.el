@@ -109,14 +109,12 @@
               (when (buffer-live-p chat)
                 (with-current-buffer chat
                   (let* ((profile (benedict-chat-profiles--effective-profile))
-                         (request (plist-get benedict-chat--last-dispatch :request))
-                         (messages (and request (plist-get request :messages)))
+                         (messages (when benedict-chat--session
+                                     (benedict-session-messages benedict-chat--session)))
                          (user (cl-find-if (lambda (msg)
                                              (eq (plist-get msg :role) 'user))
-                                           (when benedict-chat--session
-                                             (benedict-session-messages benedict-chat--session)))))
+                                           messages)))
                     (should handle)
-                    (should request)
                     (should messages)
                     (should user)
                     (should (string-match-p "Context:" (plist-get user :content)))
@@ -139,7 +137,7 @@
                                            :provider fake
                                            :model "profile/model")))
        (benedict-provider-fake-latency-seconds 0.01)
-       (benedict-provider-fake-script (list (list :type 'success :delay 0.01))))
+       (benedict-provider-fake-script (list (list :type 'success :model "compose/model" :delay 0.01))))
     (let ((chat (generate-new-buffer benedict-chat-buffer-name)))
       (with-current-buffer chat
         (benedict-chat-mode)
@@ -165,11 +163,9 @@
           (accept-process-output nil 0.05))
         (unwind-protect
             (with-current-buffer chat
-              (let ((request (plist-get benedict-chat--last-dispatch :request)))
-                (should request)
-                (should (eq (plist-get request :provider) 'fake))
-                (should (equal (plist-get request :model) "compose/model"))
-                (should-not benedict-chat--compose-model-override)))
+              (should (eq (benedict-session-provider benedict-chat--session) 'fake))
+              (should (equal (benedict-session-model benedict-chat--session) "compose/model"))
+              (should-not benedict-chat--compose-model-override))
           (when (buffer-live-p chat)
             (kill-buffer chat))))
       (funcall done))))

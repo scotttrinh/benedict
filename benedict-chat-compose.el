@@ -3,6 +3,7 @@
 (require 'cl-lib)
 (require 'benedict-context)
 (require 'benedict-chat-profiles)
+(require 'benedict-chat-status)
 
 ;;; External Variables
 
@@ -13,18 +14,16 @@
 (defvar benedict-chat--compose-model-override)
 (defvar benedict-chat-profile)
 (defvar benedict-chat--provider-override)
-(defvar benedict-chat--model-button-map)
 
 ;;; External Functions
 
 (declare-function benedict-chat--ensure-chat-buffer "benedict-chat")
 (declare-function benedict-chat--send-text "benedict-chat")
 (declare-function benedict-chat--configure-session "benedict-chat")
-(declare-function benedict-chat--status-refresh "benedict-chat")
+(declare-function benedict-chat-status--status-refresh "benedict-chat-status")
 (declare-function benedict-chat-choose-profile "benedict-chat")
 (declare-function benedict-chat-choose-provider "benedict-chat")
 (declare-function benedict-chat-choose-model "benedict-chat")
-(declare-function benedict-chat--provider-label "benedict-chat")
 
 ;;; Configuration
 
@@ -105,7 +104,7 @@ The chat buffer name is substituted into the single %s placeholder."
                                       'help-echo "Choose a Benedict profile (click)"
                                       'local-map benedict-chat-compose--profile-button-map))
            (provider (benedict-chat-profiles--resolve-provider profile))
-           (provider-label (propertize (benedict-chat--provider-label provider)
+           (provider-label (propertize (benedict-chat-profiles--provider-label provider)
                                        'mouse-face 'mode-line-highlight
                                        'help-echo "Choose a Benedict provider (click)"
                                        'local-map benedict-chat-compose--provider-button-map))
@@ -302,7 +301,7 @@ Returns a plist (:slice :replacing) where :slice carries the final handle."
   (setq benedict-chat--compose-model-override nil)
   (setq benedict-chat--compose-buffer nil)
   (benedict-chat--configure-session)
-  (benedict-chat--status-refresh))
+  (benedict-chat-status--status-refresh))
 
 (defun benedict-chat-compose-send ()
   "Send the composed prompt to the associated chat buffer."

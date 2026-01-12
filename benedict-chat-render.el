@@ -13,12 +13,20 @@
 (require 'subr-x)
 (require 'benedict)
 (require 'benedict-chat-sections)
-
-(declare-function benedict-chat--badge "benedict-chat")
+(require 'benedict-chat-profiles)
+(require 'benedict-chat-status)
+(require 'svg-lib nil t)
 
 (defsubst benedict-chat-render--ui-active-p ()
   "Return non-nil when the section-based chat UI is active."
   (derived-mode-p 'benedict-chat-mode))
+
+(defun benedict-chat-render--svg-supported-p ()
+  "Return non-nil when SVG badges can be rendered."
+  (and (display-graphic-p)
+       (featurep 'svg)
+       (require 'svg-lib nil t)
+       (fboundp 'svg-lib-tag)))
 
 (defun benedict-chat-render--badge-face (face)
   "Return FACE coerced to a single face symbol for badges."
@@ -34,12 +42,21 @@
 
 (defun benedict-chat-render--badge (label face)
   "Return a badge string for LABEL using FACE with fallback."
-  (when label
-    (let ((label (format "%s" label))
-          (face (benedict-chat-render--badge-face face)))
-      (if (fboundp 'benedict-chat--badge)
-          (benedict-chat--badge label face)
-        (propertize (format "[%s]" label) 'face face)))))
+  (let* ((label (format "%s" label))
+         (face (benedict-chat-render--badge-face face))
+         (fg (face-foreground face nil 'default))
+         (bg (or (face-background face nil 'default)
+                 (face-background 'default nil))))
+    (if (benedict-chat-render--svg-supported-p)
+        (let ((image (svg-lib-tag label nil
+                                  :stroke 0
+                                  :radius 4
+                                  :padding 1.0
+                                  :foreground fg
+                                  :background bg
+                                  :font-family "Menlo")))
+          (propertize label 'display image 'face face))
+      (propertize (format "[%s]" label) 'face face))))
 
 (defun benedict-chat-render--badge-separator ()
   "Return a standardized spacer string between badges."
@@ -202,8 +219,8 @@ the affected region."
   "Append TEXT to ITEM content region and refontify when appropriate.
 
 KIND is the value to use for the `benedict-region-kind' text property on
-the inserted text.  When KIND is `body', also runs `font-lock-flush' and
-`font-lock-ensure' on the affected region."
+the inserted text.  When KIND is `body', also runs `font-lock-flush'
+and `font-lock-ensure' on the affected region."
   (let* ((kind (or kind 'body))
          (end (plist-get item :content-end)))
     (when (and (stringp text)
@@ -273,6 +290,86 @@ insert-after markers to work without swallowing subsequent blocks."
     ;; Currently blocks are separated by the chat loop?
     ;; Let's make the block end marker exclude the final newline of the footer.
     (plist-put item :end (copy-marker (1- (point)) t))))
+
+(defun benedict-chat-render--normalize-role (role)
+  "Normalize ROLE into a symbol."
+  (cond
+   ((symbolp role) role)
+   ((stringp role) (intern (downcase role)))
+   (t 'assistant)))
+
+(defun benedict-chat-render--face-for-role (role metadata)
+  "Return a face for ROLE considering METADATA."
+  (cond
+   ((plist-get metadata :error) 'benedict-chat-error)
+   ((eq role 'user) 'benedict-chat-user)
+   ((eq role 'assistant) 'benedict-chat-assistant)
+   (t 'benedict-chat-system)))
+
+(defun benedict-chat-render--message-provider-label (metadata)
+  "Return a display label for METADATA :provider."
+  (when-let ((provider (plist-get metadata :provider)))
+    (cond
+     ((stringp provider) provider)
+     (t (benedict-chat-profiles--provider-label provider)))))
+
+(defun benedict-chat-render--header-badge (label face)
+  "Return a badge for LABEL using FACE with a text fallback."
+  (when label
+    (let ((label (format "%s" label))
+          (face (benedict-chat-render--badge-face face)))
+      (benedict-chat-render--badge label face))))
+
+(defun benedict-chat-render--message-header-string (message &optional in-flight)
+  "Return the message header line for MESSAGE.
+When IN-FLIGHT is non-nil, include a live elapsed hint when possible.
+
+The returned string may carry text properties (notably faces) suitable for
+insertion into a chat buffer."
+  (let* ((role (benedict-chat-render--normalize-role (plist-get message :role)))
+         (metadata (plist-get message :metadata))
+         (item (plist-get message :item))
+         (tag-face (benedict-chat-render--badge-face
+                    (or (benedict-chat-render--face-for-role role metadata)
+                        'benedict-chat-role)))
+         (role-badge (benedict-chat-render--header-badge (upcase (symbol-name role)) tag-face))
+         (provider (plist-get metadata :provider))
+         (provider-label (cond
+                          ((stringp provider) provider)
+                          (provider (benedict-chat-profiles--provider-label provider))))
+         (model (and metadata (plist-get metadata :model)))
+         (provider-model-label (cond
+                                ((and provider-label model) (format "%s:%s" provider-label model))
+                                (provider-label provider-label)
+                                (model model)))
+         (provider-badge (when provider-model-label
+                           (benedict-chat-render--header-badge provider-model-label 'benedict-chat-header-model)))
+         (usage (and metadata (plist-get metadata :usage)))
+         (usage-str (and usage (benedict-chat-status--status-usage-string usage)))
+         (latency (and metadata (plist-get metadata :latency)))
+         (empty-response (and metadata (plist-get metadata :empty-response)))
+         (time-str (cond
+                    ((and in-flight item (plist-get item :started-at))
+                     (format "%.1fs…" (- (float-time) (plist-get item :started-at))))
+                    (latency (format "%.2fs" latency))))
+         (state-badge (cond
+                       ((plist-get metadata :error)
+                        (benedict-chat-render--header-badge "ERROR" 'benedict-chat-header-error))
+                       (in-flight
+                        (benedict-chat-render--header-badge "STREAMING" 'benedict-chat-header-time))
+                       (empty-response
+                        (benedict-chat-render--header-badge "EMPTY" 'benedict-chat-header-separator))
+                       (t nil)))
+         (time-badge (and time-str (benedict-chat-render--header-badge time-str 'benedict-chat-header-time)))
+         (usage-badge (and usage-str (benedict-chat-render--header-badge usage-str 'benedict-chat-header-usage)))
+         (left (benedict-chat-render--join-badges
+                (list role-badge state-badge provider-badge)))
+         (right (benedict-chat-render--join-badges
+                 (list time-badge usage-badge))))
+    (or (benedict-chat-render--align-header left right)
+        left
+        right
+        "")))
 
 (provide 'benedict-chat-render)
 ;;; benedict-chat-render.el ends here

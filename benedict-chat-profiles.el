@@ -128,6 +128,24 @@ For example: '((:plan update-plan) (:read-files read-file list-files))."
   :type '(alist :key-type symbol :value-type (repeat symbol))
   :group 'benedict)
 
+(defcustom benedict-chat-loop-checkpoint-interval 5
+  "Number of autonomous turns before pausing to ask for user confirmation.
+Set to nil to disable turn-based checkpoints."
+  :type '(choice (const :tag "Disabled" nil) integer)
+  :group 'benedict)
+
+(defcustom benedict-chat-loop-max-time 60.0
+  "Maximum duration (in seconds) for an autonomous loop before pausing.
+Set to nil to disable time limits."
+  :type '(choice (const :tag "Disabled" nil) number)
+  :group 'benedict)
+
+(defcustom benedict-chat-loop-max-tokens nil
+  "Maximum total tokens consumed in a loop session before pausing.
+Set to nil to disable token limits."
+  :type '(choice (const :tag "Disabled" nil) integer)
+  :group 'benedict)
+
 (defconst benedict-chat-profiles--anchor-guidance
   "The user may refer to context slices using Org-style notation. Each context block is labeled with an anchor like <<foo>>. Inside the user's instructions, [[foo]] refers to that same context slice. When reasoning about their request, resolve [[foo]] to the corresponding <<foo>> block in the Context section above."
   "System guidance explaining how to resolve [[handle]] links to context anchors.")
@@ -295,6 +313,17 @@ Resolution order: buffer override → profile :provider → global `benedict-pro
       (when (memq (plist-get spec :id) ids)
         (push (copy-tree spec) result)))
     (nreverse result)))
+
+(defun benedict-chat-profiles--provider-label (&optional provider-id)
+  "Return a short label for PROVIDER-ID (or the active provider)."
+  (let* ((provider (or (and provider-id (benedict-provider-lookup provider-id))
+                       (ignore-errors (benedict-provider-current))))
+         (name (and provider (benedict-provider-name provider)))
+         (id (and provider (benedict-provider-id provider))))
+    (or name
+        (and id (symbol-name id))
+        (and provider-id (format "%s" provider-id))
+        "unknown provider")))
 
 (provide 'benedict-chat-profiles)
 ;;; benedict-chat-profiles.el ends here

@@ -22,7 +22,7 @@
 (declare-function benedict-chat--replace-message-content "benedict-chat")
 (declare-function benedict-chat--render-message "benedict-chat")
 (declare-function benedict-chat--resolve-provider "benedict-chat")
-(declare-function benedict-chat--status-request-started-at-float "benedict-chat")
+(declare-function benedict-chat-status--status-request-started-at-float "benedict-chat-status")
 
 (defcustom benedict-chat-apply-buffer-name "*Benedict Block*"
   "Name of the temporary buffer used by `benedict-chat-stream-apply-block'."
@@ -95,7 +95,9 @@ Currently inserts immediately."
         (setq benedict-chat--streaming-message
               (list :message record
                     :content ""
-                    :metadata metadata))))
+                    :metadata metadata))
+        (when-let ((item (plist-get record :item)))
+          (benedict-chat-stream--init buffer item))))
     (benedict-chat-stream--apply-metadata payload)
     (plist-get benedict-chat--streaming-message :message)))
 
@@ -269,7 +271,7 @@ Returns non-nil when an active streaming entry handled the error."
         (setq record (benedict-chat--record-message buffer record))
         (when-let ((item (plist-get record :item)))
           (plist-put item :request-id (benedict-chat-thinking--current-request-id))
-          (plist-put item :started-at (or (benedict-chat--status-request-started-at-float)
+          (plist-put item :started-at (or (benedict-chat-status--status-request-started-at-float)
                                           (float-time)))
           (benedict-chat--refresh-message-header item)
           (benedict-chat-stream--init buffer item))

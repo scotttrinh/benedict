@@ -13,10 +13,6 @@
 
 (declare-function benedict-chat--refresh-message-header "benedict-chat" (item))
 (declare-function benedict-chat-flywire-active-p "benedict-chat" ())
-(declare-function benedict-provider-lookup "benedict-provider" (provider-id))
-(declare-function benedict-provider-current "benedict-provider" ())
-(declare-function benedict-provider-name "benedict-provider" (provider))
-(declare-function benedict-provider-id "benedict-provider" (provider))
 
 (defvar benedict-chat--session)
 (defvar benedict-chat--streaming-message)
@@ -39,27 +35,6 @@ Values:
 
 (defconst benedict-chat-status--spinner-frames ["◐" "◓" "◑" "◒"]
   "Spinner frames used while a provider request is active.")
-
-(defun benedict-chat-status--provider-label (&optional provider-id)
-  "Return a short label for PROVIDER-ID (or the active provider)."
-  (let* ((provider (or (and provider-id (benedict-provider-lookup provider-id))
-                       (ignore-errors (benedict-provider-current))))
-         (name (and provider (benedict-provider-name provider)))
-         (id (and provider (benedict-provider-id provider))))
-    (or name
-        (and id (symbol-name id))
-        (and provider-id (format "%s" provider-id))
-        "unknown provider")))
-
-(defun benedict-chat-status--usage-number (usage key)
-  "Return numeric value for KEY (string or symbol) in USAGE."
-  (when-let ((val (benedict-session--usage-value usage key)))
-    (if (stringp val) (string-to-number val) val)))
-
-(defun benedict-chat-status--usage-cost-number (usage)
-  "Return numeric cost from USAGE if present."
-  (or (benedict-chat-status--usage-number usage "cost")
-      (benedict-chat-status--usage-number usage "total_cost")))
 
 (defun benedict-chat-status--status-reset ()
   "Reset status UI state for the current buffer."
@@ -154,7 +129,7 @@ Values:
             (prompt (push (format "%sp tok" prompt) parts))
             (completion (push (format "%sc tok" completion) parts)))))))
     (when-let ((cost (or (plist-get usage :cost)
-                         (benedict-chat-status--usage-cost-number usage))))
+                         (benedict-session--usage-cost-number usage))))
       (push (format "cost:$%.4f" cost) parts))
     (when parts
       (string-join (nreverse parts) " / "))))
@@ -199,8 +174,8 @@ When CLICKABLE is non-nil, attach button properties that run
                      (benedict-chat-profiles--effective-profile)
                      benedict-chat--compose-model-override)))
          (label (if model
-                    (format "%s:%s" (benedict-chat-status--provider-label provider) model)
-                  (format "%s" (benedict-chat-status--provider-label provider)))))
+                    (format "%s:%s" (benedict-chat-profiles--provider-label provider) model)
+                  (format "%s" (benedict-chat-profiles--provider-label provider)))))
     (if clickable
         (propertize label
                     'mouse-face 'mode-line-highlight
