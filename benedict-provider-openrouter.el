@@ -176,7 +176,7 @@ When streaming is enabled, callbacks receive incremental deltas via curl."
   (let* ((credential (benedict-provider-openrouter--resolve-credential))
          (streaming (and benedict-provider-openrouter-enable-streaming
                          (or (plist-get request :stream)
-                             on-delta)))
+                             (not (null on-delta)))))
          (payload (benedict-provider-openrouter--encode-payload request streaming))
          (request-id (or (plist-get request :request-id)
                          (benedict-provider-openrouter--make-request-id)))

@@ -153,7 +153,7 @@ ON-SUCCESS/ON-ERROR/ON-DELTA/ON-COMPLETE mirror `benedict-provider-dispatch'.
 When streaming is enabled, callbacks receive incremental deltas via curl."
   (let* ((streaming (and benedict-provider-ollama-enable-streaming
                          (or (plist-get request :stream)
-                             on-delta)))
+                             (not (null on-delta)))))
          (payload (benedict-provider-ollama--encode-payload request streaming))
          (request-id (or (plist-get request :request-id)
                          (benedict-provider-ollama--make-request-id)))

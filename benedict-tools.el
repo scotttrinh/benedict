@@ -169,7 +169,7 @@ Falls back to `default-directory' when no project is active."
   "Return the absolute path for `benedict-search-project-executable'."
   (or (executable-find benedict-search-project-executable)
       (signal 'benedict-error
-              (format "Project search requires %s in PATH"
+              (list (format "Project search requires %s in PATH"
                       benedict-search-project-executable))))
 
 (defun benedict--search-project--relative-path (path root)
@@ -210,11 +210,11 @@ treated as a fixed string. Additional glob arguments can be supplied
 via GLOBS, a list of strings passed as \"--glob\" arguments."
   (let* ((needle (string-trim (or query ""))))
     (unless (and (stringp needle) (not (string-empty-p needle)))
-      (signal 'benedict-error "Project search requires a non-empty query"))
+      (signal 'benedict-error '("Project search requires a non-empty query")))
     (setq query needle)
     (let* ((root (or (and root (expand-file-name root))
                      (benedict--search-project-root)))
-           (default-directory (or root (signal 'benedict-error "Project root unavailable")))
+           (default-directory (or root (signal 'benedict-error '("Project root unavailable"))))
            (raw-limit (or limit benedict-search-project-max-results))
            (limit (max 1 (or raw-limit 1)))
            (regexp-mode (and regexp t))
@@ -233,7 +233,7 @@ via GLOBS, a list of strings passed as \"--glob\" arguments."
           ;; ripgrep exits 1 when no matches are found; treat it as success.
           (unless (member exit-code '(0 1))
             (signal 'benedict-error
-                    (format "Project search failed (rg exited %s) with args %S output %S"
+                    (list (format "Project search failed (rg exited %s) with args %S output %S"
                             exit-code command-args (buffer-string)))))
         (goto-char (point-min))
         (let (matches stats-match-count)
@@ -288,7 +288,7 @@ via GLOBS, a list of strings passed as \"--glob\" arguments."
   "Find files matching PATTERN (glob) in ROOT."
   (let* ((root (or (and root (expand-file-name root))
                    (benedict--search-project-root)))
-         (default-directory (or root (signal 'benedict-error "Project root unavailable")))
+         (default-directory (or root (signal 'benedict-error '("Project root unavailable"))))
          (executable (benedict--search-project--ensure-executable))
          ;; If pattern is wildcard "*", omit it to respect .gitignore rules.
          ;; Passing "*" as a glob explicitly overrides gitignores in ripgrep.
@@ -303,7 +303,7 @@ via GLOBS, a list of strings passed as \"--glob\" arguments."
       (let ((exit-code (apply #'call-process executable nil (current-buffer) nil command-args)))
         (unless (member exit-code '(0 1))
           (signal 'benedict-error
-                  (format "Find files failed (rg exited %s) with args %S"
+                  (list (format "Find files failed (rg exited %s) with args %S"
                           exit-code command-args))))
       (goto-char (point-min))
       (let ((files (split-string (buffer-string) "\0" t)))
@@ -384,7 +384,7 @@ SCHEMA is a plist following the JSON-Schema-like contract consumed by
   "Invoke tool ID with ARGS without applying approval policy."
   (let ((spec (gethash id benedict--tools)))
     (unless spec
-      (signal 'benedict-error (format "Unknown tool: %S" id)))
+      (signal 'benedict-error (list (format "Unknown tool: %S" id))))
     (let ((fn (plist-get spec :fn)))
       (apply fn args))))
 
@@ -406,7 +406,7 @@ ARGS must be a plist passed directly to the tool implementation."
   (unless (or (null args) (listp args))
     (signal 'wrong-type-argument (list 'plistp args)))
   (let* ((spec (or (gethash id benedict--tools)
-                   (signal 'benedict-error (format "Unknown tool: %S" id))))
+                   (signal 'benedict-error (list (format "Unknown tool: %S" id)))))
          (approval (plist-get spec :approval))
          (approved
           (cond
@@ -415,7 +415,7 @@ ARGS must be a plist passed directly to the tool implementation."
             (benedict--prompt-for-approval spec args))
            (t (benedict--prompt-for-approval spec args)))))
     (unless approved
-      (signal 'benedict-error (format "Tool %S invocation canceled by user" id)))
+      (signal 'benedict-error (list (format "Tool %S invocation canceled by user" id))))
     (benedict--tool-call-direct id args)))
 
 (benedict-tools-register
@@ -476,7 +476,7 @@ ARGS must be a plist passed directly to the tool implementation."
 (defun benedict--tool-project-search (&key query)
   "Stub tool implementation returning placeholder search results for QUERY."
   (unless (and (stringp query) (not (string-empty-p (string-trim query))))
-    (signal 'benedict-error "project-search requires a non-empty :query"))
+    (signal 'benedict-error '("project-search requires a non-empty :query")))
   (let* ((result (benedict-search-project-sync query))
          (ui (benedict--project-search--build-ui result))
          (print-level nil)
@@ -491,19 +491,19 @@ ARGS must be a plist passed directly to the tool implementation."
 (defun benedict--resolve-target-path (path root)
   "Return the absolute path for PATH under ROOT."
   (unless (and (stringp path) (not (string-empty-p (string-trim path))))
-    (signal 'benedict-error "Path argument must be non-empty"))
+    (signal 'benedict-error '("Path argument must be non-empty")))
   (let ((expanded (expand-file-name path root)))
     (unless (file-in-directory-p expanded root)
-      (signal 'benedict-error "Path must stay inside the project root"))
+      (signal 'benedict-error '("Path must stay inside the project root")))
     (unless (file-exists-p expanded)
-      (signal 'benedict-error (format "Path %s does not exist" path)))
+      (signal 'benedict-error (list (format "Path %s does not exist" path))))
     expanded))
 
 (defun benedict--resolve-target-file (path root)
   "Return the absolute filename for PATH under ROOT."
   (let ((expanded (benedict--resolve-target-path path root)))
     (unless (file-regular-p expanded)
-      (signal 'benedict-error (format "Target %s is not a file" path)))
+(signal 'benedict-error (list (format "Target %s is not a file" path))))
     expanded))
 
 
@@ -525,14 +525,14 @@ Returns a plist:
     (cond
      ((string= kind "file")
       (unless (and path (not (string-empty-p (string-trim path))))
-        (signal 'benedict-error "Target kind is 'file' but 'path' is missing or empty"))
+        (signal 'benedict-error '("Target kind is 'file' but 'path' is missing or empty")))
       (let* ((root (or (benedict--search-project-root)
-                       (signal 'benedict-error "Project root unavailable")))
+                       (signal 'benedict-error '("Project root unavailable"))))
              (expanded (expand-file-name path root)))
         (unless (file-in-directory-p expanded root)
-          (signal 'benedict-error (format "Path %s must stay inside the project root" path)))
+          (signal 'benedict-error (list (format "Path %s must stay inside the project root" path))))
         (when (and (not create-if-missing) (not (file-exists-p expanded)))
-          (signal 'benedict-error (format "File %s does not exist and create_if_missing is false" path)))
+(signal 'benedict-error (list (format "File %s does not exist and create_if_missing is false" path))))
         (when (and create-if-missing (not (file-exists-p expanded)))
           (let ((parent (file-name-directory expanded)))
             (unless (file-directory-p parent)
@@ -545,17 +545,17 @@ Returns a plist:
                 :file-backed-p t))))
      ((string= kind "buffer")
       (unless (and buffer-name (not (string-empty-p (string-trim buffer-name))))
-        (signal 'benedict-error "Target kind is 'buffer' but 'buffer_name' is missing or empty"))
+        (signal 'benedict-error '("Target kind is 'buffer' but 'buffer_name' is missing or empty")))
       (let ((buf (if create-if-missing
                      (get-buffer-create buffer-name)
                    (or (get-buffer buffer-name)
-                       (signal 'benedict-error (format "Buffer %s does not exist and create_if_missing is false" buffer-name))))))
+                       (signal 'benedict-error (list (format "Buffer %s does not exist and create_if_missing is false" buffer-name))))))
         (list :buffer buf
               :kind "buffer"
               :buffer_name buffer-name
               :file-backed-p (not (null (buffer-file-name buf))))))
      (t
-      (signal 'benedict-error (format "Unknown target kind: %S" kind))))))
+      (signal 'benedict-error (list (format "Unknown target kind: %S" kind))))))
 
 (cl-defun benedict--tool-write (&key target content (create_if_missing t))
   "Create or overwrite TARGET with CONTENT.
@@ -613,7 +613,7 @@ TARGET is a plist with :kind, and either :path or :buffer_name."
          (buffer-name (plist-get res :buffer_name))
          (file-backed-p (plist-get res :file-backed-p)))
     (when (string= old-text new-text)
-      (signal 'benedict-error "edit: old_text and new_text are identical; no change to apply"))
+      (signal 'benedict-error '("edit: old_text and new_text are identical; no change to apply")))
     (with-current-buffer buf
       (save-excursion
         (goto-char (point-min))
@@ -624,9 +624,9 @@ TARGET is a plist with :kind, and either :path or :buffer_name."
           (let ((n (length matches)))
             (cond
              ((= n 0)
-              (signal 'benedict-error "edit: old_text not found; expected exactly one occurrence. Include more surrounding context in old_text"))
+              (signal 'benedict-error '("edit: old_text not found; expected exactly one occurrence. Include more surrounding context in old_text")))
              ((> n 1)
-              (signal 'benedict-error (format "edit: old_text matched %d times; expected exactly one. Include more surrounding context in old_text" n)))
+              (signal 'benedict-error (list (format "edit: old_text matched %d times; expected exactly one. Include more surrounding context in old_text" n))))
              (t
               ;; Exactly one match
               (atomic-change-group
@@ -670,12 +670,12 @@ Optional START-LINE and END-LINE (1-based) restrict the output."
          (root (unless buffer (benedict--search-project-root)))
          ;; If no buffer, resolve as file
          (target (unless buffer
-                   (unless root (signal 'benedict-error "Project root unavailable"))
+                   (unless root (signal 'benedict-error '("Project root unavailable")))
                    (benedict--resolve-target-file path root)))
          (relative (if buffer path (file-relative-name target root))))
 
     (when (and end (< end start))
-      (signal 'benedict-error "end-line cannot be less than start-line"))
+      (signal 'benedict-error '("end-line cannot be less than start-line")))
 
     (let ((content
            (if buffer
@@ -729,11 +729,11 @@ Optional START-LINE and END-LINE (1-based) restrict the output."
   "Return a list of files matching glob PATTERN.
 If PATH is provided, search only within that directory."
   (let* ((root (or (benedict--search-project-root)
-                   (signal 'benedict-error "Project root unavailable")))
+                   (signal 'benedict-error '("Project root unavailable"))))
          (target-dir (if path
                          (let ((p (benedict--resolve-target-path path root)))
                            (unless (file-directory-p p)
-                             (signal 'benedict-error (format "Path %s is not a directory" path)))
+(signal 'benedict-error (list (format "Path %s is not a directory" path))))
                            p)
                        root)))
     (let* ((files (benedict-find-files-sync pattern :root target-dir))
@@ -771,7 +771,7 @@ If PATH is provided, search only within that directory."
   "Execute elisp CODE and return the result.
 This is a high-risk tool that evaluates arbitrary elisp code."
   (unless (and (stringp code) (not (string-empty-p (string-trim code))))
-    (signal 'benedict-error "exec-elisp requires a non-empty :code"))
+    (signal 'benedict-error '("exec-elisp requires a non-empty :code")))
   (condition-case err
       (let* ((form (read code))
              (output nil)

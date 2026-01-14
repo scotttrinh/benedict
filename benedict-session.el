@@ -7,6 +7,10 @@
 ;;; Code:
 
 (require 'cl-lib)
+(require 'lgr)
+
+(defvar benedict-session--logger (lgr-get-logger "benedict.session")
+  "Logger for session events.")
 
 ;;; Session Struct
 
@@ -456,6 +460,7 @@ Emits tool-started and tool-completed events."
     (benedict-session--emit session 'tool-started
                             :tool-call tool-call
                             :tool-id tool-id)
+    (lgr-log benedict-session--logger :debug "Invoking tool %s" tool-id)
     (condition-case err
         (if benedict-session-tool-invoke-fn
             (setq output (funcall benedict-session-tool-invoke-fn tool-id arguments))
@@ -464,7 +469,9 @@ Emits tool-started and tool-completed events."
        (setq status 'failure)
        (setq error-info (list :message (error-message-string err)
                               :type (car err)
-                              :data (cdr err)))))
+                              :data (cdr err)))
+       (lgr-log benedict-session--logger :error
+                "Tool %s failed: %s" tool-id (error-message-string err))))
     (benedict-session--emit session 'tool-completed
                             :tool-call tool-call
                             :tool-id tool-id
@@ -591,9 +598,15 @@ Processes tool calls from last message, then dispatches if should continue."
   (let* ((messages (benedict-session-messages session))
          (last-msg (car messages))
          (tool-calls (plist-get last-msg :tool-calls)))
+    (lgr-log benedict-session--logger :debug
+             "Loop step for session %s: %d tool calls"
+             (benedict-session-id session) (length tool-calls))
     (when tool-calls
       (benedict-session--process-tool-calls session tool-calls)
       (let ((decision (benedict-session--should-continue session last-msg)))
+        (lgr-log benedict-session--logger :debug
+                 "Loop decision for session %s: %s"
+                 (benedict-session-id session) decision)
         (pcase decision
           ('continue
            (cl-incf (benedict-session-loop-turn-count session))
@@ -609,8 +622,16 @@ Builds request from session state and dispatches."
   (let ((request (benedict-session--build-request session)))
     (if (and (plist-get request :provider)
              (plist-get request :model))
-        (benedict-session-dispatch session request)
+        (progn
+          (lgr-log benedict-session--logger :debug
+                   "Dispatching next request for %s (turn %d)"
+                   (benedict-session-id session)
+                   (benedict-session-loop-turn-count session))
+          (benedict-session-dispatch session request))
       ;; Cannot dispatch without provider/model - reset to idle
+      (lgr-log benedict-session--logger :warn
+               "Cannot dispatch next request for %s: missing provider/model. Req: %S"
+               (benedict-session-id session) request)
       (benedict-session-set-state session 'idle)
       (benedict-session--emit session 'dispatch-needed))))
 
