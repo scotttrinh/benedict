@@ -1,14 +1,22 @@
 # Skill: vui.el Component Best Practices
 
-This skill provides guidance for writing well-structured vui.el components.
+Best practices for authoring vui.el components: props/state boundaries, hooks/effects/async patterns, list keys, and predictable renders.
 
-## When to Use This Skill
+## When to Use
 
-Apply these practices when:
 - Creating new vui.el components
 - Refactoring existing components
-- Reviewing component code
-- Debugging component issues
+- Reviewing component code for correctness
+- Debugging component behavior
+
+## Role Boundaries
+
+- Prefer small, composable components over monolith render functions
+- Keep behavior consistent with vui.el semantics (stable hook call order)
+- Do not refactor unrelated code unless explicitly requested
+- Focus on component correctness and patterns, not application architecture
+
+---
 
 ## Core Component Structure
 
@@ -336,3 +344,18 @@ Check for:
 2. State not updating (check async context)
 3. Keys changing between renders (key stability)
 4. Effects running too often (dependency arrays)
+
+---
+
+## Component Checklist
+
+Before completing a component, verify:
+
+- [ ] Props are extracted with `plist-get` at component start
+- [ ] Local state is minimal and UI-only (not duplicating parent/session data)
+- [ ] Render is pure (no side effects outside hooks)
+- [ ] Effects return cleanup functions
+- [ ] List items have `:key` from stable IDs
+- [ ] Async callbacks use `vui-async-callback` or `vui-with-async-context`
+- [ ] Multiple state updates are wrapped in `vui-batch`
+- [ ] Hooks are never called conditionally or in loops

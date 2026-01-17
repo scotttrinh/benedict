@@ -1,14 +1,22 @@
 # Skill: vui.el Application Patterns
 
-This skill provides guidance for structuring vui.el applications.
+Architecture patterns for building vui.el applications: component tree planning, state placement, context boundaries, and UI↔domain integration.
 
-## When to Use This Skill
+## When to Use
 
-Apply these patterns when:
-- Designing a new vui.el application
+- Designing a new vui.el application or feature
 - Planning component hierarchies
 - Deciding where state should live
-- Structuring code organization
+- Refactoring imperative code to declarative
+
+## Role Boundaries
+
+- Produce architecture that is incremental and refactor-friendly
+- Keep UI rendering decoupled from provider/network/process code
+- Do not implement large refactors unless explicitly requested
+- Focus on structure and patterns, not implementation details
+
+---
 
 ## Mental Model: Declarative UI
 
@@ -483,3 +491,16 @@ When things go wrong:
 5. **Memory leaks?**
    - Ensure effects return cleanup functions
    - Check for timers/subscriptions without cleanup
+
+---
+
+## Verification Prompts
+
+After implementing, ask yourself:
+
+- Can the UI re-render from scratch without losing cursor/scroll position?
+- Are list items keyed by stable IDs (not indices)?
+- Do state updates avoid intermediate renders (using `vui-batch`)?
+- Are effects cleaned up on dependency changes and unmount?
+- Is state placed at the lowest possible level in the tree?
+- Are callbacks stabilized with `vui-use-callback` where children use `:should-update`?

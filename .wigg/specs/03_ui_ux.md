@@ -1,17 +1,16 @@
-# UI/UX Specification
+# UI/UX Specification (vui.el Architecture)
 
-This document defines the user interface and user experience for Benedict, built using the **vui.el** declarative component framework.
+This document describes Benedict's UI as the target end-state after refactoring to `vui.el`.
 
-## 1. Architecture Overview
+## 1. Core UI Model
 
-Benedict's UI is built using **vui.el**, a React-inspired declarative UI library for Emacs. Instead of imperatively manipulating buffer contents, we declare *what* the UI should look like for any given state, and the framework handles reconciliation and updates.
+Benedict's UI is a tree of `vui` components mounted into Emacs buffers. Components render virtual nodes describing UI structure; vui.el reconciles and commits changes while preserving cursor/scroll positions.
 
-### 1.1 Core Principles
+### 1.1 Unidirectional Data Flow
 
-- **Declarative Rendering**: Components describe UI as a function of state, not how to update it
-- **Unidirectional Data Flow**: Props flow down, callbacks flow up
-- **Component Composition**: Small, focused components compose into complex UIs
-- **Automatic Reconciliation**: vui.el diffs virtual trees and applies minimal DOM updates
+- **Data flows down** through props (inputs to child components)
+- **Events flow up** through callback props (children never reach into parent state)
+- **Shared state** lives at the nearest common ancestor; local-only state stays colocated
 
 ### 1.2 Component Hierarchy
 
@@ -38,6 +37,29 @@ BenedictRoot
 └── StatusBar
     └── TokenCount, CostEstimate, ErrorMessages
 ```
+
+### 1.2 State, Effects, and Async
+
+- **Local state**: `:state` declaration + `vui-set-state` (use functional updates in async)
+- **Batching**: Wrap multiple `vui-set-state` calls in `vui-batch` to avoid intermediate re-renders
+- **Lifecycle**:
+  - `:on-mount` for one-time setup (may return cleanup function)
+  - `:on-unmount` for final cleanup when removed during reconciliation
+  - `:on-update` for reacting to prop/state changes
+- **Effects**: `vui-use-effect` runs side effects based on dependencies; must return cleanup
+- **Async**: `vui-use-async` manages loading/error/success states with cancellation safety
+- **Async context**: Callbacks in timers/processes must use `vui-with-async-context` or `vui-async-callback`
+
+### 1.3 Context for Cross-Cutting Concerns
+
+Use `vui-defcontext` to avoid prop drilling for truly global values:
+- UI theme/face palette
+- Active provider configuration
+- Feature flags and debug toggles
+
+Context is *not* for frequently-changing data (streaming content) to avoid broad re-renders.
+
+---
 
 ## 2. State Management
 
@@ -76,17 +98,7 @@ Values computed from state are calculated on-the-fly, not stored:
   ...)
 ```
 
-### 2.4 Context for Cross-Cutting Concerns
-
-```elisp
-;; Theme context (consumed anywhere without prop drilling)
-(vui-defcontext benedict-theme-context
-  :default '(:dark-mode nil :accent-color "blue"))
-
-;; Provider context (API configuration)
-(vui-defcontext benedict-provider-context
-  :default '(:provider :anthropic :api-key nil :endpoint nil))
-```
+---
 
 ## 3. Chat Buffer Design
 
@@ -357,33 +369,70 @@ Short updates via `message`:
         (spinner-component)))))
 ```
 
-## 9. Debugging & Development
+## 9. Pitfall Avoidance (Critical)
 
-### 9.1 vui.el Debug Tools
+These rules prevent the most common vui.el bugs:
+
+### 9.1 State Rules
+
+- **Never mutate state directly**; always replace with a new value via `vui-set-state`
+- **Use functional updates in async callbacks** to avoid stale closures:
+  ```elisp
+  ;; WRONG - captures stale value
+  (lambda (chunk) (vui-set-state :content (concat content chunk)))
+  ;; RIGHT - receives current value
+  (lambda (chunk) (vui-set-state :content (lambda (c) (concat c chunk))))
+  ```
+- **Batch multiple state changes** to prevent intermediate re-renders
+
+### 9.2 Hook Rules
+
+- **Never call hooks conditionally or inside loops**; hook call order must remain stable across renders
+- **Effects that allocate resources must return cleanup** (timers, subscriptions, processes)
+- **All async callbacks must use `vui-with-async-context`** or `vui-async-callback`
+
+### 9.3 List Rules
+
+- **Always provide stable keys** for list items (IDs, not indices)
+- Keys must be unique within the list and stable across re-renders
+
+### 9.4 Performance Rules
+
+- **Avoid blocking work inside `vui-use-async` loaders**; loaders must use true async primitives
+- **Don't put frequently-changing data in context**; it causes cascading re-renders
+- **Stabilize callback references** with `vui-use-callback` when passing to children with `:should-update`
+
+---
+
+## 10. Debugging & Development
+
+### 10.1 vui.el Debug Tools
 
 - `vui-inspect`: Display component tree with state and props
 - `vui-debug-enabled`: Log render cycle events with timing
 - `vui-timing-enabled`: Measure performance across phases
 
-### 9.2 Benedict-Specific Debug
+### 10.2 Benedict-Specific Debug
 
 - `benedict-debug-state`: Dump current root state
 - `benedict-inspect-turn`: Show full turn data at point
 
-## 10. Component Design Guidelines
+---
 
-### 10.1 Container vs Presentational
+## 11. Component Design Guidelines
 
-- **Containers**: Manage state, data fetching, business logic
-- **Presentational**: Pure rendering, receive all data via props
+### 11.1 Container vs Presentational
 
-### 10.2 Extraction Triggers
+- **Containers**: Manage state, subscriptions, business logic
+- **Presentational**: Pure rendering from props, easily reusable/testable
+
+### 11.2 Extraction Triggers
 
 Extract a new component when:
 - Render function exceeds 20-30 lines
 - Same UI pattern appears in multiple places
 - Logic would benefit from isolation/testing
 
-### 10.3 Prop Drilling Threshold
+### 11.3 Prop Drilling Threshold
 
-If passing the same prop through 3+ intermediate components that don't use it, consider using Context instead.
+If passing the same prop through 3+ intermediate components that don't use it, use Context instead.
