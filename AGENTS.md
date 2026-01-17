@@ -31,4 +31,6 @@ Working notes for future agents contributing to Benedict. This doc explains our 
 
 ## Example repos
 
-If needed, there is a set of repos that are used by the current user in their Doom Emacs setup symlinked into `./example-emacs-repos` that you can use to look at the source code of well-written Emacs packages. Of special note is `org-mode` which has a lot of similar patterns to what we're doing here.
+If needed, there is a set of Emacs Lisp repos that are used by the current user in their Doom Emacs setup symlinked into `./example-repos/emacs` that you can use to look at the source code of well-written Emacs packages. Of special note is `org-mode` which has a lot of similar patterns to what we're doing here.
+
+The source code for a similar agentic coding tool called OpenCode is available at `example-repos/opencode` and the Gemini OAuth plugin for OpenCode is available at `example-repos/opencode-gemini-auth`.
