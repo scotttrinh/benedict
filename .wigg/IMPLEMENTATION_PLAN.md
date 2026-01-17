@@ -1,0 +1,381 @@
+# Implementation Plan
+
+## Priority Tasks
+
+### vui.el Migration - Leaf Components
+
+- [ ] **TextBlock vui component** (refs: 03_ui_ux.md section 3.2)
+  - Scope: Render plain text content with markdown fontification support
+  - Files: Create `components/benedict-vui-text-block.el`, `test/benedict-vui-text-block-test.el`
+  - Tests:
+    - Renders text content correctly
+    - Applies markdown font-lock to body regions
+    - Handles empty content gracefully
+  - Dependencies: vui.el must be available as dependency
+  - Notes: Use `vui-defcomponent`, accept `:content` prop. No local state needed.
+
+- [ ] **CodeBlock vui component** (refs: 03_ui_ux.md section 3.2)
+  - Scope: Render syntax-highlighted code with language detection, copy button
+  - Files: Create `components/benedict-vui-code-block.el`, `test/benedict-vui-code-block-test.el`
+  - Tests:
+    - Renders code with correct face
+    - Syntax highlighting via `vui-use-memo` for language fontification
+    - Copy action sets `:copied-feedback` local state, clears after timeout
+    - Handles unknown languages gracefully
+  - Dependencies: TextBlock (for fallback)
+  - Notes: Use `vui-use-memo` for expensive fontification. Local state: `:copied-feedback`.
+
+- [ ] **StatusBadge vui component** (refs: 03_ui_ux.md section 3.2)
+  - Scope: Render role/status badges (USER, ASSISTANT, streaming, error, etc.)
+  - Files: Create `components/benedict-vui-badge.el`, `test/benedict-vui-badge-test.el`
+  - Tests:
+    - Renders correct label for each status type
+    - Applies correct face based on status
+    - Handles unknown status gracefully
+  - Dependencies: None
+  - Notes: Pure presentational component. Props: `:status`, `:theme`.
+
+- [ ] **CollapsibleBlock vui component** (refs: 03_ui_ux.md section 3.3)
+  - Scope: Generic collapsible container with header and toggle
+  - Files: Create `components/benedict-vui-collapsible.el`, `test/benedict-vui-collapsible-test.el`
+  - Tests:
+    - Renders header always, content only when expanded
+    - Toggle callback fires on click/keypress
+    - Fold indicator shows ▶ (collapsed) or ▼ (expanded)
+    - Supports controlled mode (`:collapsed` prop) and uncontrolled (local state)
+  - Dependencies: None
+  - Notes: Props: `:header` (function), `:content` (function), `:collapsed`, `:on-toggle`.
+
+- [ ] **ThinkingBlock vui component** (refs: 03_ui_ux.md section 1.2)
+  - Scope: Render reasoning/thinking content in collapsible block
+  - Files: Create `components/benedict-vui-thinking-block.el`, `test/benedict-vui-thinking-block-test.el`
+  - Tests:
+    - Wraps content in CollapsibleBlock
+    - Shows "Thinking" badge in header
+    - Defaults to collapsed state
+    - Handles streaming thinking deltas
+  - Dependencies: CollapsibleBlock, StatusBadge
+  - Notes: Compose CollapsibleBlock with thinking-specific header. Props: `:thinking-data`, `:collapsed`.
+
+- [ ] **ToolUseBlock vui component** (refs: 03_ui_ux.md section 1.2)
+  - Scope: Render tool invocation with name, args, and status
+  - Files: Create `components/benedict-vui-tool-use-block.el`, `test/benedict-vui-tool-use-block-test.el`
+  - Tests:
+    - Shows tool name and status in header
+    - Displays formatted arguments when expanded
+    - Handles in-progress, success, and failure states
+    - Shows spinner during in-progress
+  - Dependencies: CollapsibleBlock, StatusBadge
+  - Notes: Props: `:tool-call`, `:status`. Use CollapsibleBlock wrapper.
+
+- [ ] **ToolResultBlock vui component** (refs: 03_ui_ux.md section 1.2)
+  - Scope: Render tool execution result with optional actions
+  - Files: Create `components/benedict-vui-tool-result-block.el`, `test/benedict-vui-tool-result-block-test.el`
+  - Tests:
+    - Displays result content (truncated if long)
+    - Shows error state with error styling
+    - Renders action buttons from `:actions` prop
+    - Handles UI hints from tool output
+  - Dependencies: CollapsibleBlock, StatusBadge
+  - Notes: Props: `:result`, `:status`, `:actions`. Truncate content > 500 chars with expand option.
+
+### vui.el Migration - Container Components
+
+- [ ] **TurnHeader vui component** (refs: 03_ui_ux.md section 1.2)
+  - Scope: Render turn header with role badge and timestamp
+  - Files: Create `components/benedict-vui-turn-header.el`, `test/benedict-vui-turn-header-test.el`
+  - Tests:
+    - Shows correct role badge (user/assistant/system)
+    - Formats timestamp correctly
+    - Handles missing timestamp gracefully
+  - Dependencies: StatusBadge
+  - Notes: Props: `:role`, `:timestamp`, `:metadata`.
+
+- [ ] **ContentBlockList vui component** (refs: 03_ui_ux.md section 1.2)
+  - Scope: Render list of content blocks (text, thinking, tool) for a message
+  - Files: Create `components/benedict-vui-content-block-list.el`, `test/benedict-vui-content-block-list-test.el`
+  - Tests:
+    - Dispatches to correct block type based on content type
+    - Maintains stable keys for list reconciliation
+    - Handles mixed content types in sequence
+  - Dependencies: TextBlock, ThinkingBlock, ToolUseBlock, ToolResultBlock, CodeBlock
+  - Notes: Use `vui-list` with `:key` for stable identity. Props: `:blocks`.
+
+- [ ] **Turn vui component** (refs: 03_ui_ux.md section 1.2)
+  - Scope: Render complete turn (header + content blocks)
+  - Files: Create `components/benedict-vui-turn.el`, `test/benedict-vui-turn-test.el`
+  - Tests:
+    - Composes TurnHeader and ContentBlockList
+    - Passes correct props to children
+    - Handles user vs assistant turn styling
+  - Dependencies: TurnHeader, ContentBlockList
+  - Notes: Props: `:message` (full message plist), `:collapsed-blocks` (set).
+
+- [ ] **TurnList vui component** (refs: 03_ui_ux.md section 1.2)
+  - Scope: Render conversation as list of turns with stable keys
+  - Files: Create `components/benedict-vui-turn-list.el`, `test/benedict-vui-turn-list-test.el`
+  - Tests:
+    - Uses `vui-list` with message ID as key
+    - Correctly groups user/assistant pairs
+    - Handles streaming turn at end
+    - Scrolls to bottom on new content
+  - Dependencies: Turn
+  - Notes: Props: `:conversation` (list of messages), `:collapsed-blocks`.
+
+- [ ] **StreamingIndicator vui component** (refs: 03_ui_ux.md section 1.2)
+  - Scope: Visual indicator during active streaming
+  - Files: Create `components/benedict-vui-streaming-indicator.el`, `test/benedict-vui-streaming-indicator-test.el`
+  - Tests:
+    - Visible only when `:visible` prop is true
+    - Shows animated spinner
+    - Cleans up timer on unmount
+  - Dependencies: None
+  - Notes: Use `vui-use-effect` for timer-based animation. Props: `:visible`.
+
+### vui.el Migration - Input Components
+
+- [ ] **ContextIndicator vui component** (refs: 03_ui_ux.md section 5.2)
+  - Scope: Show attached context slices in compose area
+  - Files: Create `components/benedict-vui-context-indicator.el`, `test/benedict-vui-context-indicator-test.el`
+  - Tests:
+    - Displays count and size of attached slices
+    - Shows slice labels on hover/expand
+    - Remove button clears individual slices
+  - Dependencies: StatusBadge
+  - Notes: Props: `:slices`, `:on-remove`.
+
+- [ ] **ComposeField vui component** (refs: 03_ui_ux.md section 1.2)
+  - Scope: Controlled text input for composing messages
+  - Files: Create `components/benedict-vui-compose-field.el`, `test/benedict-vui-compose-field-test.el`
+  - Tests:
+    - Controlled input via `:value` and `:on-change`
+    - Submit on C-c C-c or configured key
+    - History navigation with M-p/M-n
+    - Multiline support
+  - Dependencies: None
+  - Notes: Local state: `:history-index`. Props: `:value`, `:on-change`, `:on-submit`, `:placeholder`.
+
+- [ ] **InputArea vui component** (refs: 03_ui_ux.md section 1.2)
+  - Scope: Compose area with context indicators and input field
+  - Files: Create `components/benedict-vui-input-area.el`, `test/benedict-vui-input-area-test.el`
+  - Tests:
+    - Composes ContextIndicator and ComposeField
+    - Passes callbacks correctly
+    - Handles empty state
+  - Dependencies: ContextIndicator, ComposeField
+  - Notes: Props: `:slices`, `:input-text`, `:on-input-change`, `:on-submit`, `:on-slice-remove`.
+
+### vui.el Migration - Header & Status
+
+- [ ] **ProviderBadge vui component** (refs: 03_ui_ux.md section 1.2)
+  - Scope: Clickable provider/model selector in header
+  - Files: Create `components/benedict-vui-provider-badge.el`, `test/benedict-vui-provider-badge-test.el`
+  - Tests:
+    - Displays current provider and model
+    - Click triggers model selection callback
+    - Tooltip shows full model ID
+  - Dependencies: StatusBadge
+  - Notes: Props: `:provider`, `:model`, `:on-click`.
+
+- [ ] **ChatHeader vui component** (refs: 03_ui_ux.md section 1.2)
+  - Scope: Header bar with provider, status, and session title
+  - Files: Create `components/benedict-vui-chat-header.el`, `test/benedict-vui-chat-header-test.el`
+  - Tests:
+    - Shows ProviderBadge, StatusIndicator, SessionTitle
+    - Updates on provider/model change
+    - Click handling works
+  - Dependencies: ProviderBadge, StatusBadge
+  - Notes: Props: `:provider`, `:model`, `:status`, `:title`, `:on-provider-click`.
+
+- [ ] **StatusBar vui component** (refs: 03_ui_ux.md section 1.2)
+  - Scope: Footer with token count, cost estimate, errors
+  - Files: Create `components/benedict-vui-status-bar.el`, `test/benedict-vui-status-bar-test.el`
+  - Tests:
+    - Displays token count formatted
+    - Shows cost estimate when available
+    - Displays error messages with error face
+    - Handles missing usage data
+  - Dependencies: None
+  - Notes: Props: `:usage`, `:error`.
+
+### vui.el Migration - Root & Integration
+
+- [ ] **ConversationView vui component** (refs: 03_ui_ux.md section 1.2)
+  - Scope: Main conversation area containing TurnList and StreamingIndicator
+  - Files: Create `components/benedict-vui-conversation-view.el`, `test/benedict-vui-conversation-view-test.el`
+  - Tests:
+    - Renders TurnList with conversation
+    - Shows StreamingIndicator during streaming
+    - Scroll behavior on new content
+  - Dependencies: TurnList, StreamingIndicator
+  - Notes: Props: `:conversation`, `:streaming`, `:collapsed-blocks`.
+
+- [ ] **BenedictRoot vui component** (refs: 03_ui_ux.md section 1.2, 2.1)
+  - Scope: Root component owning all shared application state
+  - Files: Create `components/benedict-vui-root.el`, `test/benedict-vui-root-test.el`
+  - Tests:
+    - State structure matches spec (:conversation, :streaming, :provider, :model, :collapsed-blocks, :error)
+    - State updates propagate to children
+    - Event handlers wire correctly to session
+  - Dependencies: ChatHeader, ConversationView, InputArea, StatusBar
+  - Notes: This is the integration point. Wire to `benedict-session` events.
+
+- [ ] **Wire BenedictRoot to benedict-session events** (refs: 03_ui_ux.md, 02_architecture.md)
+  - Scope: Connect vui state updates to session event system
+  - Files: Modify `benedict-vui-root.el`, `benedict-chat.el`
+  - Tests:
+    - Session message-added updates :conversation state
+    - Session draft-updated updates :streaming state
+    - Session state-changed updates component state
+    - Batched updates via `vui-batch`
+  - Dependencies: BenedictRoot, existing session event system
+  - Notes: Use `vui-use-effect` for session subscription. Return cleanup function.
+
+- [ ] **Replace benedict-chat-mode with vui.el rendering** (refs: 03_ui_ux.md)
+  - Scope: Switch chat buffer to use BenedictRoot instead of magit-section
+  - Files: Modify `benedict-chat.el`, deprecate `benedict-chat-render.el`, `benedict-chat-sections.el`
+  - Tests:
+    - All existing chat integration tests pass
+    - Streaming works correctly
+    - Navigation commands work
+    - Context capture works
+  - Dependencies: All vui components, BenedictRoot wired to session
+  - Notes: Keep magit-section requires temporarily for gradual migration. Remove after verification.
+
+### Core Functionality - Providers
+
+- [ ] **Anthropic Messages API provider** (refs: 05_providers.md)
+  - Scope: Direct Anthropic API integration with streaming and tool calling
+  - Files: Create `benedict-provider-anthropic.el`, `test/benedict-provider-anthropic-test.el`
+  - Tests:
+    - Auth via ANTHROPIC_API_KEY env var and auth-source
+    - Streaming SSE parsing
+    - Tool calling format conversion
+    - Error handling for rate limits, auth failures
+    - Mock responses for unit tests
+  - Dependencies: benedict-http.el, benedict-credentials.el
+  - Notes: Use existing HTTP client. API endpoint: api.anthropic.com/v1/messages. Support claude-sonnet-4-20250514, opus-4.
+
+### Core Functionality - Persistence
+
+- [ ] **Session serialization format** (refs: 02_architecture.md section 2.7)
+  - Scope: Define and implement session-to-sexp serialization
+  - Files: Create `benedict-persistence.el`, `test/benedict-persistence-test.el`
+  - Tests:
+    - Round-trip: session -> sexp -> session preserves data
+    - Handles all message types (user, assistant, tool)
+    - Handles tool-calls, metadata, timestamps
+    - Graceful handling of unknown fields (forward compatibility)
+  - Dependencies: benedict-session.el
+  - Notes: Use readable sexp format. Include schema version for migrations.
+
+- [ ] **Session file storage** (refs: 02_architecture.md section 2.7)
+  - Scope: Save/load sessions to `.benedict/threads/` directory
+  - Files: Modify `benedict-persistence.el`, `test/benedict-persistence-test.el`
+  - Tests:
+    - Creates `.benedict/threads/` if missing
+    - Saves session to `{session-id}.el`
+    - Loads session and rehydrates into registry
+    - Handles missing/corrupt files gracefully
+  - Dependencies: Session serialization format
+  - Notes: One file per session. Use `with-temp-file` and `insert-file-contents`.
+
+- [ ] **Auto-save session on changes** (refs: 02_architecture.md section 2.7)
+  - Scope: Persist session after message added or state changes
+  - Files: Modify `benedict-persistence.el`, `benedict-session.el`
+  - Tests:
+    - Session saved after message-added event
+    - Debounced to avoid excessive writes
+    - Handles save errors gracefully (log, don't crash)
+  - Dependencies: Session file storage
+  - Notes: Use session event hook. Debounce 2-5 seconds.
+
+- [ ] **Load sessions on startup** (refs: 02_architecture.md section 2.7)
+  - Scope: Restore sessions from `.benedict/threads/` on package load
+  - Files: Modify `benedict-persistence.el`
+  - Tests:
+    - Discovers all `.el` files in threads directory
+    - Loads and registers each session
+    - Skips corrupt files with warning
+  - Dependencies: Session file storage
+  - Notes: Call from `benedict.el` initialization or on first `benedict-chat` invocation.
+
+### Core Functionality - Thread Browser
+
+- [ ] **Thread browser data layer** (refs: 03_ui_ux.md section 6)
+  - Scope: Functions to list, filter, and sort sessions for browser
+  - Files: Create `benedict-thread-browser.el`, `test/benedict-thread-browser-test.el`
+  - Tests:
+    - List all sessions with summary data
+    - Filter by project root
+    - Filter by date range
+    - Sort by updated-at
+  - Dependencies: Session persistence
+  - Notes: Build on `benedict-session-list` with predicate.
+
+- [ ] **ThreadBrowser vui component** (refs: 03_ui_ux.md section 6)
+  - Scope: UI for browsing conversation history
+  - Files: Create `benedict-vui-thread-browser.el`, `test/benedict-vui-thread-browser-test.el`
+  - Tests:
+    - Displays table with Date, Title, Model, Status columns
+    - Filter controls update list
+    - Row click opens thread
+    - Fork action creates new session from point
+  - Dependencies: Thread browser data layer, StatusBadge
+  - Notes: Props: `:threads`, `:filter`, `:on-filter-change`, `:on-row-click`, `:on-fork`.
+
+### Tool Improvements
+
+- [ ] **Tool execution timeout** (refs: 06_tools.md)
+  - Scope: Add configurable timeout for tool execution
+  - Files: Modify `benedict-tools.el`, `test/benedict-tools-test.el`
+  - Tests:
+    - Tool cancelled after timeout
+    - Timeout configurable per-tool and globally
+    - Timeout error returned to LLM
+  - Dependencies: None
+  - Notes: Use `with-timeout` or timer + cancel. Default 30s.
+
+- [ ] **Diff preview for edit tool approval** (refs: 03_ui_ux.md section 7.2)
+  - Scope: Show visual diff when approving edit/write tools
+  - Files: Modify `benedict-tools.el`, create `benedict-vui-diff-preview.el`
+  - Tests:
+    - Diff displayed for edit tool
+    - Accept/Reject/Edit buttons work
+    - Edit opens buffer for manual modification
+  - Dependencies: None (can use `diff-mode` faces)
+  - Notes: Use `diff-no-select` to generate diff. Display in approval prompt.
+
+---
+
+## Completed
+
+- [x] Session management core (`benedict-session.el` - 767 lines)
+- [x] Session state machine (idle/streaming/running/checkpoint/error/cancelled)
+- [x] Message history with chronological ordering
+- [x] Draft/streaming accumulator system
+- [x] Tool execution framework
+- [x] Agent loop with turn/time/token limits
+- [x] Repetition guard for stuck agents
+- [x] Telemetry accumulation (tokens, cost, time)
+- [x] Event system with hooks
+- [x] Frontend (buffer) attachment
+- [x] Provider registry and dispatch
+- [x] OpenRouter provider with streaming/SSE
+- [x] Gemini provider with OAuth support
+- [x] Ollama provider for local models
+- [x] Vercel provider
+- [x] Fake provider for testing
+- [x] Credentials system (auth-source, env vars, file)
+- [x] HTTP client with SSE support
+- [x] Tool registry with schema encoding
+- [x] Built-in tools (read-file, write, edit, find-files, project-search, exec-elisp)
+- [x] Tool approval policies (auto/confirm/always)
+- [x] Chat buffer with magit-section rendering (to be replaced by vui.el)
+- [x] Streaming text display with markers (to be replaced by vui.el)
+- [x] Collapsible blocks for thinking/tools (to be replaced by vui.el)
+- [x] Context capture commands (region, defun, buffer, project, git)
+- [x] Profile system for configuration presets
+- [x] Compose buffer for multi-line input
+- [x] Flywire integration for tool isolation
+- [x] Comprehensive test suite (672+ lines session tests, 400+ tool tests)

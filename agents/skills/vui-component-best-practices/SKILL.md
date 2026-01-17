@@ -1,3 +1,11 @@
+---
+name: vui-component-best-practices
+description: >-
+  Best practices for authoring vui.el components: props/state boundaries,
+  hooks/effects/async patterns, list keys, and predictable renders. Use when
+  creating new vui.el components, refactoring existing components, reviewing
+  component code for correctness, or debugging component behavior.
+---
 # Skill: vui.el Component Best Practices
 
 Best practices for authoring vui.el components: props/state boundaries, hooks/effects/async patterns, list keys, and predictable renders.

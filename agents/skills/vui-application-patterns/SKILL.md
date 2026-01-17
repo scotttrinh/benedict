@@ -1,3 +1,11 @@
+---
+name: vui-application-patterns
+description: >-
+  Architecture patterns for building vui.el applications: component tree
+  planning, state placement, context boundaries, and UI↔domain integration.
+  Use when designing new vui.el applications, planning component hierarchies,
+  deciding where state should live, or refactoring imperative code to declarative.
+---
 # Skill: vui.el Application Patterns
 
 Architecture patterns for building vui.el applications: component tree planning, state placement, context boundaries, and UI↔domain integration.
