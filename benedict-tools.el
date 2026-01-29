@@ -12,6 +12,7 @@
 (require 'json)
 (require 'project)
 (require 'subr-x)
+(require 'benedict-errors)
 
 (defvar benedict--tools (make-hash-table :test 'eq)
   "Registry of tool specs keyed by :id symbol.")
