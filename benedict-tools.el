@@ -155,23 +155,25 @@ Each entry becomes a \"--glob !PATTERN\" argument to ripgrep."
 (defun benedict--search-project-root ()
   "Return the project root for the current buffer.
 Falls back to `default-directory' when no project is active."
-  (or (when (fboundp 'project-current)
-        (when-let ((project (project-current nil default-directory)))
-          ;; project-root is preferred when available; fall back to roots list.
-          (cond
-           ((fboundp 'project-root) (expand-file-name (project-root project)))
-           ((fboundp 'project-roots)
-            (let ((roots (project-roots project)))
-              (when roots (expand-file-name (car roots)))))
-           (t nil))))
-      (when default-directory (expand-file-name default-directory))))
+  (let ((project-root
+         (when (fboundp 'project-current)
+           (when-let ((project (project-current nil default-directory)))
+             ;; project-root is preferred when available; fall back to roots list.
+             (cond
+              ((fboundp 'project-root) (expand-file-name (project-root project)))
+              ((fboundp 'project-roots)
+               (let ((roots (project-roots project)))
+                 (when roots (expand-file-name (car roots)))))
+              (t nil))))))
+    (or project-root
+        (when default-directory (expand-file-name default-directory)))))
 
 (defun benedict--search-project--ensure-executable ()
   "Return the absolute path for `benedict-search-project-executable'."
   (or (executable-find benedict-search-project-executable)
       (signal 'benedict-error
               (list (format "Project search requires %s in PATH"
-                      benedict-search-project-executable))))
+                      benedict-search-project-executable)))))
 
 (defun benedict--search-project--relative-path (path root)
   "Return PATH relative to ROOT, resolving symlinks."
@@ -211,20 +213,19 @@ treated as a fixed string. Additional glob arguments can be supplied
 via GLOBS, a list of strings passed as \"--glob\" arguments."
   (let* ((needle (string-trim (or query ""))))
     (unless (and (stringp needle) (not (string-empty-p needle)))
-      (signal 'benedict-error '("Project search requires a non-empty query")))
+      (signal 'benedict-error "Project search requires a non-empty query"))
     (setq query needle)
     (let* ((root (or (and root (expand-file-name root))
                      (benedict--search-project-root)))
-           (default-directory (or root (signal 'benedict-error '("Project root unavailable"))))
+           (default-directory (or root (signal 'benedict-error "Project root unavailable")))
            (raw-limit (or limit benedict-search-project-max-results))
            (limit (max 1 (or raw-limit 1)))
            (regexp-mode (and regexp t))
            (executable (benedict--search-project--ensure-executable))
-           (max-per-file (or benedict-search-project-max-matches-per-file 10))
            (command-args
             (append '("--json" "--line-number" "--column" "--no-heading" "--color" "never" "--with-filename" "--follow")
                     (when benedict-search-project-include-hidden '("--hidden"))
-                    (list "--max-count" (number-to-string max-per-file))
+                    (list "--max-count" (number-to-string limit))
                     (benedict--search-project--glob-args globs)
                     (unless regexp-mode '("--fixed-strings"))
                     ;; Protect query so leading dashes are treated as search text.
@@ -234,10 +235,13 @@ via GLOBS, a list of strings passed as \"--glob\" arguments."
           ;; ripgrep exits 1 when no matches are found; treat it as success.
           (unless (member exit-code '(0 1))
             (signal 'benedict-error
-                    (list (format "Project search failed (rg exited %s) with args %S output %S"
-                            exit-code command-args (buffer-string)))))
+                    (format "Project search failed (rg exited %s) with args %S"
+                            exit-code command-args))))
         (goto-char (point-min))
-        (let (matches stats-match-count)
+        (let ((per-file-limit (max 1 (or benedict-search-project-max-matches-per-file 1)))
+              (file-match-count (make-hash-table :test #'equal))
+              matches
+              stats-match-count)
           (while (not (eobp))
             (let ((line (buffer-substring-no-properties
                          (line-beginning-position) (line-end-position))))
@@ -249,26 +253,29 @@ via GLOBS, a list of strings passed as \"--glob\" arguments."
                        (event-type (plist-get payload :type)))
                   (pcase event-type
                     ("match"
-                     (when (< (length matches) limit)
-                       (let* ((data (plist-get payload :data))
-                              (path (plist-get (plist-get data :path) :text))
-                              (line-number (plist-get data :line_number))
-                              (line-text (plist-get (plist-get data :lines) :text))
-                              (preview (benedict--search-project--trim-line line-text))
-                              (submatches (or (plist-get data :submatches) '(nil)))
-                              (relative (benedict--search-project--relative-path path root))
-                              (absolute (and path (expand-file-name path root))))
-                         (dolist (sub submatches)
-                           (let* ((match-text (and sub (plist-get (plist-get sub :match) :text)))
-                                  (start (and sub (plist-get sub :start)))
-                                  (column (and (integerp start) (1+ start))))
+                     (let* ((data (plist-get payload :data))
+                            (path (plist-get (plist-get data :path) :text))
+                            (line-number (plist-get data :line_number))
+                            (line-text (plist-get (plist-get data :lines) :text))
+                            (preview (benedict--search-project--trim-line line-text))
+                            (submatches (or (plist-get data :submatches) '(nil)))
+                            (relative (benedict--search-project--relative-path path root))
+                            (absolute (and path (expand-file-name path root))))
+                       (dolist (sub submatches)
+                         (let* ((match-text (and sub (plist-get (plist-get sub :match) :text)))
+                                (start (and sub (plist-get sub :start)))
+                                (column (and (integerp start) (1+ start)))
+                                (file-key (or relative absolute path))
+                                (count (or (gethash file-key file-match-count) 0)))
+                           (when (< count per-file-limit)
                              (push (list :file relative
                                          :absolute absolute
                                          :line line-number
                                          :column column
                                          :match match-text
                                          :preview preview)
-                                   matches))))))
+                                   matches)
+                             (puthash file-key (1+ count) file-match-count))))))
                     ("summary"
                      (setq stats-match-count
                            (let* ((data (plist-get payload :data))
@@ -305,7 +312,7 @@ via GLOBS, a list of strings passed as \"--glob\" arguments."
         (unless (member exit-code '(0 1))
           (signal 'benedict-error
                   (list (format "Find files failed (rg exited %s) with args %S"
-                          exit-code command-args))))
+                          exit-code command-args)))))
       (goto-char (point-min))
       (let ((files (split-string (buffer-string) "\0" t)))
         (mapcar (lambda (f) (file-relative-name f root)) files)))))
@@ -504,7 +511,7 @@ ARGS must be a plist passed directly to the tool implementation."
   "Return the absolute filename for PATH under ROOT."
   (let ((expanded (benedict--resolve-target-path path root)))
     (unless (file-regular-p expanded)
-(signal 'benedict-error (list (format "Target %s is not a file" path))))
+      (signal 'benedict-error (list (format "Target %s is not a file" path))))
     expanded))
 
 
@@ -533,7 +540,7 @@ Returns a plist:
         (unless (file-in-directory-p expanded root)
           (signal 'benedict-error (list (format "Path %s must stay inside the project root" path))))
         (when (and (not create-if-missing) (not (file-exists-p expanded)))
-(signal 'benedict-error (list (format "File %s does not exist and create_if_missing is false" path))))
+          (signal 'benedict-error (list (format "File %s does not exist and create_if_missing is false" path))))
         (when (and create-if-missing (not (file-exists-p expanded)))
           (let ((parent (file-name-directory expanded)))
             (unless (file-directory-p parent)
@@ -550,13 +557,13 @@ Returns a plist:
       (let ((buf (if create-if-missing
                      (get-buffer-create buffer-name)
                    (or (get-buffer buffer-name)
-                       (signal 'benedict-error (list (format "Buffer %s does not exist and create_if_missing is false" buffer-name))))))
+                       (signal 'benedict-error (list (format "Buffer %s does not exist and create_if_missing is false" buffer-name)))))))
         (list :buffer buf
               :kind "buffer"
               :buffer_name buffer-name
               :file-backed-p (not (null (buffer-file-name buf))))))
      (t
-      (signal 'benedict-error (list (format "Unknown target kind: %S" kind))))))
+      (signal 'benedict-error (list (format "Unknown target kind: %S" kind)))))))
 
 (cl-defun benedict--tool-write (&key target content (create_if_missing t))
   "Create or overwrite TARGET with CONTENT.
@@ -734,7 +741,7 @@ If PATH is provided, search only within that directory."
          (target-dir (if path
                          (let ((p (benedict--resolve-target-path path root)))
                            (unless (file-directory-p p)
-(signal 'benedict-error (list (format "Path %s is not a directory" path))))
+                             (signal 'benedict-error (list (format "Path %s is not a directory" path))))
                            p)
                        root)))
     (let* ((files (benedict-find-files-sync pattern :root target-dir))
