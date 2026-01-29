@@ -2,22 +2,37 @@
 
 This document defines the autonomous loop logic that allows Benedict to perform multi-step tasks.
 
+## 0. Core Idea: Agent Programs (Programmable Loop)
+
+The "agent loop" is not a single hard-coded behavior. Benedict must support "agent programs" (Ralph Wiggum Loop style): configurable, testable loop policies that determine how the agent thinks/acts/verifies and how it produces artifacts.
+
+An agent program is data (and optionally small amounts of Elisp) that configures:
+- step sequence (observe/plan/act/verify/capture)
+- budgets (turn/time/token/cost/tool-call limits)
+- tool access by phase
+- subagent spawning rules
+- stop/continue/checkpoint conditions
+
 ## 1. The Loop Logic (`benedict-session.el`)
 
 The Agent Loop is a state machine that drives the conversation forward until a termination condition is met.
 
 **Cycle:**
 1.  **Observe:** Collect message history, including the latest User message or Tool Result.
-2.  **Think:** Dispatch request to LLM.
-3.  **Act:** Receive LLM response.
+2.  **Plan/Think:** Dispatch request to LLM (optionally under a specific agent program phase).
+3.  **Act:** Receive LLM response (text and/or tool calls).
     - If response is text only -> **Stop** (Task Complete).
     - If response contains Tool Calls -> **Execute**.
 4.  **Execute:**
     - Parse tool calls.
-    - Check Approvals.
+    - Check harness policy (scope, budgets, sandbox).
     - Run Tools.
     - Append Tool Results to history.
     - **Loop:** Go back to Step 1.
+
+**Artifact-first completion:**
+- The loop should prefer producing a durable artifact (file, buffer, draft, org capture) as the "result" of work.
+- Persistence of the chat transcript is valuable but not required for v0.1 usefulness if artifacts are consistently produced.
 
 ## 2. Safety & Autonomy Constraints
 
@@ -31,7 +46,7 @@ To prevent runaway agents (infinite loops, excessive costs), the loop is bounded
 ### 2.2 Checkpoints
 When a limit is reached, the loop enters the **`checkpoint`** state.
 - **Behavior:** Execution pauses.
-- **UI:** User is presented with a prompt: "Benedict has run 5 steps. Continue? (y/n)".
+- **UI:** User is presented with a prompt: "Benedict has run 5 steps. Continue? (y/n)" (or an equivalent VUI prompt).
 - **Resolution:**
     - `y`: Reset counters/timers and continue.
     - `n`: Stop loop.
@@ -44,12 +59,11 @@ When a limit is reached, the loop enters the **`checkpoint`** state.
 
 1.  **Parser:** Extract `tool_calls` from the LLM response message.
 2.  **Validator:** Ensure tool exists in registry and args match schema.
-3.  **Policy Check:**
-    - `auto`: Proceed.
-    - `confirm`: Ask user.
-        - If User denies: Feed "Tool invocation canceled by user" error back to LLM.
-        - If User approves: Proceed.
-    - `always`: (Misnomer, means "Always Confirm" or "High Risk"). Treat as `confirm`.
+3.  **Harness Policy Check (Primary Safety Mechanism):**
+    - Validate that the tool call stays inside the sandbox scope (paths, buffers, commands).
+    - Enforce budgets (turn/time/token/cost/tool-call caps).
+    - If the agent requests a privileged effect (scope expansion), prompt the user to approve *the scope change*.
+      - If user denies scope expansion: feed back a structured "scope denied" tool result so the model can recover.
 4.  **Invocation:**
     - Run the tool function (potentially in `flywire` sandbox).
     - Capture `stdout`/`return value` or `error`.
@@ -69,6 +83,13 @@ Complex tasks require specialized contexts. The Main Agent can spawn Sub-Agents.
     - The Sub-Agent runs its own loop.
     - Result is summarized and returned to the Main Agent as the tool output.
 - **Safety:** Sub-Agents inherit (or have stricter) autonomy limits than the parent.
+
+### 4.1 First-Class Subagents (v0.1 MVP direction)
+
+Subagents should not be "advanced only"; they are a primary mechanism for keeping context clean:
+- A subagent runs in an isolated session with a narrow task and narrower tool access.
+- The output contract is explicit: summary + optional artifacts (files/buffers/patches) + citations to local evidence when applicable.
+- The main agent decides whether to merge subagent output into the main thread history.
 
 ## 5. Multi-Model Experiments
 
@@ -91,3 +112,16 @@ The agent requires implicit context to be effective.
 - **Usage Metrics:**
     - The session tracks elapsed time, token usage, and estimated cost per request.
     - This data is displayed in the UI and used to enforce `max-tokens` limits.
+
+## 7. Loop Programming Interface (Ralph Wiggum Loop)
+
+The system must allow defining and selecting an "agent program" per profile/session.
+
+Requirements:
+- Programs are declarative where possible (easy to diff, version, and test).
+- Programs can define:
+  - step graph (not only a linear loop)
+  - tool allowlists per step
+  - subagent spawn points (e.g., "research" step always delegates)
+  - verification steps (tests, lint, compilation) as explicit phases
+- Programs must be observable in UI (current step, budgets, why a tool is allowed/denied).

@@ -76,16 +76,17 @@ This document details the architectural components of Benedict and their interac
     - Results are fed back into the conversation history.
 
 ### 2.6 Isolation (`benedict-flywire.el`)
-- **Role:** Safety sandbox.
+- **Role:** UI and execution isolation.
 - **Mechanism:** Creates a dedicated "Agent Frame" or uses a headless environment.
-    - Executes tools in a controlled frame/environment.
-    - Purpose: Prevents the agent from accidentally modifying the user's active buffers or window configuration during complex tasks. Tools operate within this isolated context.
+    - Executes potentially disruptive operations (buffer switching, file opens) in a controlled frame/environment.
+    - Purpose: Prevent the agent from hijacking the user's window layout or active buffers.
 
 ### 2.7 Persistence Layer
 - **Role:** Long-term memory and history.
 - **Mechanism:**
-    - Primary: File-backed storage (JSONL/Sexp) per project (`.benedict/` directory).
-    - Secondary/Index: SQLite database (`sqlite.el`) for fast searching and history browsing across projects.
+    - Primary: Portable transcript serialization format (provider-agnostic).
+      - Must be stable and compatible with external agent runtimes when possible (e.g., OpenAI-style message arrays, Vercel AI SDK message formats, or Opencode-compatible transcripts).
+    - Secondary/Index: SQLite database (`sqlite.el`) for fast searching and history browsing across projects (optional in v0.1).
 - **Data:**
     - Threads (Messages, Tool Calls, usage stats).
     - Session Metadata (Profiles used, outcomes).
@@ -99,6 +100,29 @@ This document details the architectural components of Benedict and their interac
 - **Hooks:**
     - Pre-dispatch and Post-dispatch hooks for transforming messages or handling results.
     - Middleware pattern for message interception.
+
+### 2.9 Agent Harness (Safety + Runtime Controls)
+- **Role:** Enforce modern safety constraints without relying on constant user prompts.
+- **Responsibilities:**
+    - Define sandbox scope: allowed roots, allowed commands, network policy, and side-effect categories.
+    - Enforce budgets: max turns, wall clock, token/cost budgets, tool call limits.
+    - Provide structured events for UI and audit logs (tool started/completed, file writes, scope expansions).
+    - Gate privileged effects by requiring explicit scope expansion (not per-call "y/n" spam).
+
+### 2.10 Sub-Agents & Delegation
+- **Role:** Keep the main conversation context clean by delegating bounded sub-tasks to subagents.
+- **Mechanism:** The main session can spawn ephemeral sub-sessions with:
+    - reduced context window (task-local messages only)
+    - stricter budgets and narrower tool access
+    - a well-defined output contract (summary + artifacts)
+
+### 2.11 Agent Programs (Programmable Loop)
+- **Role:** Allow users (and the project) to "program" the loop itself (Ralph Wiggum Loop style).
+- **Mechanism:** A loop program is data that configures:
+    - step types (observe/plan/act/verify/capture)
+    - when to spawn subagents
+    - what tool categories are permitted at each step
+    - stop/continue conditions and checkpoint policy
 
 ## 3. Data Flow
 
@@ -120,7 +144,7 @@ This document details the architectural components of Benedict and their interac
 3.  **Tool Execution:**
     - Provider finishes with a `tool_calls` payload.
     - Session parses call.
-    - Session checks Approval Policy (may prompt user).
+    - Harness checks scope/budgets/effects policy (may require scope expansion).
     - Session invokes Tool (via `benedict-tools`).
     - Tool runs (potentially in `flywire` context).
     - Tool returns result (text/json).

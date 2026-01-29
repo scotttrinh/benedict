@@ -251,14 +251,19 @@ Commands for feeding Emacs context into the chat:
 | `benedict-chat-ask-buffer`    | Sends whole buffer       |
 | `benedict-chat-ask-project`   | Sends project structure  |
 | `benedict-chat-ask-git-context` | Sends git status/diff  |
+| `benedict-chat-ask-file`      | Pick a file and send it  |
+| `benedict-chat-ask-buffer-pick` | Pick a buffer and send it |
 
 ### 5.1 UX Flow
 
-1. User invokes context command
+1. User invokes context command (or uses an in-compose picker)
 2. Content gathered and formatted
 3. Chat buffer opens (or focuses existing)
 4. Content inserted as `ContextSlice` component (collapsible preview)
 5. User types query in InputArea and sends
+
+In-compose pickers (MVP):
+- In the compose/input area, provide "Add file..." and "Add buffer..." actions that open native completion (like projectile/project.el switching) and add slices without requiring window/buffer switching.
 
 ### 5.2 ContextSlice Component
 
@@ -308,9 +313,15 @@ A dedicated vui.el application for browsing conversation history:
 - **Restoration**: Selecting a thread rehydrates full conversation
 - **Forking**: Create branch from any conversation point
 
+MVP note:
+- Persistence and thread browsing are important, but v0.1 usefulness should not depend on it if the primary interaction produces artifacts (notes, drafts, file edits).
+
 ## 7. Tool Approval UI
 
-When an agent requests tool execution with `confirm` policy:
+Approvals should not be the primary UX. The main safety mechanism is the harness (scope + budgets + sandbox). The approval UI is used when:
+- a tool call requests privileged effects, or
+- a tool call requests scope expansion (paths, commands, network), or
+- the user has configured a stricter policy.
 
 ### 7.1 Simple Approval
 
@@ -318,10 +329,16 @@ When an agent requests tool execution with `confirm` policy:
 (vui-defcomponent tool-approval-prompt (props state)
   (let ((tool (plist-get props :tool))
         (args (plist-get props :args))
+        (scope (plist-get props :scope))        ;; requested scope/effects
+        (policy (plist-get props :policy))      ;; why this prompt is shown
         (on-approve (plist-get props :on-approve))
         (on-reject (plist-get props :on-reject)))
     (vui-vstack
-      (vui-text (format "Benedict wants to run tool: %s" tool))
+      (vui-text (format "Benedict requests: %s" tool))
+      (vui-text (format "Reason: %s" policy))
+      (when scope
+        (vui-box :class "tool-scope"
+          (vui-text (pp-to-string scope))))
       (vui-box :class "tool-args"
         (vui-text (pp-to-string args)))
       (vui-hstack :spacing 2
@@ -348,6 +365,10 @@ For `edit` or `write` operations:
         (vui-button "Reject (n)" :on-click (plist-get props :on-reject))
         (vui-button "Edit (e)" :on-click (plist-get props :on-edit))))))
 ```
+
+### 7.3 Elisp Repair
+
+If a tool invokes some elisp, we should pre-parse the s-exp and if it fails, we should automatically reject the tool call with diagnostic information.
 
 ## 8. Notifications
 

@@ -12,6 +12,7 @@ A Provider is a struct implementing the following contract:
     - `:streaming` (bool)
     - `:tools` (bool) - Does it support native function calling?
     - `:json-mode` (bool)
+    - `:transcript-format` (symbol/string, optional) - Provider-native transcript schema, if any.
 - **`send`** (function): Dispatches a request.
 - **`cancel`** (function): Aborts an inflight request.
 
@@ -37,6 +38,18 @@ Called with a result plist:
 Called repeatedly with chunks:
 - `:content` (string): Text delta.
 - `:tool-calls` (list): Partial tool call structures (if supported).
+
+### 2.4 Transcript Serialization (Important, Not a v0.1 Blocker)
+
+Persistence should be able to reuse existing, widely-used transcript formats where possible.
+
+Requirements:
+- Benedict maintains a provider-agnostic internal message model.
+- Benedict can export/import transcripts via adapters to external schemas, such as:
+  - OpenAI-style message arrays (role/content/tool messages)
+  - Vercel AI SDK compatible transcript/message representations
+  - Opencode-compatible transcript serialization (if available)
+- The persistence layer can choose one canonical on-disk format, but adapters must exist so users can interop with other tooling.
 
 ## 3. Supported Providers
 

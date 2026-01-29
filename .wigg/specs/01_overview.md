@@ -6,7 +6,16 @@ Benedict is designed to be an **Emacs-native** AI assistant. It rejects the para
 - **Buffers as Interface:** Interactions happen in buffers, manipulatable by standard Emacs commands.
 - **Text as Data:** Responses are streamed, rendered, and structured as text properties and overlays, not HTML widgets.
 - **Deep Integration:** It connects directly to Emacs APIs for file editing, buffer management, project navigation (`project.el`), and searching (`ripgrep`).
-- **Safe-by-Default:** All autonomous actions, especially those with side effects (file writes, code execution), are gated by strict, user-configurable approval policies.
+- **Safe-by-Default:** Safety is primarily enforced by a modern harness (sandbox + budgets + scope), with user confirmations used only when crossing boundaries or requesting privileged effects.
+
+### 1.1 Artifact-First Usage (v0.1 MVP)
+
+In v0.1, the primary "output" of a conversation is an artifact (side effect) the user can immediately use:
+- write or edit project files
+- draft content (email, note, summary) into a buffer or file
+- capture a structured note into Org (optional integration)
+
+Persistent chat history is valuable, but not required for day-to-day usefulness if the default workflow consistently produces artifacts.
 
 ## 2. Core Mandates
 
@@ -21,9 +30,10 @@ Benedict is designed to be an **Emacs-native** AI assistant. It rejects the para
 - It handles differences in API capabilities (streaming vs. non-streaming, tool calling formats) transparently to the user.
 
 ### 2.3 Transparent & Safe
-- **Approvals:** Tool calls require explicit user approval by default (configurable per tool and profile).
-- **Isolation:** Dangerous operations (like tool execution) run in an isolated environment (`benedict-flywire`) to prevent pollution of the main Emacs session.
-- **Telemetry:** User has full visibility into what context is sent to the LLM.
+- **Harness Controls:** The agent runs under a harness that enforces safety constraints (scopes, budgets, sandboxing), and produces auditable events.
+- **Approvals Are Exceptions:** Confirmations exist, but the default experience should not feel like "y/n spam". Prompts happen when the agent requests to widen scope or perform privileged effects.
+- **Isolation:** Potentially disruptive operations run in an isolated environment (`benedict-flywire`) to avoid polluting the user's active windows/buffers.
+- **Telemetry:** The user can see what context is sent, what tools ran, and what files/buffers were affected.
 
 ## 3. High-Level Architecture Summary
 
@@ -56,8 +66,9 @@ The system is composed of several loosely coupled modules:
 ## 4. Key Workflows
 
 - **Chat:** Standard Q&A with context awareness.
-- **Task Execution:** User gives a high-level goal ("Refactor this module"), and Benedict enters an autonomous loop to research, plan, and execute changes.
+- **Task Execution:** User gives a high-level goal ("Refactor this module"), and Benedict runs a programmable agent loop (an "agent program") that can spawn subagents and produce artifacts.
 - **Context Gathering:** Commands to pull in regions, buffers, or project context into the chat.
+- **Agent Bootstrap (Skills/Instructions):** Each session can be bootstrapped from project-local agent instructions (e.g., `AGENTS.md`, `SKILL.md`, `.wigg/specs/`), with a good default and full user customization.
 - **Org-Mode Integration:**
     - Benedict views Org-mode as the "long-term memory" and "planning substrate."
     - Chat is for ephemeral interaction and execution.

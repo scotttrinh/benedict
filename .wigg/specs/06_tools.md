@@ -10,10 +10,14 @@ Tools are defined using `benedict-tools-register`.
 - **`:id`** (symbol): Unique name (e.g., `'read-file`).
 - **`:fn`** (function): Elisp function to execute.
 - **`:doc`** (string): Human-readable description.
-- **`:approval`** (symbol):
-    - `'auto`: Safe, read-only. Run without prompt (unless global policy overrides).
-    - `'confirm`: Side-effects (write/edit). Require user confirmation.
-    - `'always`: Dangerous (exec-elisp). Always require confirmation.
+- **`:effects`** (list of symbols): Declares the effect category for harness enforcement.
+    - Examples: `read`, `write`, `exec`, `network`, `ui`, `process`.
+- **`:scope`** (plist): Declares what the tool intends to touch (harness uses this for policy).
+    - Examples: `(:paths ("./" ".wigg/") :buffers ("*scratch*") :commands (rg git))`
+- **`:approval`** (symbol, legacy): Back-compat hint only. The primary mechanism is the harness policy.
+    - `'auto`: No prompt expected within allowed scope.
+    - `'confirm`: Prompt if scope expansion is required.
+    - `'always`: Always prompt (reserved for privileged effects like arbitrary eval).
 - **`:schema`** (plist): JSON Schema definition of arguments.
 
 ### 1.2 Schema Format
@@ -41,6 +45,25 @@ A simplified plist representation of JSON Schema:
     - **Behavior:** Overwrites (or creates) file/buffer with *full* content.
     - **Approval:** `confirm`.
 
+### 2.1.1 Context Capture (Compose-First)
+
+These tools support adding context while composing, without requiring the user to switch buffers.
+
+- **`list-buffers`**
+    - **Args:** optional filters (mode, name regex).
+    - **Behavior:** Return buffer names and lightweight metadata (major-mode, file path).
+    - **Effects:** `read`.
+
+- **`context-add-buffer`**
+    - **Args:** `:buffer_name`, optional `:start-line`, `:end-line`, optional `:handle`.
+    - **Behavior:** Add a buffer slice as a context slice to the compose context.
+    - **Effects:** `read`.
+
+- **`context-add-file`**
+    - **Args:** `:path`, optional `:start-line`, `:end-line`, optional `:handle`.
+    - **Behavior:** Add a file slice as a context slice to the compose context.
+    - **Effects:** `read`.
+
 ### 2.2 Navigation & Search
 - **`project-search`**
     - **Args:** `:query` (string - regex/literal).
@@ -59,12 +82,33 @@ A simplified plist representation of JSON Schema:
     - **Behavior:** Evals arbitrary Elisp. High power, high risk.
     - **Approval:** `always`.
 
+### 2.5 Elisp Reliability (Repair and Guards)
+
+Agents frequently produce unparsable Elisp. Benedict must provide first-class support for diagnosing and repairing Elisp before attempting to execute or load it.
+
+- **`check-elisp`**
+    - **Args:** `:target` (buffer/file), optional `:kind` (parens, byte-compile, checkdoc).
+    - **Behavior:** Validate syntax and return structured diagnostics (location + message).
+    - **Effects:** `read`.
+
+- **`repair-elisp`**
+    - **Args:** `:target` (buffer/file), optional `:strategy` (minimal-parens, reindent, rewrite-form).
+    - **Behavior:** Propose a repair as a patch/diff or an `edit` tool call plan.
+    - **Effects:** `write` (when applied), otherwise `read` for proposal generation.
+
+Guideline:
+- `exec-elisp` should be wrapped by a guard that refuses to run when `check-elisp` reports syntax errors, unless the user explicitly overrides.
+
 ## 3. Tool Execution Environment (`benedict-flywire`)
 
 To ensure safety and stability, tools are executed in an isolated context.
 
 - **Agent Frame:** A dedicated Emacs frame (visible or invisible) where side-effects like "switch buffer" or "open file" happen, preventing the agent from hijacking the user's primary window layout.
 - **Sandboxing:** File access is restricted to the Project Root by default to prevent accidental modification of system files or unrelated projects.
+
+In v0.1, "modern safety" means:
+- the default experience should not rely on constant user confirmation
+- the harness enforces scope and budgets, and only prompts on scope expansion
 
 ## 4. Custom Tools API
 
