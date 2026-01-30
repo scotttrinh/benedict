@@ -134,15 +134,15 @@
 
 ### vui.el Migration - Input Components
 
-- [ ] **ContextIndicator vui component** (refs: 03_ui_ux.md section 5.2)
-  - Scope: Show attached context slices in compose area
-  - Files: Create `components/benedict-vui-context-indicator.el`, `test/benedict-vui-context-indicator-test.el`
-  - Tests:
-    - Displays count and size of attached slices
-    - Shows slice labels on hover/expand
-    - Remove button clears individual slices
-  - Dependencies: StatusBadge
-  - Notes: Props: `:slices`, `:on-remove`.
+ - [x] **ContextIndicator vui component** (refs: 03_ui_ux.md section 5.2)
+   - Scope: Show attached context slices in compose area
+   - Files: Create `components/benedict-vui-context-indicator.el`, `test/benedict-vui-context-indicator-test.el`
+   - Tests:
+     - Displays count and size of attached slices
+     - Shows slice labels on hover/expand
+     - Remove button clears individual slices
+   - Dependencies: StatusBadge
+   - Notes: Props: `:slices`, `:on-remove`.
 
 - [ ] **ComposeField vui component** (refs: 03_ui_ux.md section 1.2)
   - Scope: Controlled text input for composing messages
