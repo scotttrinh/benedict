@@ -197,16 +197,16 @@
    - Dependencies: ProviderBadge, StatusBadge
    - Notes: Props: `:provider`, `:model`, `:status`, `:title`, `:on-provider-click`.
 
-- [ ] **StatusBar vui component** (refs: 03_ui_ux.md section 1.2)
-  - Scope: Footer with token count, cost estimate, errors
-  - Files: Create `components/benedict-vui-status-bar.el`, `test/benedict-vui-status-bar-test.el`
-  - Tests:
-    - Displays token count formatted
-    - Shows cost estimate when available
-    - Displays error messages with error face
-    - Handles missing usage data
-  - Dependencies: None
-  - Notes: Props: `:usage`, `:error`.
+ - [x] **StatusBar vui component** (refs: 03_ui_ux.md section 1.2)
+   - Scope: Footer with token count, cost estimate, errors
+   - Files: Create `components/benedict-vui-status-bar.el`, `test/benedict-vui-status-bar-test.el`
+   - Tests:
+     - Displays token count formatted
+     - Shows cost estimate when available
+     - Displays error messages with error face
+     - Handles missing usage data
+   - Dependencies: None
+   - Notes: Props: `:usage`, `:error`.
 
 ### vui.el Migration - Root & Integration
 
