@@ -177,25 +177,25 @@
 
 ### vui.el Migration - Header & Status
 
-- [x] **ProviderBadge vui component** (refs: 03_ui_ux.md section 1.2)
-  - Scope: Clickable provider/model selector in header
-  - Files: Create `components/benedict-vui-provider-badge.el`, `test/benedict-vui-provider-badge-test.el`
-  - Tests:
-    - Displays current provider and model
-    - Click triggers model selection callback
-    - Tooltip shows full model ID
-  - Dependencies: StatusBadge
-  - Notes: Props: `:provider`, `:model`, `:on-click`.
+ - [x] **ProviderBadge vui component** (refs: 03_ui_ux.md section 1.2)
+   - Scope: Clickable provider/model selector in header
+   - Files: Create `components/benedict-vui-provider-badge.el`, `test/benedict-vui-provider-badge-test.el`
+   - Tests:
+     - Displays current provider and model
+     - Click triggers model selection callback
+     - Tooltip shows full model ID
+   - Dependencies: StatusBadge
+   - Notes: Props: `:provider`, `:model`, `:on-click`.
 
-- [ ] **ChatHeader vui component** (refs: 03_ui_ux.md section 1.2)
-  - Scope: Header bar with provider, status, and session title
-  - Files: Create `components/benedict-vui-chat-header.el`, `test/benedict-vui-chat-header-test.el`
-  - Tests:
-    - Shows ProviderBadge, StatusIndicator, SessionTitle
-    - Updates on provider/model change
-    - Click handling works
-  - Dependencies: ProviderBadge, StatusBadge
-  - Notes: Props: `:provider`, `:model`, `:status`, `:title`, `:on-provider-click`.
+ - [x] **ChatHeader vui component** (refs: 03_ui_ux.md section 1.2)
+   - Scope: Header bar with provider, status, and session title
+   - Files: Create `components/benedict-vui-chat-header.el`, `test/benedict-vui-chat-header-test.el`
+   - Tests:
+     - Shows ProviderBadge, StatusIndicator, SessionTitle
+     - Updates on provider/model change
+     - Click handling works
+   - Dependencies: ProviderBadge, StatusBadge
+   - Notes: Props: `:provider`, `:model`, `:status`, `:title`, `:on-provider-click`.
 
 - [ ] **StatusBar vui component** (refs: 03_ui_ux.md section 1.2)
   - Scope: Footer with token count, cost estimate, errors
