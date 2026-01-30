@@ -35,7 +35,7 @@
   - Dependencies: None
   - Notes: Pure presentational component. Props: `:status`, `:theme`.
 
-- [ ] **CollapsibleBlock vui component** (refs: 03_ui_ux.md section 3.3)
+- [x] **CollapsibleBlock vui component** (refs: 03_ui_ux.md section 3.3)
   - Scope: Generic collapsible container with header and toggle
   - Files: Create `components/benedict-vui-collapsible.el`, `test/benedict-vui-collapsible-test.el`
   - Tests:
