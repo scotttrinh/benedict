@@ -210,28 +210,22 @@ CONTENT-NODE and HEADER-NODE are precomputed VUI nodes."
                            (car truncation)
                          body-text))
          (body-ref (vui-use-ref body-text))
-         (toggle-collapse (vui-use-callback
-                           (lambda (next)
-                             (unless controlled
-                               (vui-set-state :collapsed next)))
-                           (list controlled)))
-         (toggle-expand (vui-use-callback
-                         (lambda ()
-                           (vui-set-state :expanded (lambda (value) (not value))))
-                         (list)))
+         (toggle-collapse (vui-use-callback (controlled)
+                            (unless controlled
+                              (vui-set-state :collapsed next))))
+         (toggle-expand (vui-use-callback ()
+                          (vui-set-state :expanded (lambda (value) (not value)))))
          (header-node (benedict-vui-tool-result-block--header result status))
          (content-node (benedict-vui-tool-result-block--content-node
                         display-text truncated expanded toggle-expand actions status))
          (collapsible-props (benedict-vui-tool-result-block--collapsible-props
                              props state toggle-collapse content-node header-node)))
-    (vui-use-effect
-     (lambda ()
-       (let ((prev (car body-ref)))
-         (unless (equal prev body-text)
-           (setcar body-ref body-text)
-           (vui-set-state :expanded nil)))
-       nil)
-     (list body-text))
+    (vui-use-effect (body-text)
+      (let ((prev (car body-ref)))
+        (unless (equal prev body-text)
+          (setcar body-ref body-text)
+          (vui-set-state :expanded nil)))
+      nil)
     (apply #'benedict-vui-collapsible collapsible-props)))
 
 (vui-defcomponent benedict-vui-tool-result-block (props state)

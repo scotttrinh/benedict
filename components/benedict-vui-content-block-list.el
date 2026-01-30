@@ -164,11 +164,11 @@ COLLAPSED-BLOCKS may be a list or hash table of block IDs."
                   (plist-get props :blocks)))
          (collapsed-blocks (plist-get props :collapsed-blocks)))
     (vui-list blocks
-              :key-fn (lambda (block &optional index)
-                        (benedict-vui-content-block-list--block-id block index))
-              :render-fn (lambda (block &optional index)
-                           (benedict-vui-content-block-list--render-block
-                            block collapsed-blocks index)))))
+              (lambda (block &optional index)
+                (benedict-vui-content-block-list--render-block
+                 block collapsed-blocks index))
+              (lambda (block &optional index)
+                (benedict-vui-content-block-list--block-id block index)))))
 
 (vui-defcomponent benedict-vui-content-block-list (props)
   :render

@@ -20,9 +20,9 @@
          render-fn
          items)
     (cl-letf (((symbol-function 'vui-list)
-               (lambda (value &rest props)
+               (lambda (value r-fn &optional _k-fn &rest _args)
                  (setq items value
-                       render-fn (plist-get props :render-fn))
+                       render-fn r-fn)
                  'list))
               ((symbol-function 'benedict-vui-text-block)
                (lambda (&rest _args)
@@ -55,8 +55,8 @@
                        (list :type 'text :content "b")))
          key-fn)
     (cl-letf (((symbol-function 'vui-list)
-               (lambda (_value &rest props)
-                 (setq key-fn (plist-get props :key-fn))
+               (lambda (_value _r-fn &optional k-fn &rest _args)
+                 (setq key-fn k-fn)
                  'list)))
       (benedict-vui-content-block-list--render (list :blocks blocks))
       (should (equal (funcall key-fn (car blocks) 0) "alpha"))

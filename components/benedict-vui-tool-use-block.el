@@ -120,11 +120,10 @@
 (defun benedict-vui-tool-use-block--render (props state)
   "Return the rendered tool use block for PROPS/STATE."
   (let* ((controlled (benedict-vui-tool-use-block--controlled-p props))
-         (toggle-handler (vui-use-callback
-                          (lambda (next)
-                            (unless controlled
-                              (vui-set-state :collapsed next)))
-                          (list controlled)))
+         (toggle-handler (vui-use-memo (controlled)
+                           (lambda (next)
+                             (unless controlled
+                               (vui-set-state :collapsed next)))))
          (collapsible-props (benedict-vui-tool-use-block--collapsible-props
                              props state toggle-handler)))
     (apply #'benedict-vui-collapsible collapsible-props)))

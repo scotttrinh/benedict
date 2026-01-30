@@ -111,7 +111,7 @@
   - Dependencies: TurnHeader, ContentBlockList
   - Notes: Props: `:message` (full message plist), `:collapsed-blocks` (set).
 
-- [ ] **TurnList vui component** (refs: 03_ui_ux.md section 1.2)
+- [x] **TurnList vui component** (refs: 03_ui_ux.md section 1.2)
   - Scope: Render conversation as list of turns with stable keys
   - Files: Create `components/benedict-vui-turn-list.el`, `test/benedict-vui-turn-list-test.el`
   - Tests:

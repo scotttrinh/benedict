@@ -63,11 +63,10 @@ Best practices for authoring vui.el components: props/state boundaries, hooks/ef
   :on-mount
   (progn
     (fetch-data-async
-      (vui-async-callback
-        (lambda (result)
-          (vui-batch
-            (vui-set-state :data result)
-            (vui-set-state :loading nil)))))
+      (vui-async-callback (result)
+        (vui-batch
+          (vui-set-state :data result)
+          (vui-set-state :loading nil))))
     ;; Return cleanup function
     (lambda () (cancel-pending-requests)))
   :render
@@ -86,11 +85,9 @@ Best practices for authoring vui.el components: props/state boundaries, hooks/ef
   (vui-use-effect ...))
 
 ;; RIGHT - condition inside hook
-(vui-use-effect
-  (lambda ()
-    (when show-data
-      (do-something)))
-  (list show-data))
+(vui-use-effect (show-data)
+  (when show-data
+    (do-something)))
 ```
 
 ### Rule 2: Maintain Consistent Hook Order
@@ -101,29 +98,42 @@ Best practices for authoring vui.el components: props/state boundaries, hooks/ef
   (vui-use-effect ...))
 
 ;; RIGHT - single hook, handle all items
-(vui-use-effect
-  (lambda ()
-    (dolist (item items)
-      (do-something item)))
-  (list items))
+(vui-use-effect (items)
+  (dolist (item items)
+    (do-something item)))
 ```
 
 ### Rule 3: Always Return Cleanup Functions
 
 ```elisp
 ;; WRONG - no cleanup
-(vui-use-effect
-  (lambda ()
-    (add-hook 'post-command-hook #'my-handler))
-  (list))
+(vui-use-effect ()
+  (add-hook 'post-command-hook #'my-handler))
 
 ;; RIGHT - cleanup returned
-(vui-use-effect
+(vui-use-effect ()
+  (add-hook 'post-command-hook #'my-handler nil t)
   (lambda ()
-    (add-hook 'post-command-hook #'my-handler nil t)
-    (lambda ()
-      (remove-hook 'post-command-hook #'my-handler t)))
-  (list))
+    (remove-hook 'post-command-hook #'my-handler t)))
+```
+
+### Rule 4: Hook Argument Order (Deps First)
+
+All hooks (`vui-use-effect`, `vui-use-memo`, `vui-use-callback`) take dependencies as the FIRST argument and the body as remaining arguments. The macro automatically wraps the body in a lambda.
+
+```elisp
+;; WRONG - lambda passed as first argument, deps as second
+(vui-use-effect (lambda () (do-something)) (list count))
+
+;; RIGHT - deps first, then naked body
+(vui-use-effect (count)
+  (do-something))
+```
+
+For computed dependencies, use double parentheses:
+```elisp
+(vui-use-effect ((compute-deps messages))
+  (do-something))
 ```
 
 ## State Management
@@ -181,10 +191,8 @@ Best practices for authoring vui.el components: props/state boundaries, hooks/ef
   (let* ((items (plist-get props :items))
          (query (plist-get props :query))
          ;; Only recompute when items or query change
-         (filtered (vui-use-memo
-                     (lambda ()
-                       (expensive-filter items query))
-                     (list items query))))
+         (filtered (vui-use-memo (items query)
+                     (expensive-filter items query))))
     (render-list filtered)))
 ```
 
@@ -194,14 +202,13 @@ Best practices for authoring vui.el components: props/state boundaries, hooks/ef
 (vui-defcomponent item-list (props state)
   (let ((on-item-click (plist-get props :on-item-click))
         ;; Stable reference - won't cause child re-renders
-        (handle-click (vui-use-callback
-                        (lambda (item)
-                          (funcall on-item-click item))
-                        (list on-item-click))))
+        (handle-click (vui-use-callback (on-item-click)
+                        (lambda (item) ; Use lambda if callback takes arguments
+                          (funcall on-item-click item)))))
     (vui-list items
-      :key-fn #'item-id
-      :render-fn (lambda (item)
-                   (item-row :item item :on-click handle-click)))))
+              (lambda (item)
+                (item-row :item item :on-click handle-click))
+              #'item-id)))
 ```
 
 ### Use Refs for Non-Render State
@@ -226,14 +233,12 @@ Best practices for authoring vui.el components: props/state boundaries, hooks/ef
   (vui-with-async-context
     (make-process
       :name "loader"
-      :filter (vui-async-callback
-                (lambda (proc output)
-                  (vui-set-state :output
-                    (lambda (current)
-                      (concat current output)))))
-      :sentinel (vui-async-callback
-                  (lambda (proc event)
-                    (vui-set-state :done t)))))
+      :filter (vui-async-callback (proc output)
+                (vui-set-state :output
+                  (lambda (current)
+                    (concat current output))))
+      :sentinel (vui-async-callback (proc event)
+                  (vui-set-state :done t))))
   :render ...)
 ```
 
@@ -241,8 +246,7 @@ Best practices for authoring vui.el components: props/state boundaries, hooks/ef
 
 ```elisp
 (vui-defcomponent data-view (props state)
-  (let ((result (vui-use-async
-                  (list 'data (plist-get props :id))
+  (let ((result (vui-use-async (list 'data (plist-get props :id))
                   (lambda (resolve reject)
                     (fetch-data (plist-get props :id) resolve reject)))))
     (pcase (plist-get result :status)
@@ -258,25 +262,31 @@ Best practices for authoring vui.el components: props/state boundaries, hooks/ef
 ```elisp
 ;; WRONG - index-based keys
 (vui-list items
-  :key-fn (lambda (item idx) idx))
+          render-fn
+          (lambda (item idx) idx))
 
 ;; WRONG - content-derived keys
 (vui-list items
-  :key-fn (lambda (item) (md5 (item-content item))))
+          render-fn
+          (lambda (item) (md5 (item-content item))))
 
 ;; RIGHT - stable IDs from data
 (vui-list items
-  :key-fn (lambda (item) (plist-get item :id)))
+          render-fn
+          (lambda (item) (plist-get item :id)))
 ```
 
-### Generate IDs at Creation Time
+### Argument Order for vui-list
+
+`vui-list` uses positional arguments for the main parameters:
+1. `items`
+2. `render-fn`
+3. `key-fn` (optional)
 
 ```elisp
-(defun make-item (content)
-  "Create an item with a stable ID."
-  (list :id (generate-unique-id)
-        :content content
-        :created-at (current-time)))
+(vui-list items
+          (lambda (item) (vui-text item))
+          (lambda (item) (plist-get item :id)))
 ```
 
 ## Composition Patterns
@@ -299,10 +309,10 @@ Best practices for authoring vui.el components: props/state boundaries, hooks/ef
   (if (plist-get props :loading)
       (loading-spinner)
     (vui-list (plist-get props :users)
-      :key-fn (lambda (u) (plist-get u :id))
-      :render-fn (lambda (u)
-                   (user-row :user u
-                             :on-click (plist-get props :on-select))))))
+              (lambda (u)
+                (user-row :user u
+                          :on-click (plist-get props :on-select)))
+              (lambda (u) (plist-get u :id)))))
 ```
 
 ### Slots Pattern
@@ -327,6 +337,8 @@ Best practices for authoring vui.el components: props/state boundaries, hooks/ef
 
 | Pitfall | Symptom | Fix |
 |---------|---------|-----|
+| Wrong hook argument order | `(void-variable lambda)` | Use `(deps &rest body)` pattern |
+| `vui-list` with keywords | Wrong render/key logic | Use positional arguments |
 | Conditional hooks | Inconsistent behavior, crashes | Move condition inside hook |
 | Missing cleanup | Memory leaks, stale subscriptions | Return cleanup from effects |
 | Stale closures | Wrong values in async callbacks | Use functional state updates |
@@ -359,11 +371,13 @@ Check for:
 
 Before completing a component, verify:
 
+- [ ] Hook arguments use `(deps &rest body)` pattern (Rule 4)
+- [ ] `vui-list` uses positional arguments
 - [ ] Props are extracted with `plist-get` at component start
 - [ ] Local state is minimal and UI-only (not duplicating parent/session data)
 - [ ] Render is pure (no side effects outside hooks)
 - [ ] Effects return cleanup functions
-- [ ] List items have `:key` from stable IDs
+- [ ] List items have stable keys
 - [ ] Async callbacks use `vui-async-callback` or `vui-with-async-context`
 - [ ] Multiple state updates are wrapped in `vui-batch`
 - [ ] Hooks are never called conditionally or in loops

@@ -94,29 +94,22 @@ Returns the timer created to clear feedback."
          (normalized-code (benedict-vui-code-block--normalize code))
          (normalized-language (benedict-vui-code-block--normalize-language language))
          (timer-ref (vui-use-ref nil))
-         (fontified (vui-use-memo
-                     (lambda ()
-                       (benedict-vui-code-block--fontify normalized-code normalized-language))
-                     (list normalized-code normalized-language)))
+         (fontified (vui-use-memo (normalized-code normalized-language)
+                      (benedict-vui-code-block--fontify normalized-code normalized-language)))
          (copy-label (if (plist-get state :copied-feedback) "Copied!" "Copy"))
-         (copy-handler (vui-use-callback
-                        (lambda ()
-                          (let ((callback (vui-async-callback
-                                           (lambda (value)
-                                             (vui-set-state :copied-feedback value)))))
-                            (when (car timer-ref)
-                              (cancel-timer (car timer-ref))
-                              (setcar timer-ref nil))
-                            (setcar timer-ref
-                                    (benedict-vui-code-block--copy normalized-code callback))))
-                        (list normalized-code))))
-    (vui-use-effect
-     (lambda ()
-       (lambda ()
-         (when (car timer-ref)
-           (cancel-timer (car timer-ref))
-           (setcar timer-ref nil))))
-     (list))
+         (copy-handler (vui-use-callback (normalized-code)
+                         (let ((callback (vui-async-callback (value)
+                                           (vui-set-state :copied-feedback value))))
+                           (when (car timer-ref)
+                             (cancel-timer (car timer-ref))
+                             (setcar timer-ref nil))
+                           (setcar timer-ref
+                                   (benedict-vui-code-block--copy normalized-code callback))))))
+    (vui-use-effect ()
+      (lambda ()
+        (when (car timer-ref)
+          (cancel-timer (car timer-ref))
+          (setcar timer-ref nil))))
     (vui-vstack
      (vui-hstack
       (vui-text (propertize (benedict-vui-code-block--label normalized-language)

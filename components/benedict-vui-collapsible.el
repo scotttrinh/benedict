@@ -50,13 +50,11 @@ When CONTROLLED is non-nil, returns COLLAPSED to avoid local state changes."
          (on-toggle (plist-get props :on-toggle))
          (controlled (benedict-vui-collapsible--controlled-p props))
          (collapsed (benedict-vui-collapsible--collapsed-p props state))
-         (toggle-handler (vui-use-callback
-                          (lambda ()
-                            (let ((next (benedict-vui-collapsible--apply-toggle
-                                         collapsed controlled on-toggle)))
-                              (unless controlled
-                                (vui-set-state :collapsed next))))
-                          (list collapsed controlled on-toggle))))
+         (toggle-handler (vui-use-callback (collapsed controlled on-toggle)
+                           (let ((next (benedict-vui-collapsible--apply-toggle
+                                        collapsed controlled on-toggle)))
+                             (unless controlled
+                               (vui-set-state :collapsed next))))))
     (vui-vstack
      (vui-hstack
       (vui-button (benedict-vui-collapsible--indicator collapsed)

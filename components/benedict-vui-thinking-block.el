@@ -142,11 +142,10 @@
 (defun benedict-vui-thinking-block--render (props state)
   "Return the rendered thinking block for PROPS/STATE."
   (let* ((controlled (benedict-vui-thinking-block--controlled-p props))
-         (toggle-handler (vui-use-callback
-                          (lambda (next)
-                            (unless controlled
-                              (vui-set-state :collapsed next)))
-                          (list controlled)))
+         (toggle-handler (vui-use-memo (controlled)
+                           (lambda (next)
+                             (unless controlled
+                               (vui-set-state :collapsed next)))))
          (collapsible-props (benedict-vui-thinking-block--collapsible-props
                              props state toggle-handler)))
     (apply #'benedict-vui-collapsible collapsible-props)))
