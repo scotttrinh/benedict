@@ -1,5 +1,10 @@
 ;;; benedict-chat-context-capture.el --- Context capture commands -*- lexical-binding: t; -*--
 
+;;; Commentary:
+;; Commands that capture buffer context into compose prompts.
+
+;;; Code:
+
 (require 'cl-lib)
 (require 'benedict-context)
 (require 'benedict-chat-compose)

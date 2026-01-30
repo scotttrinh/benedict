@@ -92,7 +92,7 @@
 
 (defun benedict-chat-thinking--record-block (buffer content metadata &rest properties)
   "Record a thinking block with CONTENT and METADATA in BUFFER.
-PROPERTIES describe additional block hints. This does not affect provider
+PROPERTIES describe additional block hints.  This does not affect provider
 message history."
   (with-current-buffer buffer
     (let* ((item (apply #'benedict-chat--make-item
@@ -286,7 +286,7 @@ When REPLACE is non-nil, replace the entire block contents."
   (benedict-chat-thinking--write-content buffer item text t))
 
 (defun benedict-chat-thinking--display-detail (buffer detail metadata &optional append)
-  "Render DETAIL using METADATA in BUFFER. APPEND when streaming, replace otherwise."
+  "Render DETAIL using METADATA in BUFFER.  APPEND when streaming, replace otherwise."
   (let* ((normalized (benedict-chat-thinking--normalize-entry detail))
          (item (and normalized
                     (benedict-chat-thinking--ensure-item buffer normalized metadata)))

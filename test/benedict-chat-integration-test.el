@@ -1,5 +1,10 @@
 ;;; test/benedict-chat-integration-test.el --- Integration tests for Benedict Chat -*- lexical-binding: t; -*-
 
+;;; Commentary:
+;; Integration tests for Benedict chat flows.
+
+;;; Code:
+
 (require 'ert)
 (require 'ert-async)
 (require 'cl-lib)

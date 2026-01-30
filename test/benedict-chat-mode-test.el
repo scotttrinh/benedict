@@ -1,4 +1,5 @@
 ;;; test/benedict-chat-mode-test.el --- Tests for benedict-chat-mode  -*- lexical-binding: t; -*-
+;;; Code:
 
 (require 'ert)
 (require 'benedict-chat)

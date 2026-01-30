@@ -1,4 +1,5 @@
 ;;; test/benedict-flywire-test.el --- Tests for benedict-flywire  -*- lexical-binding: t; -*-
+;;; Code:
 
 (require 'ert)
 

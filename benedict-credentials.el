@@ -84,7 +84,7 @@
 
 (defun benedict-credentials-get (provider-id auth-type)
   "Read the entry for PROVIDER-ID and specific AUTH-TYPE.
-Returns the underlying plist for that auth-type, or nil if not found."
+Return the underlying plist for that auth-type, or nil if not found."
   (let* ((all (benedict-credentials--read-all))
          (provider-entry (alist-get provider-id all))
          (auth-entry (when (listp provider-entry)
@@ -95,7 +95,7 @@ Returns the underlying plist for that auth-type, or nil if not found."
 
 (defun benedict-credentials-set (provider-id auth-type entry)
   "Set or update the given AUTH-TYPE ENTRY for PROVIDER-ID.
-ENTRY should be a plist. Persists changes to disk."
+ENTRY should be a plist.  Persist changes to disk."
   (let* ((all (benedict-credentials--read-all))
          (provider-entry (alist-get provider-id all))
          (updated-provider-entry (if (and (listp provider-entry)
@@ -109,7 +109,7 @@ ENTRY should be a plist. Persists changes to disk."
 
 (defun benedict-credentials-remove (provider-id &optional auth-type)
   "Delete AUTH-TYPE entry for PROVIDER-ID, or entire provider if AUTH-TYPE is nil.
-Persists changes to disk."
+Persist changes to disk."
   (let* ((all (benedict-credentials--read-all)))
     (when (listp all)
       (if (null auth-type)

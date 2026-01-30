@@ -1,4 +1,5 @@
 ;;; test/benedict-chat-render-test.el --- Tests for benedict-chat-render  -*- lexical-binding: t; -*-
+;;; Code:
 
 (require 'ert)
 (require 'cl-lib)

@@ -1,4 +1,5 @@
 ;;; test/benedict-credentials-test.el --- Tests for benedict-credentials -*- lexical-binding: t; -*-
+;;; Code:
 
 (require 'ert)
 (require 'cl-lib)

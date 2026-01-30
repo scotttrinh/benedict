@@ -198,7 +198,7 @@ Set to nil to disable token limits."
 
 (defun benedict-chat-profiles--effective-limit (key global-val)
   "Return the stricter of the profile's autonomy limit KEY and GLOBAL-VAL.
-NIL represents infinity (no limit). Uses `benedict-chat-profile`."
+NIL represents infinity (no limit).  Uses `benedict-chat-profile`."
   (let* ((autonomy (benedict-chat-profiles--profile-autonomy benedict-chat-profile))
          (profile-limit (plist-get autonomy key)))
     (cond

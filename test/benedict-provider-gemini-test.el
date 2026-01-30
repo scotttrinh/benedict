@@ -1,4 +1,5 @@
 ;;; benedict-provider-gemini-test.el --- Tests for Gemini provider -*- lexical-binding: t; -*-
+;;; Code:
 
 (require 'ert)
 (require 'ert-async)
@@ -73,16 +74,16 @@
              benedict-provider-gemini--token-cache)
     (cl-letf (((symbol-function 'benedict-credentials-get)
                (lambda (_provider _type) (list :refresh "refresh-1|proj-123")))
-              ((symbol-function 'benedict-provider-gemini--refresh-access-token)
-               (lambda (&rest _)
-                 (error "refresh should not be called"))))
+               ((symbol-function 'benedict-provider-gemini--refresh-access-token)
+                (lambda (&rest _)
+                  (error "Refresh should not be called"))))
       (let ((credential (benedict-provider-gemini--resolve-credential)))
         (should (equal (plist-get credential :access) "cached-access"))
         (should (equal (plist-get credential :refresh) "refresh-1"))
         (should (equal (plist-get credential :project-id) "proj-123"))))))
 
 (ert-deftest benedict-provider-gemini-resolve-refreshes-when-expired ()
-  "Expired cache entries trigger token refresh." 
+  "Expired cache entries trigger token refresh."
   (let ((benedict-provider-gemini--token-cache (make-hash-table :test 'equal))
         (refresh-count 0)
         (persist-count 0))
@@ -344,7 +345,7 @@
                 (should (> (plist-get cached :expires) (float-time))))
               (delete-directory temp-dir t)
               (funcall done))
-          (error 
+          (error
            (delete-directory temp-dir t)
            (funcall done err)))))))
 
@@ -376,7 +377,7 @@
         (should (equal (plist-get (nth 2 persist-call) :refresh) "new-ref|proj-123|managed-456"))))))
 
 (ert-deftest benedict-provider-gemini-fallback-to-managed-id ()
-  "When project-id is missing, fallback to managed project-id"
+  "When project-id is missing, fallback to managed project-id."
   (let ((benedict-provider-gemini--token-cache (make-hash-table :test 'equal))
         (persist-call nil))
     (cl-letf (((symbol-function 'benedict-credentials-get)

@@ -1,4 +1,5 @@
 ;;; benedict-provider-openrouter-test.el --- Tests for OpenRouter provider -*- lexical-binding: t; -*-
+;;; Code:
 
 (require 'ert)
 

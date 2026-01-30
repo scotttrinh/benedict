@@ -60,7 +60,7 @@
 (defun benedict-chat-sections--item-kind (item)
   "Return the canonical section kind keyword for ITEM.
 ITEM may be a chat render plist (with :kind) or a plain message plist.
-Message kinds are refined by role (user/assistant/system). Unknown
+Message kinds are refined by role (user/assistant/system).  Unknown
 items default to `turn'."
   (let ((kind (plist-get item :kind)))
     (pcase kind
@@ -91,7 +91,7 @@ items default to `turn'."
 
 (defun benedict-chat-sections--set-folded (section folded)
   "Show or hide SECTION according to FOLDED.
-Guards against stale sections, killed buffers, or sections not in the current buffer."
+Guard against stale sections, killed buffers, or sections not in the current buffer."
   (condition-case err
       (when (benedict-chat-sections--section-p section)
         ;; Check if section is still valid and belongs to current buffer
@@ -124,7 +124,7 @@ Guards against stale sections, killed buffers, or sections not in the current bu
   "Insert an invisible anchor character for magit sections.
 
 Magit sections without any buffer text can be difficult to reference and
-extend reliably. This inserts a zero-width display anchor so the section
+extend reliably.  This inserts a zero-width display anchor so the section
 has a stable position without changing the visible buffer."
   (let ((pos (point)))
     (insert (propertize " " 'display "" 'benedict-region-kind 'header))
@@ -176,7 +176,7 @@ visible header text."
 
 (defun benedict-chat-sections--sync-fold-state (section)
   "Keep SECTION's item plist in sync with its visibility.
-Guards against operations on killed buffers."
+Guard against operations on killed buffers."
   (condition-case err
       (when (benedict-chat-sections--section-p section)
         (let* ((item (oref section value))
@@ -195,7 +195,7 @@ Guards against operations on killed buffers."
     ((buffer-read-only error) nil)))
 
 (defun benedict-chat-sections--sync-fold-state-after-visibility (section &rest _)
-  "Advice: update SECTION metadata after magit visibility changes."
+  "Advice: update SECTION metadata after magit visibility change."
   (benedict-chat-sections--sync-fold-state section))
 
 (advice-add 'magit-section-show :after #'benedict-chat-sections--sync-fold-state-after-visibility)
@@ -203,8 +203,8 @@ Guards against operations on killed buffers."
 
 (defmacro benedict-chat-sections--insert (kind value &optional hide &rest body)
   "Insert a magit-section for chat KIND with VALUE and optional HIDE flag.
-KIND must be a key in `benedict-chat-sections--classes'. BODY inserts
-the section header/body content. This helper only sets up the section
+KIND must be a key in `benedict-chat-sections--classes'.  BODY inserts
+the section header/body content.  This helper only sets up the section
 object; callers remain responsible for marker-backed insertion so
 streaming updates stay stable."
   (declare (indent 3))

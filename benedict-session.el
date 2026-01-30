@@ -48,7 +48,7 @@
 
 (cl-defun benedict-session-create (&key id title root provider model profile meta
                                         tools system-prompt autonomy verbosity)
-  "Create and register a new session.
+  "Create and register a new session with TITLE.
 
 Optional keyword arguments:
   :id - Explicit ID (generated if nil)
@@ -206,8 +206,8 @@ Returns the message with :id and :timestamp added."
            :key (lambda (m) (plist-get m :id)) :test #'equal))
 
 (defun benedict-session-update-message (session id updates)
-  "Update message with ID in SESSION, merging UPDATES plist.
-Returns the updated message or nil if not found."
+  "Update message with ID in SESSION, merging the change plist.
+Return the updated message or nil if not found."
   (when-let ((msg (benedict-session-get-message session id)))
     (cl-loop for (k v) on updates by #'cddr do (plist-put msg k v))
     (benedict-session--emit session 'message-updated :id id :updates updates)
@@ -248,7 +248,7 @@ Sets state to streaming."
 (defun benedict-session-finalize-draft (session &optional metadata)
   "Finalize SESSION's draft into an assistant message.
 METADATA is an optional plist merged into the message.
-Returns the created message."
+Return the created message."
   (when-let ((draft (benedict-session-draft session)))
     (let ((msg (list :role 'assistant
                      :content (plist-get draft :content)
@@ -269,7 +269,7 @@ Returns the created message."
 (defun benedict-session-start-request (session handle &optional loop-state)
   "Record that SESSION has an active request with HANDLE.
 LOOP-STATE is optional agent loop state.
-Returns a unique request ID."
+Return a unique request ID."
   (let ((id (cl-incf benedict-session--request-seq)))
     (setf (benedict-session-inflight session)
           (list :request handle
@@ -284,7 +284,7 @@ Returns a unique request ID."
 
 (defun benedict-session-cancel (session)
   "Cancel SESSION's active request, discard draft, set cancelled state.
-Returns t if there was something to cancel."
+Return t if there was something to cancel."
   (when (benedict-session-inflight session)
     (when-let ((started (plist-get (benedict-session-inflight session) :started-at)))
       (setf (benedict-session-last-phase session) 'canceled)
@@ -304,7 +304,7 @@ Returns t if there was something to cancel."
 
 (defun benedict-session--on-delta (session data)
   "Handle streaming delta DATA for SESSION.
-Updates draft content. Internal callback for dispatch."
+Update draft content.  This is an internal callback for dispatch."
   (when session
     (let ((kind (plist-get data :kind))
           (text (plist-get data :text)))
@@ -317,7 +317,7 @@ Updates draft content. Internal callback for dispatch."
 
 (defun benedict-session--on-success (session result)
   "Handle successful response RESULT for SESSION.
-Finalizes draft, accumulates telemetry. Internal callback for dispatch."
+Finalize draft and accumulate telemetry.  This is an internal callback for dispatch."
   (when session
     (let* ((inflight (benedict-session-inflight session))
            (request-id (and inflight (plist-get inflight :request-id)))
@@ -367,7 +367,7 @@ Finalizes draft, accumulates telemetry. Internal callback for dispatch."
 
 (defun benedict-session--on-error (session payload)
   "Handle error PAYLOAD for SESSION.
-Clears request, discards draft. Internal callback for dispatch."
+Clear request and discard draft.  This is an internal callback for dispatch."
   (when session
     (let* ((inflight (benedict-session-inflight session))
            (request-id (and inflight (plist-get inflight :request-id))))
@@ -396,13 +396,13 @@ Clears request, discards draft. Internal callback for dispatch."
 
 (cl-defun benedict-session-dispatch (session request &key dispatch-fn)
   "Send REQUEST through the provider for SESSION.
-Updates session state and emits events throughout the lifecycle.
+Update session state and emit events throughout the lifecycle.
 
 REQUEST is a plist with at minimum :provider, :model, :messages.
-DISPATCH-FN is the provider dispatch function (default: benedict-provider-dispatch).
+DISPATCH-FN is the provider dispatch function (default:
+`benedict-provider-dispatch').
 
-Returns the request ID on success.
-Signals error if session is busy.
+Return the request ID on success.  Signal error if session is busy.
 
 Events emitted:
 - `request-started` with (:request-id N) after dispatch begins
@@ -442,14 +442,12 @@ Events emitted:
 ;;; Tool Execution
 
 (defvar benedict-session-tool-invoke-fn nil
-  "Function to invoke tools. Set by tool module.
-Called as (funcall fn TOOL-ID ARGUMENTS).
-Returns tool output or signals error.")
+  "Function to invoke tools.  Set by tool module.
+Called as (funcall fn TOOL-ID ARGUMENTS).  Return tool output or signal error.")
 
 (defun benedict-session--invoke-tool (session tool-call)
   "Execute TOOL-CALL plist for SESSION.
-Returns plist (:status :output :error).
-Emits tool-started and tool-completed events."
+Return plist (:status :output :error).  Emit tool-started and tool-completed events."
   (let* ((tool-id (or (plist-get tool-call :name)
                       (plist-get tool-call :tool)))
          (call-id (plist-get tool-call :id))
@@ -485,8 +483,8 @@ Emits tool-started and tool-completed events."
           :tool-id tool-id)))
 
 (defun benedict-session--format-tool-result (tool-id call-id output error-info)
-  "Format tool result as message for provider.
-Returns plist suitable for adding to message history."
+  "Format tool result for TOOL-ID and CALL-ID using OUTPUT and ERROR-INFO.
+Return a plist suitable for adding to message history."
   (let* ((status (if error-info 'failure 'success))
          (content (if error-info
                       (format "Tool error: %s" (plist-get error-info :message))
@@ -503,7 +501,7 @@ Returns plist suitable for adding to message history."
 
 (defun benedict-session--process-tool-calls (session tool-calls)
   "Execute TOOL-CALLS for SESSION and record results.
-Returns list of result plists."
+Return a list of result plists."
   (let (results)
     (dolist (call tool-calls)
       (let* ((result (benedict-session--invoke-tool session call))
@@ -526,7 +524,7 @@ Should return non-nil to continue, nil to stop.
 If nil, loop waits for `benedict-session-continue' call.")
 
 (defun benedict-session--check-repetition (session tool-calls)
-  "Return non-nil if TOOL-CALLS match previous assistant message."
+  "Return non-nil if TOOL-CALLS match previous assistant message in SESSION."
   (let* ((messages (benedict-session-messages session))
          (assistants (cl-remove-if-not
                       (lambda (m) (eq (plist-get m :role) 'assistant))
@@ -536,7 +534,7 @@ If nil, loop waits for `benedict-session-continue' call.")
       (equal tool-calls (plist-get previous :tool-calls)))))
 
 (defun benedict-session--check-turn-limit (session)
-  "Return non-nil if turn limit reached. Emits checkpoint-requested if so."
+  "Return non-nil if SESSION turn limit reached.  Emits checkpoint-requested if so."
   (let* ((config (benedict-session-loop-config session))
          (limit (plist-get config :max-turns))
          (count (benedict-session-loop-turn-count session)))
@@ -548,7 +546,7 @@ If nil, loop waits for `benedict-session-continue' call.")
       t)))
 
 (defun benedict-session--check-time-limit (session)
-  "Return non-nil if time limit reached. Emits checkpoint-requested if so."
+  "Return non-nil if SESSION time limit reached.  Emits checkpoint-requested if so."
   (let* ((config (benedict-session-loop-config session))
          (limit (plist-get config :max-time))
          (start (benedict-session-loop-start-time session)))
@@ -562,7 +560,7 @@ If nil, loop waits for `benedict-session-continue' call.")
           t)))))
 
 (defun benedict-session--check-token-limit (session)
-  "Return non-nil if token limit reached. Emits checkpoint-requested if so."
+  "Return non-nil if SESSION token limit reached.  Emits checkpoint-requested if so."
   (let* ((config (benedict-session-loop-config session))
          (limit (plist-get config :max-tokens))
          (usage (benedict-session-accumulated-usage session))
@@ -575,14 +573,14 @@ If nil, loop waits for `benedict-session-continue' call.")
       t)))
 
 (defun benedict-session--check-constraints (session)
-  "Check all loop constraints. Returns non-nil if any limit reached."
+  "Check all loop constraints for SESSION.  Return non-nil if any limit reached."
   (or (benedict-session--check-turn-limit session)
       (benedict-session--check-time-limit session)
       (benedict-session--check-token-limit session)))
 
 (defun benedict-session--should-continue (session assistant-message)
-  "Decide whether loop should continue after ASSISTANT-MESSAGE.
-Returns: 'continue, 'stop, or 'checkpoint."
+  "Decide whether SESSION loop should continue after ASSISTANT-MESSAGE.
+Return 'continue, 'stop, or 'checkpoint."
   (let ((tool-calls (plist-get assistant-message :tool-calls)))
     (cond
      ((not tool-calls) 'stop)
@@ -593,8 +591,8 @@ Returns: 'continue, 'stop, or 'checkpoint."
      (t 'continue))))
 
 (defun benedict-session--loop-step (session)
-  "Execute one step of the agent loop.
-Processes tool calls from last message, then dispatches if should continue."
+  "Execute one step of the agent loop for SESSION.
+Process tool calls from the last message, then dispatch if it should continue."
   (let* ((messages (benedict-session-messages session))
          (last-msg (car messages))
          (tool-calls (plist-get last-msg :tool-calls)))
@@ -617,8 +615,8 @@ Processes tool calls from last message, then dispatches if should continue."
            (benedict-session-set-state session 'idle)))))))
 
 (defun benedict-session--dispatch-next (session)
-  "Dispatch next request in the loop.
-Builds request from session state and dispatches."
+  "Dispatch next request in the loop for SESSION.
+Build the request from session state and dispatch it."
   (let ((request (benedict-session--build-request session)))
     (if (and (plist-get request :provider)
              (plist-get request :model))
@@ -637,7 +635,7 @@ Builds request from session state and dispatches."
 
 (defun benedict-session-continue (session)
   "Continue SESSION after a checkpoint.
-Resets time limit and continues the loop."
+Reset the time limit and continue the loop."
   (when (eq (benedict-session-state session) 'checkpoint)
     (setf (benedict-session-loop-start-time session) (current-time))
     (benedict-session-set-state session 'running)

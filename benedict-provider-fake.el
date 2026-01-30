@@ -3,7 +3,7 @@
 
 ;;; Commentary:
 ;; Lightweight provider that mimics async OpenRouter-style replies without
-;; hitting the network. Useful for automated tests and manual dry-runs.
+;; hitting the network.  Useful for automated tests and manual dry-runs.
 
 ;;; Code:
 
@@ -43,7 +43,7 @@
 (defvar benedict-provider-fake-script nil
   "Queue of scripted responses for deterministic tests.
 Each entry is a plist describing either a success (:type \='success) or
-error (:type \='error) payload. When nil, responses echo the last user
+error (:type \='error) payload.  When nil, responses echo the last user
 message using default metadata.")
 
 (defmacro benedict-provider-fake-with-script (script &rest body)
@@ -192,7 +192,7 @@ SCRIPT entries are consumed FIFO."
                                  :delta (list :reasoning_details (vector base)))))))
 
 (defun benedict-provider-fake--success-payload (request entry start-time latency thinking)
-  "Create a success payload using REQUEST, ENTRY, START-TIME, and LATENCY."
+  "Create a success payload using REQUEST, ENTRY, START-TIME, LATENCY, and THINKING."
   (let* ((messages (plist-get request :messages))
          (content (or (plist-get entry :content)
                       (format "Fake echo: %s"

@@ -246,7 +246,7 @@ and `font-lock-ensure' on the affected region."
 (defun benedict-chat--write-message-item-body (item content)
   "Replace ITEM body region with CONTENT.
 
-Deprecated internal helper. Prefer `benedict-chat-render--set-item-content'."
+Deprecated internal helper.  Prefer `benedict-chat-render--set-item-content'."
   (benedict-chat-render--set-item-content item content 'body))
 
 (defun benedict-chat--render-block (item header face)

@@ -13,7 +13,7 @@ BINDINGS is a list where each element is either:
 - ((symbol-function FN) NEW) to `fset' FN to NEW.
 
 The macro wraps DONE so that cleanup happens before the real test
-completion signal. This keeps async tests from leaking global state."
+completion signal.  This keeps async tests from leaking global state."
   (declare (indent 2))
   `(let* ((origins
            (mapcar (lambda (binding)

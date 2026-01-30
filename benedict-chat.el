@@ -387,7 +387,7 @@ Returns the session or nil if agent frame is disabled."
   "Non-nil once a message/tool block has been rendered in this chat buffer.")
 
 (defun benedict-chat--maybe-insert-item-gap (buffer &optional pos)
-  "Insert a blank line in BUFFER before rendering the next chat block.
+  "Insert a blank line in BUFFER before rendering the next chat block at POS.
 
 This keeps message/tool blocks visually separated while remaining compatible
 with marker-backed streaming inserts."
@@ -420,7 +420,7 @@ with marker-backed streaming inserts."
     metadata))
 
 (defun benedict-chat--record-message (buffer message)
-  "Persist MESSAGE in session and render it.
+  "Persist MESSAGE in session and render it in BUFFER.
 For user messages, adds to session (observer renders via message-added event).
 For assistant messages during streaming, renders directly (streaming UI)."
   (with-current-buffer buffer
@@ -513,7 +513,7 @@ Assistant messages are rendered as marker-backed items."
     (user-error "A provider request is already in flight")))
 
 (defun benedict-chat--apply-request-result-extras (buffer result)
-  "Render RESULT metadata that is not represented in session messages."
+  "Render RESULT metadata in BUFFER that is not represented in session messages."
   (with-current-buffer buffer
     (let* ((session benedict-chat--session)
            (message (and session (benedict-chat-nav--find-last-assistant)))
@@ -559,7 +559,7 @@ Assistant messages are rendered as marker-backed items."
   (benedict-chat--send-text text))
 
 (defun benedict-chat--send-text (text &optional buffer)
-  "Send TEXT to provider via SESSION."
+  "Send TEXT to provider via SESSION using BUFFER when supplied."
   (let ((chat (or buffer (benedict-chat--resolve-chat-buffer))))
     (unless (and chat (buffer-live-p chat))
       (user-error "Not in a Benedict chat buffer"))
@@ -1034,7 +1034,7 @@ Assumes buffer is already in benedict-chat-mode with session attached."
 ;;;###autoload
 (defun benedict-chat (&optional prefix)
   "Open or switch to Benedict chat buffer.
-With PREFIX argument (C-u), always create a new session.
+With PREFIX argument, always create a new session.
 When multiple sessions exist, prompt for which one to open."
   (interactive "P")
   (let ((sessions (benedict-session-list)))

@@ -1,5 +1,10 @@
 ;;; benedict-chat-compose.el --- Compose buffer for Benedict chat -*- lexical-binding: t; -*-
 
+;;; Commentary:
+;; Compose buffer support for Benedict chat prompts.
+
+;;; Code:
+
 (require 'cl-lib)
 (require 'benedict-context)
 (require 'benedict-chat-profiles)
@@ -150,7 +155,7 @@ The chat buffer name is substituted into the single %s placeholder."
 
 (defun benedict-chat-compose--prepare-context-slice (slice existing-handles)
   "Prompt for a handle for SLICE, respecting EXISTING-HANDLES.
-Returns a plist (:slice :replacing) where :slice carries the final handle."
+Return a plist with :slice and :replacing entries; :slice carries the final handle."
   (let* ((default (or (plist-get slice :handle-default)
                       (plist-get slice :handle)
                       (plist-get slice :label)
@@ -170,8 +175,8 @@ Returns a plist (:slice :replacing) where :slice carries the final handle."
            ((not (benedict-chat-compose--valid-handle-p sanitized))
             (message "Handle must match %s" benedict-chat-compose--handle-regexp))
            ((and (member sanitized handles)
-                 (not (yes-or-no-p (format "Handle %s already in use. Replace it? "
-                                           sanitized))))
+                  (not (yes-or-no-p (format "Handle %s already in use.  Replace it? "
+                                            sanitized))))
             (setq proposal sanitized))
            (t (setq final-handle sanitized))))))
     (let* ((handle final-handle)

@@ -1,4 +1,5 @@
 ;;; benedict-tool-actions-test.el --- Tests for tool action buttons -*- lexical-binding: t; -*-
+;;; Code:
 
 (require 'ert)
 (require 'button)

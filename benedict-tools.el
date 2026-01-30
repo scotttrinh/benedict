@@ -2,7 +2,7 @@
 ;; Author: Benedict maintainers
 
 ;;; Commentary:
-;; Minimal registry to register/list/call tool functions. Approval UX is a
+;; Minimal registry to register/list/call tool functions.  Approval UX is a
 ;; placeholder and will be implemented later in Phase 1.
 
 ;;; Code:
@@ -207,9 +207,9 @@ Falls back to `default-directory' when no project is active."
 (cl-defun benedict-search-project-sync (query &key root limit regexp globs)
   "Search QUERY within ROOT using ripgrep and return structured matches.
 ROOT defaults to the current project root or `default-directory'.
-LIMIT overrides `benedict-search-project-max-results'. When REGEXP is
+LIMIT overrides `benedict-search-project-max-results'.  When REGEXP is
 non-nil QUERY is interpreted as a regular expression; otherwise it is
-treated as a fixed string. Additional glob arguments can be supplied
+treated as a fixed string.  Additional glob arguments can be supplied
 via GLOBS, a list of strings passed as \"--glob\" arguments."
   (let* ((needle (string-trim (or query ""))))
     (unless (and (stringp needle) (not (string-empty-p needle)))
@@ -378,9 +378,10 @@ via GLOBS, a list of strings passed as \"--glob\" arguments."
 (cl-defun benedict-tools-register (&key id fn schema approval doc)
   "Register a tool with ID and FN.
 SCHEMA is a plist following the JSON-Schema-like contract consumed by
-`benedict-tool-schema->json-parameters' (top-level :type object with
-:properties and optional :required). APPROVAL is one of 'auto,
-'confirm, or 'always. DOC is an optional string."
+`benedict-tool-schema->json-parameters`.
+ The top-level schema should be :type object with :properties
+and optional :required.
+APPROVAL is one of 'auto, 'confirm, or 'always.  DOC is an optional string."
   (puthash id (list :id id :fn fn :schema schema :approval approval :doc doc)
            benedict--tools))
 
@@ -567,7 +568,8 @@ Returns a plist:
 
 (cl-defun benedict--tool-write (&key target content (create_if_missing t))
   "Create or overwrite TARGET with CONTENT.
-TARGET is a plist with :kind, and either :path or :buffer_name."
+TARGET is a plist with :kind, and either :path or :buffer_name.
+CREATE_IF_MISSING controls whether missing targets are created."
   (let* ((create-if-missing (if (eq create_if_missing 'json-false) nil create_if_missing))
          (res (benedict--tool-resolve-target-buffer target create-if-missing))
          (buf (plist-get res :buffer))

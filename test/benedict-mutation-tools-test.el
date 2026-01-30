@@ -1,4 +1,5 @@
 ;;; benedict-mutation-tools-test.el --- Tests for write and edit tools -*- lexical-binding: t; -*-
+;;; Code:
 
 (require 'ert)
 (require 'cl-lib)
@@ -154,4 +155,6 @@
                            :content "evil")
      :type 'benedict-error)))
 
-(provide 'test/benedict-mutation-tools-test)
+(provide 'benedict-mutation-tools-test)
+
+;;; benedict-mutation-tools-test.el ends here

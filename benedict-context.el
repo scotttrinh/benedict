@@ -43,10 +43,10 @@ The return value is a plist (:content :truncated-p :size-bytes)."
 (cl-defun benedict-context-make-slice (&key kind label origin content id max-bytes handle)
   "Construct a context slice plist.
 KIND is a symbol such as 'buffer, 'region, or 'git-diff.
-LABEL is a human-readable description. ORIGIN notes where the slice came from.
-CONTENT holds the text that will be sent. ID may be provided, otherwise a new
-identifier is allocated. HANDLE is an optional user-visible identifier used
-for prompt references. MAX-BYTES overrides `benedict-context-max-bytes-per-slice'."
+LABEL is a human-readable description.  ORIGIN notes where the slice came from.
+CONTENT holds the text that will be sent.  ID may be provided, otherwise a new
+identifier is allocated.  HANDLE is an optional user-visible identifier used
+for prompt references.  MAX-BYTES overrides `benedict-context-max-bytes-per-slice'."
   (let* ((limit (or max-bytes benedict-context-max-bytes-per-slice))
          (result (benedict-context--truncate-content content limit)))
     (list :id (or id (benedict-context--next-id))

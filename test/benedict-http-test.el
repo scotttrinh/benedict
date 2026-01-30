@@ -1,4 +1,5 @@
 ;;; test/benedict-http-test.el --- Tests for benedict-http  -*- lexical-binding: t; -*-
+;;; Code:
 
 (require 'ert)
 (let* ((root (file-name-directory (or load-file-name buffer-file-name)))

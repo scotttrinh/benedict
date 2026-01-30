@@ -1,5 +1,10 @@
 ;;; benedict-chat-nav.el --- Navigation commands for Benedict chat -*- lexical-binding: t; -*-
 
+;;; Commentary:
+;; Navigation helpers for chat buffers and magit sections.
+
+;;; Code:
+
 (require 'cl-lib)
 (require 'magit-section)
 (require 'benedict-chat-thinking) ; for benedict-chat-thinking--item-p
@@ -308,3 +313,4 @@ agent loop again."
     (benedict-session-run session)))
 
 (provide 'benedict-chat-nav)
+;;; benedict-chat-nav.el ends here

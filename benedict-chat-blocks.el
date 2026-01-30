@@ -36,7 +36,7 @@
    (t (list (benedict-chat-render--badge badge-text badge-face)))))
 
 (defun benedict-chat-blocks--header-text (folded badges &optional indicator-face)
-  "Return header string for FOLDED state and BADGES list."
+  "Return header string for FOLDED state and BADGES list using INDICATOR-FACE."
   (let ((indicator (propertize (benedict-chat-blocks--fold-indicator folded)
                                'face (or indicator-face
                                          'benedict-chat-tool-indicator))))

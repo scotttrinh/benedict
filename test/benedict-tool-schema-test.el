@@ -1,4 +1,5 @@
 ;;; benedict-tool-schema-test.el --- Tests for tool schema encoding -*- lexical-binding: t; -*-
+;;; Code:
 
 (require 'ert)
 (require 'propcheck)
@@ -19,11 +20,11 @@
   (plist-get (benedict-tool-schema-test--tool-spec id) :schema))
 
 (defun benedict-tool-schema-test--json-get (alist key)
-  "Return value for string KEY inside JSON-ALIST."
+  "Return value for string KEY inside ALIST."
   (alist-get key alist nil nil #'string=))
 
 (defun benedict-tool-schema-test--json-key-present-p (alist key)
-  "Return non-nil when JSON-ALIST contains string KEY."
+  "Return non-nil when KEY appears in ALIST."
   (assoc key alist #'string=))
 
 (defun benedict-tool-schema-test--vector->list (maybe-vector)
@@ -121,7 +122,7 @@
                     "type")))))
 
 (ert-deftest benedict-tool-schema-exec-elisp-requires-code ()
-  "exec-elisp schema requires only code argument."
+  "Exec-elisp schema requires only the code argument."
   (let* ((schema (benedict-tool-schema-test--tool-schema 'exec-elisp))
          (encoded (benedict-tool-schema->json-parameters schema))
          (properties (benedict-tool-schema-test--json-get encoded "properties"))
@@ -169,7 +170,7 @@
                    result))))
 
 (ert-deftest benedict-tool-encode-args-json-roundtrips ()
-  "JSON encoding round-trips through json-parse-string."
+  "JSON encoding round-trips through `json-parse-string`."
   (let* ((value '(:foo 1 :bar "two" :baz t))
          (json (benedict-tool-encode-args-json value))
          (decoded (json-parse-string json :object-type 'alist)))
@@ -180,7 +181,7 @@
 ;;; Property-based tests
 
 (defun benedict-tool-schema-test--random-prop-name (prefix index)
-  "Return a keyword like :PREFIX-INDEX."
+  "Return a keyword like :PREFIX-INDEX using PREFIX and INDEX."
   (intern (format ":%s-%d" prefix index)))
 
 (defun benedict-tool-schema-test--random-scalar-type ()
@@ -189,7 +190,7 @@
        (propcheck-generate-integer "scalar-type" :min 0 :max 3)))
 
 (defun benedict-tool-schema-test--random-property-schema (&optional depth)
-  "Generate random schema plist with depth limit 1."
+  "Generate random schema plist with DEPTH limit 1."
   (let ((choose-object (and (< (or depth 0) 1)
                             (cl-oddp (propcheck-generate-integer
                                       (format "object-depth-%d" (or depth 0))
@@ -237,11 +238,11 @@
       (list :schema schema :keys keys))))
 
 (defun benedict-tool-schema-test--json-property-names (encoded)
-  "Return string keys present in ENCODED properties."
+  "Return string keys present in ENCODED schema properties."
   (mapcar #'car (benedict-tool-schema-test--json-get encoded "properties")))
 
 (defun benedict-tool-schema-test--valid-property-types-p (encoded)
-  "Return non-nil when every property recursively has allowed type string."
+  "Return non-nil when every property in ENCODED has an allowed type string."
   (let ((allowed '("string" "integer" "number" "boolean" "object")))
     (cl-labels ((validate (schema)
                   (let ((type (benedict-tool-schema-test--json-get schema "type")))

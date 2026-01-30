@@ -1,4 +1,5 @@
 ;;; test/benedict-chat-logic-test.el --- Logic tests for Benedict Chat -*- lexical-binding: t; -*-
+;;; Code:
 
 (require 'ert)
 (require 'ert-async)

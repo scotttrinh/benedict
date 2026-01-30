@@ -1,4 +1,5 @@
 ;;; test/benedict-chat-stream-test.el --- Tests for benedict-chat-stream  -*- lexical-binding: t; -*-
+;;; Code:
 
 (require 'ert)
 (require 'benedict-chat-stream)

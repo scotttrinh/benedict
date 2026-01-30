@@ -1,4 +1,5 @@
 ;;; benedict-tools-test.el --- Tests for agent tools -*- lexical-binding: t; -*-
+;;; Code:
 
 (require 'ert)
 (require 'benedict-tools)
@@ -94,3 +95,7 @@
         (let ((result (benedict--tool-read-file :path "*Benedict Test Buffer*")))
           (should (string= (plist-get result :content) "buffer content")))
       (kill-buffer buf))))
+
+(provide 'benedict-tools-test)
+
+;;; benedict-tools-test.el ends here

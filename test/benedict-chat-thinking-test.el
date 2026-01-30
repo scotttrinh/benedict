@@ -1,4 +1,5 @@
 ;;; test/benedict-chat-thinking-test.el --- Thinking section tests  -*- lexical-binding: t; -*-
+;;; Code:
 
 (require 'ert)
 (require 'eieio)

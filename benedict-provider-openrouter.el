@@ -42,9 +42,9 @@
 (defcustom benedict-provider-openrouter-default-reasoning
   '((effort . "medium") (enabled . t))
   "Default reasoning options sent with every request when non-nil.
-Set to nil to keep provider defaults. This alist/plist accepts keys
-EFFORT (string), MAX_TOKENS (number), EXCLUDE (boolean), and ENABLED
-(boolean)."
+Set to nil to keep provider defaults.  This alist/plist accepts keys
+EFFORT (string), MAX_TOKENS (number), EXCLUDE (boolean),
+and ENABLED (boolean)."
   :type '(choice
           (const :tag "Provider default" nil)
           (plist :tag "Custom reasoning plist"))
@@ -52,7 +52,8 @@ EFFORT (string), MAX_TOKENS (number), EXCLUDE (boolean), and ENABLED
 
 (defcustom benedict-provider-openrouter-default-usage '((include . t))
   "Default usage options sent with every request when non-nil.
-Set to nil to keep provider defaults. Keys include INCLUDE (boolean)."
+Set to nil to keep provider defaults.
+Keys include INCLUDE (boolean)."
   :type '(choice
           (const :tag "Provider default" nil)
           (plist :tag "Custom usage plist"))
@@ -230,8 +231,8 @@ When streaming is enabled, callbacks receive incremental deltas via curl."
                :attempt (plist-get context :attempt)
                :request-id (plist-get context :request-id)
                :streaming streaming)
-    
-    (let ((process 
+
+    (let ((process
            (benedict-http-request
             benedict-provider-openrouter-endpoint
             :method "POST"
@@ -348,7 +349,7 @@ which some providers (like xAI/Grok) seem to emit within a single SSE block."
               nil))))))))
 
 (defun benedict-provider-openrouter--stream-handle-reasoning-event (context event)
-  "Handle reasoning-only EVENT by emitting a synthetic delta.
+  "Handle reasoning-only EVENT for CONTEXT by emitting a synthetic delta.
 Returns non-nil when a delta was dispatched."
   (let ((details (benedict-provider-openrouter--normalize-reasoning-delta
                   context event))
@@ -423,7 +424,7 @@ Returns non-nil when a delta was dispatched."
     (nreverse result)))
 
 (defun benedict-provider-openrouter--reasoning-content-entry-p (entry)
-  "Return non-nil when ENTRY looks like a reasoning content block."
+  "Return non-nil when ENTRY resembles a reasoning content block."
   (when (and entry (listp entry))
     (when-let ((type (plist-get entry :type)))
       (let ((normalized (downcase (format "%s" type))))
@@ -531,7 +532,7 @@ Returns non-nil when a delta was dispatched."
       text)))
 
 (defun benedict-provider-openrouter--accumulate-tool-calls-from-delta (context delta)
-  "Accumulate tool calls from DELTA for CONTEXT."
+  "Accumulate tool-call entries from DELTA for CONTEXT."
   (when-let ((calls (plist-get delta :tool_calls)))
     (let* ((state (benedict-provider-openrouter--state-get
                    (plist-get context :request-id)))
@@ -554,7 +555,7 @@ Returns non-nil when a delta was dispatched."
        (plist-get context :request-id) :tool-call-partials partials))))
 
 (defun benedict-provider-openrouter--finalize-tool-calls (context)
-  "Finalize accumulated tool calls for CONTEXT."
+  "Finalize accumulated tool-call entries for CONTEXT."
   (let* ((state (benedict-provider-openrouter--state-get
                  (plist-get context :request-id)))
          (partials (plist-get state :tool-call-partials)))
@@ -820,7 +821,7 @@ Returns non-nil when a delta was dispatched."
     (benedict-provider-openrouter--state-clear request-id)))
 
 (defun benedict-provider-openrouter--handle-api-error (context status-code error-block body)
-  "Handle API ERROR-BLOCK with STATUS-CODE/BODY."
+  "Handle API ERROR-BLOCK with STATUS-CODE/BODY for CONTEXT."
   (let* ((message (or (benedict-provider-openrouter--aget "message" error-block)
                       (format "HTTP %s" status-code)))
          (code (or (benedict-provider-openrouter--aget "code" error-block)
@@ -943,7 +944,7 @@ When STREAM is non-nil, include the \"stream\": true flag in the payload."
    'utf-8))
 
 (defun benedict-provider-openrouter--build-body (request &optional stream)
-  "Build an alist for REQUEST."
+  "Build an alist for REQUEST, optionally STREAM."
   (let ((messages (plist-get request :messages)))
     (unless (and (listp messages) messages)
       (error "OpenRouter request requires a non-empty :messages list"))
@@ -1038,7 +1039,8 @@ When STREAM is non-nil, include the \"stream\": true flag in the payload."
 
 
 (defun benedict-provider-openrouter--serialize-tool-calls (calls)
-  "Serialize CALLS (a list of tool call plists) for JSON encoding."
+  "Serialize tool-call entries for JSON encoding.
+The CALLS argument is a list of tool-call plists."
   (mapcar #'benedict-provider-openrouter--serialize-tool-call calls))
 
 (defun benedict-provider-openrouter--serialize-tool-call (call)
@@ -1164,7 +1166,8 @@ When STREAM is non-nil, include the \"stream\": true flag in the payload."
     result))
 
 (defun benedict-provider-openrouter--decode-tool-calls (calls)
-  "Return CALLS converted into normalized tool call plists."
+  "Return tool-call plists decoded from tool-call input.
+The CALLS argument supplies the tool-call payloads."
   (let (result)
     (dolist (call calls (nreverse result))
       (when-let ((decoded (benedict-provider-openrouter--decode-tool-call call)))

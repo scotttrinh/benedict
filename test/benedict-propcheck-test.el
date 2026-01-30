@@ -1,4 +1,5 @@
 ;;; benedict-propcheck-test.el --- Property-based tests using propcheck  -*- lexical-binding: t; -*-
+;;; Code:
 
 (require 'ert)
 (require 'propcheck)

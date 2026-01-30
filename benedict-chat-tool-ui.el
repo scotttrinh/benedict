@@ -39,7 +39,7 @@
   "Keymap for tool action buttons.")
 
 (defun benedict-chat-tool-ui-toggle (&optional event)
-  "Toggle tool details visibility at point. EVENT is the mouse event that triggered the command."
+  "Toggle tool details visibility at point.  EVENT is the mouse event that triggered the command."
   (interactive (list last-nonmenu-event))
   (when event (goto-char (posn-point (event-start event))))
   (let ((item (get-text-property (point) 'benedict-chat-item)))
@@ -48,7 +48,7 @@
       (benedict-chat-tool-ui--update-header item))))
 
 (defun benedict-chat-tool-ui-action-invoke (&optional event)
-  "Invoke the action handler at point. EVENT is the mouse event that triggered the command."
+  "Invoke the action handler at point.  EVENT is the mouse event that triggered the command."
   (interactive (list last-nonmenu-event))
   (when event (goto-char (posn-point (event-start event))))
   (let ((handler (get-text-property (point) 'benedict-chat-action)))
@@ -149,7 +149,7 @@
     (json-encode (nreverse alist))))
 
 (defun benedict-chat-tool-ui--error-summary (tool-id details)
-  "Return a concise summary string for a tool failure."
+  "Return a concise summary string for TOOL-ID failure using DETAILS."
   (format "Tool %s failed: %s"
           (benedict-chat-tool-ui--name-string tool-id)
           (or (plist-get details :message) "unknown error")))

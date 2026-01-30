@@ -1,4 +1,5 @@
 ;;; benedict-context-test.el --- Tests for context helpers -*- lexical-binding: t; -*-
+;;; Code:
 
 (require 'ert)
 

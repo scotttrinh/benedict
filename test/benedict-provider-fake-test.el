@@ -1,4 +1,5 @@
 ;;; benedict-provider-fake-test.el --- Tests for fake provider -*- lexical-binding: t; -*-
+;;; Code:
 
 (require 'ert)
 (require 'ert-async)

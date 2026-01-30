@@ -111,7 +111,7 @@ Returns the process object."
          nil)))))
 
 (defun benedict-http--make-command (url method headers body stream)
-  "Build the curl command list."
+  "Build the curl command list for URL using METHOD, HEADERS, BODY, and STREAM."
   (let ((base (list benedict-http-curl-program
                     "--silent" "--show-error"
                     "--no-buffer" "--fail-with-body"
@@ -151,7 +151,7 @@ Returns the process object."
             combined))))
 
 (defun benedict-http--handle-buffer-chunk (context chunk)
-  "Buffer non-streaming response."
+  "Buffer non-streaming response CHUNK into CONTEXT."
   (let ((current (or (plist-get context :partial) "")))
     (setf (plist-get context :partial) (concat current chunk))))
 
@@ -170,7 +170,7 @@ Returns the process object."
     (setf (plist-get context :partial) buffer)))
 
 (defun benedict-http--process-sse-block (context block)
-  "Parse SSE BLOCK and dispatch via ON-DELTA."
+  "Parse SSE BLOCK in CONTEXT and dispatch via ON-DELTA."
   (let ((lines (split-string block "\n"))
         (data-lines nil)
         (event-type nil))
@@ -217,14 +217,14 @@ Returns the process object."
           (benedict-http--finish-error context exit-code stderr))))))
 
 (defun benedict-http--finish-success (context)
-  "Handle successful completion."
+  "Handle successful completion for CONTEXT."
   (if (plist-get context :stream)
       (when-let ((cb (plist-get context :on-complete)))
         (funcall cb))
     (when-let ((cb (plist-get context :on-success)))
       ;; For non-streaming, we have the full body in partial.
       ;; Note: This assumes curl --fail-with-body handles HTTP errors by
-      ;; exiting non-zero? No, --fail-with-body returns exit code 22 on 400+ 
+      ;; exiting non-zero? No, --fail-with-body returns exit code 22 on 400+
       ;; BUT it prints the body to stdout.
       ;; Wait, curl behaviour:
       ;; -f, --fail: Fail silently (no output at all) on server errors.
@@ -234,12 +234,12 @@ Returns the process object."
       (funcall cb 200 nil (plist-get context :partial)))))
 
 (defun benedict-http--finish-error (context code stderr)
-  "Handle error completion."
+  "Handle error completion for CONTEXT using CODE and STDERR."
   (let ((on-error (plist-get context :on-error))
         (provider (plist-get context :provider))
         (request-id (plist-get context :request-id))
         (lgr (lgr-get-logger "benedict.http")))
-    
+
     ;; Check if it's an HTTP error (curl code 22)
     (if (eq code 22)
         (let ((body (or (plist-get context :partial) "")))
@@ -247,7 +247,7 @@ Returns the process object."
                     :code code
                     :request-id request-id)
           (when on-error
-            ;; Try to parse body if JSON? 
+            ;; Try to parse body if JSON.
             ;; For now just pass raw body and let caller handle it.
             (funcall on-error (list :type 'http :code code :body body :stderr stderr))))
       

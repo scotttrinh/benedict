@@ -1,4 +1,5 @@
 ;;; test/benedict-provider-gemini-http-test.el --- Tests for Gemini HTTP parsing -*- lexical-binding: t; -*-
+;;; Code:
 
 (require 'ert)
 

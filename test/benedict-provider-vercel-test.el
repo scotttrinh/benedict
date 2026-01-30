@@ -1,4 +1,5 @@
 ;;; test/benedict-provider-vercel-test.el --- Tests for Vercel provider -*- lexical-binding: t; -*-
+;;; Code:
 
 (require 'ert)
 (require 'cl-lib)

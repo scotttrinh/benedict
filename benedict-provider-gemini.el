@@ -212,8 +212,8 @@ or contains no token."
 
 (defun benedict-provider-gemini--load-managed-project (access-token)
   "Load managed project information from Google using ACCESS-TOKEN.
- Returns plist with :project-id (string or nil), :current-tier (string or nil),
- :allowed-tiers (list or nil)."
+Returns plist with :project-id (string or nil), :current-tier (string or nil),
+:allowed-tiers (list or nil)."
   (let* ((lgr (benedict-provider-gemini--logger))
          (url (format "%s/v1internal:loadCodeAssist"
                       (string-remove-suffix "/" benedict-provider-gemini-cloud-code-endpoint)))
@@ -470,7 +470,7 @@ Returns the displayed buffer's name."
    (t (format "%s" value))))
 
 (defun benedict-provider-gemini--body-preview (body &optional limit)
-  "Return a truncated preview string for BODY."
+  "Return a truncated preview string for BODY with LIMIT."
   (let* ((text (benedict-provider-gemini--stringify body))
          (max (or limit 2000)))
     (if (> (length text) max)
@@ -552,7 +552,7 @@ using PROJECT-ID."
           result)))))
 
 (defun benedict-provider-gemini--encode-payload (request &optional project-id wrap)
-  "Return encoded JSON payload for REQUEST."
+  "Return encoded JSON payload for REQUEST, PROJECT-ID, and WRAP."
   (encode-coding-string
    (json-encode (benedict-provider-gemini--build-body request project-id wrap))
    'utf-8))
@@ -877,7 +877,7 @@ ON-SUCCESS/ON-ERROR/ON-COMPLETE mirror `benedict-provider-dispatch'."
           (nth 2 parts))))
 
 (defun benedict-provider-gemini--format-refresh (refresh-token &optional project-id managed-project-id)
-  "Serialize REFRESH-TOKEN and project IDs into a packed string."
+  "Serialize REFRESH-TOKEN, PROJECT-ID, and MANAGED-PROJECT-ID into a packed string."
   (if (or project-id managed-project-id)
       (format "%s|%s|%s"
               (or refresh-token "")
