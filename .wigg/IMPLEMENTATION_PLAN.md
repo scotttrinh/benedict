@@ -91,7 +91,7 @@
   - Dependencies: StatusBadge
   - Notes: Props: `:role`, `:timestamp`, `:metadata`.
 
-- [ ] **ContentBlockList vui component** (refs: 03_ui_ux.md section 1.2)
+- [x] **ContentBlockList vui component** (refs: 03_ui_ux.md section 1.2)
   - Scope: Render list of content blocks (text, thinking, tool) for a message
   - Files: Create `components/benedict-vui-content-block-list.el`, `test/benedict-vui-content-block-list-test.el`
   - Tests:
