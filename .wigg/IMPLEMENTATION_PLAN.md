@@ -101,7 +101,7 @@
   - Dependencies: TextBlock, ThinkingBlock, ToolUseBlock, ToolResultBlock, CodeBlock
   - Notes: Use `vui-list` with `:key` for stable identity. Props: `:blocks`.
 
-- [ ] **Turn vui component** (refs: 03_ui_ux.md section 1.2)
+- [x] **Turn vui component** (refs: 03_ui_ux.md section 1.2)
   - Scope: Render complete turn (header + content blocks)
   - Files: Create `components/benedict-vui-turn.el`, `test/benedict-vui-turn-test.el`
   - Tests:

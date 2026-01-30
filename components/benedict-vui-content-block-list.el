@@ -130,7 +130,7 @@ COLLAPSED-BLOCKS may be a list or hash table of block IDs."
       ""))
 
 (defun benedict-vui-content-block-list--render-block (block collapsed-blocks index)
-  "Return a Vui node for BLOCK at INDEX."
+  "Return a Vui node for BLOCK at INDEX using COLLAPSED-BLOCKS."
   (let* ((type (benedict-vui-content-block-list--block-type block))
          (collapsed (benedict-vui-content-block-list--collapsed-p
                      collapsed-blocks block index)))
