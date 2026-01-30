@@ -11,23 +11,8 @@
 
 (ert-deftest benedict-vui-tool-use-block-header-shows-name-and-status ()
   "Header includes tool name and status badge."
-  (let (badge-status text-values)
-    (cl-letf (((symbol-function 'benedict-vui-badge)
-               (lambda (&rest args)
-                 (setq badge-status (plist-get args :status))
-                 'badge))
-              ((symbol-function 'vui-text)
-               (lambda (text &rest _props)
-                 (push text text-values)
-                 text))
-              ((symbol-function 'vui-hstack)
-               (lambda (&rest _children) 'header)))
-      (benedict-vui-tool-use-block--header '(:name "bash") 'success)
-      (should (eq badge-status 'success))
-      (should (cl-some (lambda (text)
-                         (and (stringp text)
-                              (string-match-p "bash" text)))
-                       text-values)))))
+  (let ((title (benedict-vui-tool-use-block--header-title '(:name "bash"))))
+    (should (string-match-p "bash" title))))
 
 (ert-deftest benedict-vui-tool-use-block-formats-arguments-content ()
   "Expanded content includes formatted arguments."

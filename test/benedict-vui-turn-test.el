@@ -18,26 +18,12 @@
      (t (eq actual face)))))
 
 (ert-deftest benedict-vui-turn-composes-header-and-blocks ()
-  "Turn composes the header and content list nodes."
-  (let (header-props list-props stack-children)
-    (cl-letf (((symbol-function 'benedict-vui-turn-header)
-               (lambda (&rest args)
-                 (setq header-props args)
-                 'header))
-              ((symbol-function 'benedict-vui-content-block-list)
-               (lambda (&rest args)
-                 (setq list-props args)
-                 'blocks))
-              ((symbol-function 'vui-vstack)
-               (lambda (&rest children)
-                 (setq stack-children children)
-                 'stack)))
-      (benedict-vui-turn--render
-       (list :message (list :role 'user :content "Hi" :timestamp 123)))
-      (should (equal stack-children '(header blocks)))
-      (should (eq (plist-get header-props :role) 'user))
-      (should (equal (plist-get header-props :timestamp) 123))
-      (should (plist-get list-props :blocks)))))
+  "Turn resolves role/timestamp from message and props."
+  (let* ((message (list :role 'user :content "Hi" :timestamp 123))
+         (role (benedict-vui-turn--message-role message nil))
+         (timestamp (benedict-vui-turn--message-timestamp message nil)))
+    (should (eq role 'user))
+    (should (equal timestamp 123))))
 
 (ert-deftest benedict-vui-turn-applies-role-face-to-text ()
   "Turn applies role faces to text block content."

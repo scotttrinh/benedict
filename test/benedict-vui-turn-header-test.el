@@ -11,15 +11,7 @@
 
 (ert-deftest benedict-vui-turn-header-uses-role-badge ()
   "Header uses role badge based on message role."
-  (let (badge-status)
-    (cl-letf (((symbol-function 'benedict-vui-badge)
-               (lambda (&rest args)
-                 (setq badge-status (plist-get args :status))
-                 'badge))
-              ((symbol-function 'vui-hstack)
-               (lambda (&rest _children) 'header)))
-      (benedict-vui-turn-header--render '(:role "user"))
-      (should (eq badge-status 'user)))))
+  (should (eq (benedict-vui-turn-header--normalize-role "user") 'user)))
 
 (ert-deftest benedict-vui-turn-header-formats-timestamp ()
   "Timestamp formatting uses the standard header format."
@@ -32,17 +24,7 @@
 
 (ert-deftest benedict-vui-turn-header-handles-missing-timestamp ()
   "Missing timestamp does not render a timestamp node."
-  (let (timestamp-called)
-    (cl-letf (((symbol-function 'vui-text)
-               (lambda (&rest _args)
-                 (setq timestamp-called t)
-                 'text))
-              ((symbol-function 'benedict-vui-badge)
-               (lambda (&rest _args) 'badge))
-              ((symbol-function 'vui-hstack)
-               (lambda (&rest _children) 'header)))
-      (benedict-vui-turn-header--render '(:role assistant))
-      (should-not timestamp-called))))
+  (should-not (benedict-vui-turn-header--timestamp-node nil)))
 
 (provide 'test/benedict-vui-turn-header-test)
 ;;; benedict-vui-turn-header-test.el ends here

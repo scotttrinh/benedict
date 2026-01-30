@@ -281,7 +281,7 @@
     - No void-function errors from removed helpers
   - Notes: Decide whether to delete `benedict-chat-blocks.el` or reduce to state helpers.
 
-- [ ] **Stabilize chat/session tests under VUI rendering**
+- [x] **Stabilize chat/session tests under VUI rendering**
   - Scope: Update tests to align with `vui-component` dispatch and session wiring
   - Files: `test/benedict-chat-integration-test.el`, `test/benedict-chat-session-test.el`, `test/benedict-chat-logic-test.el`, component tests
   - Tests:

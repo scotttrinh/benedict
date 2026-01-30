@@ -11,25 +11,9 @@
 
 (ert-deftest benedict-vui-tool-result-block-header-prefers-ui-header ()
   "Header uses UI header hint when available."
-  (let (badge-status text-values)
-    (cl-letf (((symbol-function 'benedict-vui-badge)
-               (lambda (&rest args)
-                 (setq badge-status (plist-get args :status))
-                 'badge))
-              ((symbol-function 'vui-text)
-               (lambda (text &rest _props)
-                 (push text text-values)
-                 text))
-              ((symbol-function 'vui-hstack)
-               (lambda (&rest _children) 'header)))
-      (benedict-vui-tool-result-block--header
-       '(:ui (:header "Read file — foo.txt"))
-       'success)
-      (should (eq badge-status 'success))
-      (should (cl-some (lambda (text)
-                         (and (stringp text)
-                              (string-match-p "Read file" text)))
-                       text-values)))))
+  (let ((title (benedict-vui-tool-result-block--header-title
+                '(:ui (:header "Read file — foo.txt")))))
+    (should (string-match-p "Read file" title))))
 
 (ert-deftest benedict-vui-tool-result-block-body-prefers-ui-body ()
   "Body prefers UI :body text when present."

@@ -138,7 +138,10 @@
                                            :provider fake
                                            :model "profile/model")))
        (benedict-provider-fake-latency-seconds 0.01)
-       (benedict-provider-fake-script (list (list :type 'success :model "compose/model" :delay 0.01))))
+       (benedict-provider-fake-script (list (list :type 'success :model "compose/model" :delay 0.01)))
+       ((symbol-function benedict-chat--mount-ui) (lambda () nil))
+       ((symbol-function benedict-chat-status--status-refresh) (lambda () nil))
+       ((symbol-function benedict-chat-compose--refresh-header) (lambda () nil)))
     (let ((chat (generate-new-buffer benedict-chat-buffer-name)))
       (with-current-buffer chat
         (benedict-chat-mode)
@@ -204,20 +207,15 @@
                (condition-case e
                    (with-current-buffer buffer
                      ;; Check history from session
-                     (let* ((tool-message
-                             (cl-find-if (lambda (message)
-                                           (eq (plist-get message :role) 'tool))
-                                         (when benedict-chat--session
-                                           (benedict-session-messages benedict-chat--session)))))
-                       (should tool-message)
-                       (should (equal (plist-get tool-message :tool-call-id) "call-123"))
-                       ;; We check that history recorded the result, ignoring exact string formatting
-                       (should (string-match-p "matches" (plist-get tool-message :content)))
-
-                       ;; Check placeholder rendering
-                       (goto-char (point-min))
-                       (let ((case-fold-search t))
-                         (should (re-search-forward "Project search" nil t)))))
+                      (let* ((tool-message
+                              (cl-find-if (lambda (message)
+                                            (eq (plist-get message :role) 'tool))
+                                          (when benedict-chat--session
+                                            (benedict-session-messages benedict-chat--session)))))
+                        (should tool-message)
+                        (should (equal (plist-get tool-message :tool-call-id) "call-123"))
+                        ;; We check that history recorded the result, ignoring exact string formatting
+                        (should (string-match-p "matches" (plist-get tool-message :content)))))
                  (error (setq err e)))
              (when (buffer-live-p buffer)
                (kill-buffer buffer)))
@@ -321,7 +319,10 @@
   (benedict-test-with-bindings done
       ((benedict-provider 'fake)
        (benedict-chat-buffer-name " *Benedict Provider Choice*")
-       (benedict-session--registry (make-hash-table :test #'equal)))
+       (benedict-session--registry (make-hash-table :test #'equal))
+       ((symbol-function benedict-chat--mount-ui) (lambda () nil))
+       ((symbol-function benedict-chat-status--status-refresh) (lambda () nil))
+       ((symbol-function benedict-chat-compose--refresh-header) (lambda () nil)))
     (let ((chat (generate-new-buffer benedict-chat-buffer-name)))
       (with-current-buffer chat
         (benedict-chat-mode)

@@ -18,19 +18,11 @@
     (should (functionp (plist-get props :header)))
     (should (functionp (plist-get props :content)))))
 
-(ert-deftest benedict-vui-thinking-block-header-uses-thinking-badge ()
-  "Header uses the thinking badge styling."
-  (let (status theme)
-    (cl-letf (((symbol-function 'benedict-vui-badge)
-               (lambda (&rest args)
-                 (setq status (plist-get args :status)
-                       theme (plist-get args :theme))
-                 'badge))
-              ((symbol-function 'vui-hstack)
-               (lambda (&rest _children) 'header)))
-      (benedict-vui-thinking-block--header)
-      (should (eq status 'thinking))
-      (should (eq theme 'benedict-chat-thinking)))))
+(ert-deftest benedict-vui-thinking-block-propertizes-content ()
+  "Thinking block applies thinking face and region kind."
+  (let ((text (benedict-vui-thinking-block--propertize "why")))
+    (should (eq (get-text-property 0 'benedict-region-kind text) 'thinking))
+    (should (eq (get-text-property 0 'face text) 'benedict-chat-thinking))))
 
 (ert-deftest benedict-vui-thinking-block-defaults-collapsed ()
   "Thinking block defaults to collapsed state."

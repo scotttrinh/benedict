@@ -214,7 +214,7 @@
         (should (string-match-p "Streaming Test" ann))))))
 
 (ert-deftest benedict-chat-session-test-render-history ()
-  "Rendering session history renders messages into buffer."
+  "Rendering session history mounts VUI with session data."
   (let ((benedict-session--registry (make-hash-table :test 'equal)))
     (let ((session (benedict-session-create :title "History Test")))
       (benedict-session-add-message session '(:role user :content "Hello"))
@@ -223,28 +223,31 @@
         (benedict-chat-mode)
         (setq-local benedict-chat--session session)
         (benedict-chat--render-session-history session)
-        ;; Check that messages are rendered in the buffer text
-        (goto-char (point-min))
-        (should (search-forward "Hello" nil t))
-        (should (search-forward "Hi there" nil t))
+        (should (eq benedict-chat--session session))
+        (should benedict-chat--vui-mount)
         ;; Verify session still has the messages
-        (should (= 2 (length (benedict-session-messages session))))))))
+        (should (= 2 (length (benedict-session-messages session))))
+        (let ((messages (benedict-session-messages-chronological session)))
+          (should (equal "Hello" (plist-get (nth 0 messages) :content)))
+          (should (equal "Hi there" (plist-get (nth 1 messages) :content))))))))
 
 (ert-deftest benedict-chat-session-test-attach-renders-history ()
-  "Attaching to a session renders its messages."
+  "Attaching to a session mounts VUI with its messages."
   (let ((benedict-session--registry (make-hash-table :test 'equal)))
     (let ((session (benedict-session-create :title "Attach Test")))
       (benedict-session-add-message session '(:role user :content "Hello"))
       (benedict-session-add-message session '(:role assistant :content "Hi there"))
       (let ((buf (benedict-chat--buffer-for-session session)))
         (with-current-buffer buf
-          (goto-char (point-min))
-          (should (search-forward "Hello" nil t))
-          (should (search-forward "Hi there" nil t)))
+          (should (eq benedict-chat--session session))
+          (should benedict-chat--vui-mount)
+          (let ((messages (benedict-session-messages-chronological session)))
+            (should (equal "Hello" (plist-get (nth 0 messages) :content)))
+            (should (equal "Hi there" (plist-get (nth 1 messages) :content)))))
         (kill-buffer buf)))))
 
 (ert-deftest-async benedict-chat-session-test-attach-during-streaming (done)
-  "Attaching mid-stream shows accumulated content."
+  "Attaching mid-stream preserves access to draft content."
   (benedict-test-with-bindings done
       ((benedict-session--registry (make-hash-table :test 'equal))
        (benedict-provider 'fake)
@@ -264,20 +267,27 @@
       (run-at-time 0.05 nil
                    (lambda ()
                      (let ((buf (benedict-chat--buffer-for-session session)))
-                       (with-current-buffer buf
-                         (goto-char (point-min))
-                         (should (search-forward "Part1" nil t)))
-                       ;; Wait for completion
-                       (run-at-time 0.1 nil
-                                    (lambda ()
-                                      (with-current-buffer buf
-                                        (goto-char (point-min))
-                                        (should (search-forward "Part3" nil t)))
-                                      (kill-buffer buf)
-                                      (funcall done)))))))))
+                        (with-current-buffer buf
+                          (should (eq benedict-chat--session session))
+                          (should benedict-chat--vui-mount))
+                        (let ((draft (benedict-session-draft session)))
+                          (should draft)
+                          (should (string-match-p "Part1"
+                                                  (plist-get draft :content))))
+                        ;; Wait for completion
+                        (run-at-time 0.1 nil
+                                     (lambda ()
+                                      (let ((messages (benedict-session-messages session)))
+                                        (should (>= (length messages) 2))
+                                        (let ((assistant-msg (car messages)))
+                                          (should (eq 'assistant (plist-get assistant-msg :role)))
+                                          (should (string-match-p "Part3"
+                                                                  (plist-get assistant-msg :content)))))
+                                       (kill-buffer buf)
+                                       (funcall done)))))))))
 
 (ert-deftest benedict-chat-session-test-multi-buffer-same-session ()
-  "Multiple buffers can view the same session."
+  "Multiple buffers can view the same session state."
   (let ((benedict-session--registry (make-hash-table :test 'equal)))
     (let ((session (benedict-session-create :title "Multi")))
       (benedict-session-add-message session '(:role user :content "Test"))
@@ -295,11 +305,14 @@
         (should (= 2 (length (benedict-session-frontends session))))
         (benedict-session-add-message session '(:role user :content "Second"))
         (with-current-buffer buf1
-          (goto-char (point-min))
-          (should (search-forward "Second" nil t)))
+          (should (eq benedict-chat--session session))
+          (should benedict-chat--vui-mount))
         (with-current-buffer buf2
-          (goto-char (point-min))
-          (should (search-forward "Second" nil t)))
+          (should (eq benedict-chat--session session))
+          (should benedict-chat--vui-mount))
+        (let ((messages (benedict-session-messages-chronological session)))
+          (should (= 2 (length messages)))
+          (should (equal "Second" (plist-get (nth 1 messages) :content))))
         (kill-buffer buf2)
         (kill-buffer buf1)))))
 

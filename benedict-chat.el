@@ -616,7 +616,7 @@ When SESSION is non-nil, attach to it instead of creating a new one."
          (provider (benedict-chat-profiles--resolve-provider profile))
          (model (benedict-chat-profiles--resolve-model
                  provider profile benedict-chat--compose-model-override))
-         (existing-session (and session (benedict-session-p session))))
+         (existing-session (and (benedict-session-p session) session)))
     ;; Create and attach session if needed.
     (setq-local benedict-chat--session
                 (or existing-session
@@ -677,10 +677,9 @@ Buffers are keyed by session ID in the buffer name."
     (if existing
         existing
       ;; Create new buffer for this session
-      (let* ((session-id (benedict-session-id session))
-             (buf-name (format "*Benedict Chat [%s]*"
-                               (substring session-id 0 (min 12 (length session-id)))))
-             (buf (get-buffer-create buf-name)))
+       (let* ((session-id (benedict-session-id session))
+              (buf-name (format "*Benedict Chat [%s]*" session-id))
+              (buf (get-buffer-create buf-name)))
         (with-current-buffer buf
           (unless (derived-mode-p 'benedict-chat-mode)
             (let ((mode (or benedict-chat-major-mode #'benedict-chat-mode)))

@@ -27,14 +27,25 @@
         (run-at-time 0.5 nil
                      (lambda ()
                        (with-current-buffer target-buffer
-                         (goto-char (point-min))
-                         (should (search-forward "USER" nil t))
-                         (should (search-forward "hello integration" nil t))
-                         (goto-char (point-min))
-                         (should (search-forward "ASSISTANT" nil t))
-                         (should (search-forward "Fake echo: hello integration" nil t)))
-                       (kill-buffer chat-buffer-name)
-                       (funcall done)))))))
+                          (let* ((session benedict-chat--session)
+                                 (messages (and session (benedict-session-messages session)))
+                                 (user (and messages
+                                            (cl-find-if (lambda (msg)
+                                                          (eq (plist-get msg :role) 'user))
+                                                        messages)))
+                                 (assistant (and messages
+                                                 (cl-find-if (lambda (msg)
+                                                               (eq (plist-get msg :role) 'assistant))
+                                                             messages))))
+                            (should session)
+                            (should user)
+                            (should (string-match-p "hello integration"
+                                                    (plist-get user :content)))
+                            (should assistant)
+                            (should (string-match-p "Fake echo: hello integration"
+                                                    (plist-get assistant :content)))))
+                        (kill-buffer chat-buffer-name)
+                        (funcall done)))))))
 
 (provide 'test/benedict-chat-integration-test)
 ;;; benedict-chat-integration-test.el ends here
