@@ -51,6 +51,20 @@
         copy)
     text))
 
+(defun benedict-vui-code-block--apply-region-properties (text message-key block-id)
+  "Return TEXT with region properties applied for navigation.
+
+MESSAGE-KEY and BLOCK-ID are stored as text properties."
+  (if (stringp text)
+      (let ((copy (copy-sequence text)))
+        (add-text-properties 0 (length copy)
+                             (list 'benedict-region-kind 'body
+                                   'benedict-message-key message-key
+                                   'benedict-block-id block-id)
+                             copy)
+        copy)
+    text))
+
 (defun benedict-vui-code-block--fontify (code language)
   "Return CODE with syntax highlighting for LANGUAGE when possible."
   (let* ((normalized-code (benedict-vui-code-block--normalize code))
@@ -90,10 +104,12 @@ Returns the timer created to clear feedback."
   :state ((copied-feedback nil))
   :render
   (let* ((code (plist-get props :code))
-         (language (plist-get props :language))
-         (normalized-code (benedict-vui-code-block--normalize code))
-         (normalized-language (benedict-vui-code-block--normalize-language language))
-         (timer-ref (vui-use-ref nil))
+          (language (plist-get props :language))
+          (message-key (plist-get props :message-key))
+          (block-id (plist-get props :block-id))
+          (normalized-code (benedict-vui-code-block--normalize code))
+          (normalized-language (benedict-vui-code-block--normalize-language language))
+          (timer-ref (vui-use-ref nil))
          (fontified (vui-use-memo (normalized-code normalized-language)
                       (benedict-vui-code-block--fontify normalized-code normalized-language)))
          (copy-label (if (plist-get state :copied-feedback) "Copied!" "Copy"))
@@ -115,10 +131,13 @@ Returns the timer created to clear feedback."
       (vui-text (propertize (benedict-vui-code-block--label normalized-language)
                             'face 'shadow))
       (vui-button copy-label :on-click copy-handler))
-      (if (benedict-vui-code-block--resolve-mode normalized-language)
-          (vui-text fontified)
-        (vui-component 'benedict-vui-text-block
-         :content (benedict-vui-code-block--fallback-content normalized-code normalized-language))))))
+       (if (benedict-vui-code-block--resolve-mode normalized-language)
+           (vui-text (benedict-vui-code-block--apply-region-properties
+                      fontified message-key block-id))
+         (vui-component 'benedict-vui-text-block
+          :content (benedict-vui-code-block--fallback-content normalized-code normalized-language)
+          :message-key message-key
+          :block-id block-id)))))
 
 (defun benedict-vui-code-block (&rest props)
   "Create a code block component node from PROPS."

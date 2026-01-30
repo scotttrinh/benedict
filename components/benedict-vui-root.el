@@ -36,6 +36,31 @@
       (append conversation (list (benedict-vui-root--streaming-message streaming)))
     conversation))
 
+(defun benedict-vui-root--toggle-collapsed-block (collapsed-blocks block-id &optional next)
+  "Return COLLAPSED-BLOCKS updated for BLOCK-ID.
+
+When NEXT is non-nil, it forces the collapsed state.  When NEXT is nil,
+toggle based on current membership.  COLLAPSED-BLOCKS may be a list or hash table."
+  (cond
+   ((null block-id) collapsed-blocks)
+   ((hash-table-p collapsed-blocks)
+    (let* ((table (copy-hash-table collapsed-blocks))
+           (present (gethash block-id table))
+           (collapse (if (null next) (not present) next)))
+      (if collapse
+          (puthash block-id t table)
+        (remhash block-id table))
+      table))
+   (t
+    (let* ((current (if (listp collapsed-blocks)
+                        (copy-sequence collapsed-blocks)
+                      nil))
+           (present (member block-id current))
+           (collapse (if (null next) (not present) next)))
+      (if collapse
+          (if present current (cons block-id current))
+        (cl-remove block-id current :test #'equal))))))
+
 (defun benedict-vui-root--submit (value on-submit retain-context)
   "Submit VALUE via ON-SUBMIT, returning non-nil on success.
 Clears input and context when RETAIN-CONTEXT is nil."
@@ -118,13 +143,19 @@ Clears input and context when RETAIN-CONTEXT is nil."
                       (lambda (slices)
                         (vui-set-state :slices slices))))
          (submit-handler (vui-use-callback (on-submit retain-context)
-                           (lambda (value)
-                             (benedict-vui-root--submit
-                              value on-submit retain-context))))
-         (slice-remove (vui-use-callback (current-slices on-slices-change)
-                         (lambda (slice-id)
-                           (let ((updated (cl-remove-if
-                                           (lambda (slice)
+                            (lambda (value)
+                              (benedict-vui-root--submit
+                               value on-submit retain-context))))
+         (toggle-block (vui-use-callback ()
+                        (lambda (block-id &optional next)
+                          (vui-set-state :collapsed-blocks
+                            (lambda (current)
+                              (benedict-vui-root--toggle-collapsed-block
+                               current block-id next))))))
+          (slice-remove (vui-use-callback (current-slices on-slices-change)
+                          (lambda (slice-id)
+                            (let ((updated (cl-remove-if
+                                            (lambda (slice)
                                              (equal (plist-get slice :id) slice-id))
                                            current-slices)))
                              (vui-set-state :slices updated)
@@ -133,14 +164,15 @@ Clears input and context when RETAIN-CONTEXT is nil."
          (input-change (vui-use-callback ()
                          (lambda (value)
                            (vui-set-state :input-text value)))))
-    (vui-use-effect (register-actions set-input set-slices)
-      (when register-actions
-        (funcall register-actions
+     (vui-use-effect (register-actions set-input set-slices toggle-block)
+       (when register-actions
+         (funcall register-actions
                  (list :set-input set-input
-                       :set-slices set-slices)))
-      (lambda ()
-        (when register-actions
-          (funcall register-actions nil))))
+                       :set-slices set-slices
+                       :toggle-block toggle-block)))
+       (lambda ()
+         (when register-actions
+           (funcall register-actions nil))))
     (vui-vstack
      (vui-component 'benedict-vui-chat-header
        :provider current-provider
@@ -149,10 +181,11 @@ Clears input and context when RETAIN-CONTEXT is nil."
                  (plist-get current-streaming :status))
        :title "Chat"
        :on-provider-click on-provider-click)
-     (vui-component 'benedict-vui-conversation-view
-      :conversation render-conversation
-      :streaming current-streaming
-      :collapsed-blocks current-collapsed-blocks)
+      (vui-component 'benedict-vui-conversation-view
+       :conversation render-conversation
+       :streaming current-streaming
+       :collapsed-blocks current-collapsed-blocks
+       :on-toggle-block toggle-block)
      (vui-component 'benedict-vui-input-area
       :slices current-slices
       :input-text current-input

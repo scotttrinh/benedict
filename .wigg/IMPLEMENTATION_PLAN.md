@@ -290,7 +290,7 @@
     - Fix mocks that bypass `vui-component`
   - Notes: Prefer vnode assertions over function mocks for component composition.
 
-- [ ] **Restore feature parity for folding, tool UI, and navigation**
+- [x] **Restore feature parity for folding, tool UI, and navigation**
   - Scope: Replace magit-section behaviors with VUI state and interactions
   - Files: `benedict-vui-root.el`, `benedict-chat-nav.el`, `components/benedict-vui-*-block.el`
   - Tests:

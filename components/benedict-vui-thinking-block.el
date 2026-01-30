@@ -102,10 +102,14 @@
   (let ((details (benedict-vui-thinking-block--normalize-payload thinking)))
     (mapconcat #'benedict-vui-thinking-block--detail-text details "\n\n")))
 
-(defun benedict-vui-thinking-block--propertize (content)
-  "Return CONTENT with thinking text properties applied."
+(defun benedict-vui-thinking-block--propertize (content &optional message-key block-id)
+  "Return CONTENT with thinking text properties applied.
+
+MESSAGE-KEY and BLOCK-ID are stored as text properties when provided."
   (propertize (benedict-vui-thinking-block--normalize-string content)
               'benedict-region-kind 'thinking
+              'benedict-message-key message-key
+              'benedict-block-id block-id
               'face 'benedict-chat-thinking))
 
 (defun benedict-vui-thinking-block--controlled-p (props)
@@ -124,28 +128,38 @@
    (vui-component 'benedict-vui-badge :status 'thinking
                        :theme 'benedict-chat-thinking)))
 
-(defun benedict-vui-thinking-block--content (thinking)
-  "Return the thinking block content node for THINKING payload."
+(defun benedict-vui-thinking-block--content (thinking message-key block-id)
+  "Return the thinking block content node for THINKING payload.
+
+MESSAGE-KEY and BLOCK-ID annotate the rendered content."
   (vui-text (benedict-vui-thinking-block--propertize
-             (benedict-vui-thinking-block--content-text thinking))))
+             (benedict-vui-thinking-block--content-text thinking)
+             message-key
+             block-id)))
 
 (defun benedict-vui-thinking-block--collapsible-props (props state toggle-handler)
   "Return collapsible props for PROPS/STATE and TOGGLE-HANDLER."
   (let* ((thinking (plist-get props :thinking-data))
-         (collapsed (benedict-vui-thinking-block--collapsed-p props state)))
+         (collapsed (benedict-vui-thinking-block--collapsed-p props state))
+         (message-key (plist-get props :message-key))
+         (block-id (plist-get props :block-id)))
     (list :collapsed collapsed
           :on-toggle toggle-handler
           :header #'benedict-vui-thinking-block--header
           :content (lambda ()
-                     (benedict-vui-thinking-block--content thinking)))))
+                     (benedict-vui-thinking-block--content
+                      thinking message-key block-id)))))
 
 (defun benedict-vui-thinking-block--render (props state)
   "Return the rendered thinking block for PROPS/STATE."
   (let* ((controlled (benedict-vui-thinking-block--controlled-p props))
-         (toggle-handler (vui-use-memo (controlled)
+         (on-toggle (plist-get props :on-toggle))
+         (toggle-handler (vui-use-callback (controlled on-toggle)
                            (lambda (next)
                              (unless controlled
-                               (vui-set-state :collapsed next)))))
+                               (vui-set-state :collapsed next))
+                             (when (functionp on-toggle)
+                               (funcall on-toggle next)))))
          (collapsible-props (benedict-vui-thinking-block--collapsible-props
                              props state toggle-handler)))
     (apply #'benedict-vui-collapsible collapsible-props)))

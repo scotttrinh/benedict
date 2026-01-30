@@ -15,15 +15,22 @@
    ((null content) "")
    (t (format "%s" content))))
 
-(defun benedict-vui-text-block--propertize (content)
-  "Return CONTENT with body text properties applied."
-  (propertize (benedict-vui-text-block--normalize content)
-              'benedict-region-kind 'body))
+(defun benedict-vui-text-block--propertize (content &optional message-key block-id)
+  "Return CONTENT with body text properties applied.
+
+MESSAGE-KEY and BLOCK-ID are stored as text properties when provided."
+  (let ((text (benedict-vui-text-block--normalize content)))
+    (propertize text
+                'benedict-region-kind 'body
+                'benedict-message-key message-key
+                'benedict-block-id block-id)))
 
 (vui-defcomponent benedict-vui-text-block (props)
   :render
-  (let ((content (plist-get props :content)))
-    (vui-text (benedict-vui-text-block--propertize content))))
+  (let ((content (plist-get props :content))
+        (message-key (plist-get props :message-key))
+        (block-id (plist-get props :block-id)))
+    (vui-text (benedict-vui-text-block--propertize content message-key block-id))))
 
 (defun benedict-vui-text-block (&rest props)
   "Create a text block component node from PROPS."

@@ -98,6 +98,10 @@
                     index
                   (sxhash block))))))
 
+(defun benedict-vui-content-block-list--message-key (props)
+  "Return the navigation key from PROPS when present."
+  (plist-get props :message-key))
+
 (defun benedict-vui-content-block-list--collapsed-p (collapsed-blocks block index)
   "Return non-nil when BLOCK at INDEX is collapsed.
 
@@ -129,44 +133,66 @@ COLLAPSED-BLOCKS may be a list or hash table of block IDs."
       (plist-get block :text)
       ""))
 
-(defun benedict-vui-content-block-list--render-block (block collapsed-blocks index)
-  "Return a Vui node for BLOCK at INDEX using COLLAPSED-BLOCKS."
+(defun benedict-vui-content-block-list--render-block
+    (block collapsed-blocks index message-key on-toggle-block)
+  "Return a Vui node for BLOCK at INDEX using COLLAPSED-BLOCKS.
+
+MESSAGE-KEY and ON-TOGGLE-BLOCK supply navigation and folding behavior."
   (let* ((type (benedict-vui-content-block-list--block-type block))
+         (block-id (benedict-vui-content-block-list--block-id block index))
          (collapsed (benedict-vui-content-block-list--collapsed-p
-                     collapsed-blocks block index)))
+                     collapsed-blocks block index))
+         (toggle-handler (when (functionp on-toggle-block)
+                           (lambda (next)
+                             (funcall on-toggle-block block-id next)))))
     (pcase type
       ('thinking
        (vui-component 'benedict-vui-thinking-block
         :thinking-data (benedict-vui-content-block-list--thinking-content block)
-        :collapsed collapsed))
+        :collapsed collapsed
+        :message-key message-key
+        :block-id block-id
+        :on-toggle toggle-handler))
       ('tool-use
        (vui-component 'benedict-vui-tool-use-block
         :tool-call (or (plist-get block :tool-call) (plist-get block :call) block)
         :status (plist-get block :status)
-        :collapsed collapsed))
+        :collapsed collapsed
+        :message-key message-key
+        :block-id block-id
+        :on-toggle toggle-handler))
       ('tool-result
        (vui-component 'benedict-vui-tool-result-block
         :result (or (plist-get block :result) (plist-get block :tool-result) block)
         :status (plist-get block :status)
         :actions (plist-get block :actions)
-        :collapsed collapsed))
+        :collapsed collapsed
+        :message-key message-key
+        :block-id block-id
+        :on-toggle toggle-handler))
       ('code
        (vui-component 'benedict-vui-code-block
         :code (benedict-vui-content-block-list--code-content block)
-        :language (plist-get block :language)))
+        :language (plist-get block :language)
+        :message-key message-key
+        :block-id block-id))
       (_
        (vui-component 'benedict-vui-text-block
-        :content (benedict-vui-content-block-list--text-content block))))))
+        :content (benedict-vui-content-block-list--text-content block)
+        :message-key message-key
+        :block-id block-id)))))
 
 (defun benedict-vui-content-block-list--render (props)
   "Render a list of content blocks for PROPS."
   (let* ((blocks (benedict-vui-content-block-list--normalize-blocks
                   (plist-get props :blocks)))
-         (collapsed-blocks (plist-get props :collapsed-blocks)))
+         (collapsed-blocks (plist-get props :collapsed-blocks))
+         (message-key (benedict-vui-content-block-list--message-key props))
+         (on-toggle-block (plist-get props :on-toggle-block)))
     (vui-list blocks
               (lambda (block &optional index)
                 (benedict-vui-content-block-list--render-block
-                 block collapsed-blocks index))
+                 block collapsed-blocks index message-key on-toggle-block))
               (lambda (block &optional index)
                 (benedict-vui-content-block-list--block-id block index)))))
 

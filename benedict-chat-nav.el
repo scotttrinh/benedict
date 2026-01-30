@@ -12,6 +12,7 @@
 ;; Declare functions and variables from benedict-chat.el
 (defvar benedict-chat--session)
 (declare-function benedict-chat--ensure-chat-buffer "benedict-chat")
+(declare-function benedict-chat--vui-call "benedict-chat")
 
 (defvar-local benedict-chat-nav--last-index nil
   "Most recently navigated message index for chat navigation.")
@@ -40,7 +41,7 @@
   (eq (benedict-chat-nav--normalize-role (plist-get message :role)) 'assistant))
 
 (defun benedict-chat-nav--assistant-with-tools-p (message)
-  "Return non-nil when MESSAGE is an assistant message with tool calls."
+  "Return non-nil when MESSAGE is an assistant message with tool call data."
   (and (benedict-chat-nav--assistant-message-p message)
        (plist-get message :tool-calls)))
 
@@ -66,6 +67,32 @@
   (when (and message messages)
     (cl-position message messages :test #'eq)))
 
+(defun benedict-chat-nav--message-key (message messages)
+  "Return a navigation key for MESSAGE within MESSAGES.
+
+Prefer stable IDs when available; fall back to MESSAGE index."
+  (or (plist-get message :id)
+      (plist-get message :message-id)
+      (plist-get message :turn-id)
+      (plist-get message :uuid)
+      (benedict-chat-nav--message-index message messages)))
+
+(defun benedict-chat-nav--goto-message-by-property (message-key direction)
+  "Move point to MESSAGE-KEY using text properties in DIRECTION.
+
+Return non-nil on success."
+  (when (and message-key
+             (fboundp 'text-property-search-forward)
+             (fboundp 'text-property-search-backward))
+    (let ((match (if (eq direction 'backward)
+                     (text-property-search-backward 'benedict-message-key message-key t)
+                   (text-property-search-forward 'benedict-message-key message-key t))))
+      (when match
+        (goto-char (if (fboundp 'prop-match-beginning)
+                       (prop-match-beginning match)
+                     (car match)))
+        t))))
+
 (defun benedict-chat-nav--seek-message (predicate direction)
   "Return next message matching PREDICATE in DIRECTION.
 DIRECTION is either 'forward or 'backward."
@@ -88,17 +115,19 @@ DIRECTION is either 'forward or 'backward."
   "Move point to MESSAGE content when possible.
 DIRECTION controls search direction when locating text."
   (let* ((messages (benedict-chat-nav--messages))
-         (content (benedict-chat-nav--message-text message))
-         (search-backward (eq direction 'backward))
-         (start (if search-backward (point-max) (point-min))))
+          (content (benedict-chat-nav--message-text message))
+          (message-key (benedict-chat-nav--message-key message messages))
+          (search-backward (eq direction 'backward))
+          (start (if search-backward (point-max) (point-min))))
     (goto-char start)
-    (if (and (stringp content) (not (string-empty-p content)))
-        (if (if search-backward
-                (search-backward content nil t)
-              (search-forward content nil t))
-            (goto-char (match-beginning 0))
-          (goto-char (if search-backward (point-min) (point-max))))
-      (goto-char (if search-backward (point-min) (point-max))))
+    (unless (benedict-chat-nav--goto-message-by-property message-key direction)
+      (if (and (stringp content) (not (string-empty-p content)))
+          (if (if search-backward
+                  (search-backward content nil t)
+                (search-forward content nil t))
+              (goto-char (match-beginning 0))
+            (goto-char (if search-backward (point-min) (point-max))))
+        (goto-char (if search-backward (point-min) (point-max)))))
     (setq benedict-chat-nav--last-index
           (benedict-chat-nav--message-index message messages))
     message))
@@ -161,7 +190,7 @@ When INCLUDE-ERRORS is nil, skip entries flagged with :error metadata."
         nil))))
 
 (defun benedict-chat-nav-jump-to-last-assistant-with-tools ()
-  "Jump to the most recent assistant message that has tool calls."
+  "Jump to the most recent assistant message that has tool call data."
   (interactive)
   (let ((chat (benedict-chat--ensure-chat-buffer)))
     (unless (eq (current-buffer) chat)
@@ -220,12 +249,18 @@ When INCLUDE-ERRORS is nil, skip entries flagged with :error metadata."
 
 (defun benedict-chat-nav-toggle-thinking ()
   "Toggle thinking block visibility.
-For the vui.el UI this is a no-op placeholder." 
+For the vui.el UI this toggles the block at point when possible."
   (interactive)
-  (message "Benedict: thinking toggle is managed by the UI"))
+  (let ((kind (get-text-property (point) 'benedict-region-kind))
+        (block-id (get-text-property (point) 'benedict-block-id)))
+    (if (and (eq kind 'thinking) block-id)
+        (progn
+          (benedict-chat--vui-call :toggle-block block-id)
+          (message "Benedict: toggled thinking"))
+      (message "Benedict: no thinking block at point"))))
 
 (defun benedict-chat-nav-retry-last ()
-  "Retry the last assistant response by re-sending the prior user message." 
+  "Retry the last assistant response by re-sending the prior user message."
   (interactive)
   (let ((chat (benedict-chat--ensure-chat-buffer)))
     (unless (eq (current-buffer) chat)
@@ -242,7 +277,7 @@ For the vui.el UI this is a no-op placeholder."
           (message "Benedict: no user messages to retry"))))))
 
 (defun benedict-chat-nav-copy-last-response ()
-  "Copy the last assistant response to the kill ring." 
+  "Copy the last assistant response to the kill ring."
   (interactive)
   (if-let ((message (benedict-chat-nav--last-assistant-item)))
       (let ((content (or (benedict-chat-nav--message-text message) "")))

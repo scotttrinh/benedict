@@ -47,6 +47,15 @@
   (or (plist-get props :metadata)
       (and message (plist-get message :metadata))))
 
+(defun benedict-vui-turn--message-key (message props)
+  "Return a navigation key for MESSAGE or PROPS."
+  (or (plist-get props :message-key)
+      (and message (or (plist-get message :id)
+                       (plist-get message :message-id)
+                       (plist-get message :turn-id)
+                       (plist-get message :uuid)
+                       (plist-get message :nav-index)))))
+
 (defun benedict-vui-turn--face-for-role (role metadata)
   "Return a face for ROLE given METADATA."
   (cond
@@ -155,17 +164,21 @@
 (defun benedict-vui-turn--render (props)
   "Render a full turn from PROPS."
   (let* ((message (plist-get props :message))
-         (role (benedict-vui-turn--message-role message props))
-         (timestamp (benedict-vui-turn--message-timestamp message props))
-         (metadata (benedict-vui-turn--message-metadata message props))
-         (blocks (benedict-vui-turn--blocks props))
-         (collapsed-blocks (plist-get props :collapsed-blocks))
-         (header (vui-component 'benedict-vui-turn-header :role role
-                                           :timestamp timestamp
-                                           :metadata metadata))
-         (content (vui-component 'benedict-vui-content-block-list
-                   :blocks blocks
-                   :collapsed-blocks collapsed-blocks)))
+          (role (benedict-vui-turn--message-role message props))
+          (timestamp (benedict-vui-turn--message-timestamp message props))
+          (metadata (benedict-vui-turn--message-metadata message props))
+          (message-key (benedict-vui-turn--message-key message props))
+          (blocks (benedict-vui-turn--blocks props))
+          (collapsed-blocks (plist-get props :collapsed-blocks))
+          (on-toggle-block (plist-get props :on-toggle-block))
+          (header (vui-component 'benedict-vui-turn-header :role role
+                                            :timestamp timestamp
+                                            :metadata metadata))
+          (content (vui-component 'benedict-vui-content-block-list
+                    :blocks blocks
+                    :collapsed-blocks collapsed-blocks
+                    :message-key message-key
+                    :on-toggle-block on-toggle-block)))
     (vui-vstack header content)))
 
 (vui-defcomponent benedict-vui-turn (props)

@@ -6,6 +6,7 @@
 
 ;;; Code:
 
+(require 'cl-lib)
 (require 'subr-x)
 (require 'vui)
 (require 'benedict-vui-turn)
@@ -39,13 +40,20 @@
    (t (list :role 'assistant :content (format "%s" message)))))
 
 (defun benedict-vui-turn-list--normalize-messages (messages)
-  "Return MESSAGES normalized to a list of message plists."
+  "Return MESSAGES normalized to a list of message plists.
+
+Each normalized message includes a :nav-index for navigation properties."
   (cond
    ((null messages) nil)
    ((vectorp messages)
     (benedict-vui-turn-list--normalize-messages (append messages nil)))
    ((listp messages)
-    (delq nil (mapcar #'benedict-vui-turn-list--normalize-message messages)))
+    (delq nil
+          (cl-loop for message in messages
+                   for index from 0
+                   for normalized = (benedict-vui-turn-list--normalize-message message)
+                   when normalized
+                   collect (plist-put normalized :nav-index index))))
    (t (list (benedict-vui-turn-list--normalize-message messages)))))
 
 (defun benedict-vui-turn-list--normalize-role (role)
@@ -57,7 +65,7 @@
    (t nil)))
 
 (defun benedict-vui-turn-list--group-turns (messages)
-  "Group MESSAGES into turns, starting a new turn at each user message."
+  "Turn MESSAGES into grouped entries starting at each user message."
   (let (turns current)
     (dolist (message messages)
       (let ((role (benedict-vui-turn-list--normalize-role (plist-get message :role))))
@@ -116,31 +124,33 @@
         (with-selected-window window
           (goto-char (point-max)))))))
 
-(defun benedict-vui-turn-list--render-turn (turn collapsed-blocks)
-  "Return a Vui node for TURN using COLLAPSED-BLOCKS."
+(defun benedict-vui-turn-list--render-turn (turn collapsed-blocks on-toggle-block)
+  "Return a Vui node for TURN using COLLAPSED-BLOCKS and ON-TOGGLE-BLOCK."
   (let* ((messages (if (and (listp turn) (keywordp (car turn)))
                        (list turn)
                      turn))
          (nodes (delq nil
-                      (mapcar (lambda (message)
-                                (vui-component 'benedict-vui-turn :message message
-                                                   :collapsed-blocks collapsed-blocks))
-                              messages))))
+                       (mapcar (lambda (message)
+                                 (vui-component 'benedict-vui-turn :message message
+                                                   :collapsed-blocks collapsed-blocks
+                                                   :on-toggle-block on-toggle-block))
+                               messages))))
     (apply #'vui-vstack nodes)))
 
 (defun benedict-vui-turn-list--render (props)
   "Render the turn list for PROPS."
   (let* ((messages (benedict-vui-turn-list--normalize-messages
                     (plist-get props :conversation)))
-         (turns (benedict-vui-turn-list--group-turns messages))
-         (collapsed-blocks (plist-get props :collapsed-blocks)))
+          (turns (benedict-vui-turn-list--group-turns messages))
+          (collapsed-blocks (plist-get props :collapsed-blocks))
+          (on-toggle-block (plist-get props :on-toggle-block)))
      (vui-use-effect ((benedict-vui-turn-list--scroll-deps messages))
        (benedict-vui-turn-list--scroll-to-bottom)
        nil)
      (vui-list turns
                (lambda (turn &optional index)
                  (benedict-vui-turn-list--render-turn
-                  turn collapsed-blocks))
+                  turn collapsed-blocks on-toggle-block))
                (lambda (turn &optional index)
                  (benedict-vui-turn-list--turn-id turn index)))))
 

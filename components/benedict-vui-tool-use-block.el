@@ -77,12 +77,25 @@
     (vui-text (propertize benedict-vui-tool-use-block--spinner
                           'face 'benedict-chat-tool-running))))
 
-(defun benedict-vui-tool-use-block--header (tool-call status)
-  "Return the tool header node for TOOL-CALL and STATUS."
+(defun benedict-vui-tool-use-block--propertize (content &optional message-key block-id)
+  "Return CONTENT with tool-use text properties applied.
+
+MESSAGE-KEY and BLOCK-ID are stored as text properties when provided."
+  (propertize (benedict-vui-tool-use-block--value-string content)
+              'benedict-region-kind 'tool-ui
+              'benedict-message-key message-key
+              'benedict-block-id block-id))
+
+(defun benedict-vui-tool-use-block--header (tool-call status message-key block-id)
+  "Return the tool header node for TOOL-CALL and STATUS.
+
+MESSAGE-KEY and BLOCK-ID annotate the rendered header."
   (vui-hstack
    (vui-component 'benedict-vui-badge :status (benedict-vui-tool-use-block--normalize-status status))
    (vui-text (propertize (benedict-vui-tool-use-block--header-title tool-call)
-                         'face 'benedict-chat-tool-label))
+                         'face 'benedict-chat-tool-label
+                         'benedict-message-key message-key
+                         'benedict-block-id block-id))
    (benedict-vui-tool-use-block--spinner-node status)))
 
 (defun benedict-vui-tool-use-block--content-text (tool-call)
@@ -91,9 +104,14 @@
     (format "Arguments:\n%s"
             (benedict-vui-tool-use-block--arguments-string arguments))))
 
-(defun benedict-vui-tool-use-block--content (tool-call)
-  "Return the tool call content node for TOOL-CALL."
-  (vui-text (benedict-vui-tool-use-block--content-text tool-call)))
+(defun benedict-vui-tool-use-block--content (tool-call message-key block-id)
+  "Return the tool call content node for TOOL-CALL.
+
+MESSAGE-KEY and BLOCK-ID annotate the rendered content."
+  (vui-text (benedict-vui-tool-use-block--propertize
+             (benedict-vui-tool-use-block--content-text tool-call)
+             message-key
+             block-id)))
 
 (defun benedict-vui-tool-use-block--controlled-p (props)
   "Return non-nil when PROPS includes a :collapsed key."
@@ -108,24 +126,29 @@
 (defun benedict-vui-tool-use-block--collapsible-props (props state toggle-handler)
   "Return collapsible props for PROPS/STATE and TOGGLE-HANDLER."
   (let* ((tool-call (plist-get props :tool-call))
-         (status (plist-get props :status))
-         (collapsed (benedict-vui-tool-use-block--collapsed-p props state)))
+          (status (plist-get props :status))
+          (collapsed (benedict-vui-tool-use-block--collapsed-p props state))
+          (message-key (plist-get props :message-key))
+          (block-id (plist-get props :block-id)))
     (list :collapsed collapsed
           :on-toggle toggle-handler
           :header (lambda ()
-                    (benedict-vui-tool-use-block--header tool-call status))
+                     (benedict-vui-tool-use-block--header tool-call status message-key block-id))
           :content (lambda ()
-                     (benedict-vui-tool-use-block--content tool-call)))))
+                      (benedict-vui-tool-use-block--content tool-call message-key block-id)))))
 
 (defun benedict-vui-tool-use-block--render (props state)
   "Return the rendered tool use block for PROPS/STATE."
   (let* ((controlled (benedict-vui-tool-use-block--controlled-p props))
-         (toggle-handler (vui-use-memo (controlled)
+         (on-toggle (plist-get props :on-toggle))
+         (toggle-handler (vui-use-callback (controlled on-toggle)
                            (lambda (next)
                              (unless controlled
-                               (vui-set-state :collapsed next)))))
-         (collapsible-props (benedict-vui-tool-use-block--collapsible-props
-                             props state toggle-handler)))
+                               (vui-set-state :collapsed next))
+                             (when (functionp on-toggle)
+                               (funcall on-toggle next)))))
+          (collapsible-props (benedict-vui-tool-use-block--collapsible-props
+                              props state toggle-handler)))
     (apply #'benedict-vui-collapsible collapsible-props)))
 
 (vui-defcomponent benedict-vui-tool-use-block (props state)
