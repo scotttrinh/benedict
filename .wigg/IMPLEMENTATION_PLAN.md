@@ -57,7 +57,7 @@
   - Dependencies: CollapsibleBlock, StatusBadge
   - Notes: Compose CollapsibleBlock with thinking-specific header. Props: `:thinking-data`, `:collapsed`.
 
-- [ ] **ToolUseBlock vui component** (refs: 03_ui_ux.md section 1.2)
+- [x] **ToolUseBlock vui component** (refs: 03_ui_ux.md section 1.2)
   - Scope: Render tool invocation with name, args, and status
   - Files: Create `components/benedict-vui-tool-use-block.el`, `test/benedict-vui-tool-use-block-test.el`
   - Tests:
