@@ -75,6 +75,36 @@ Best practices for authoring vui.el components: props/state boundaries, hooks/ef
     (data-view :data (plist-get state :data))))
 ```
 
+### Simple Presentational Component
+
+For components that just render props without state, effects, or lifecycle hooks:
+
+```elisp
+(vui-defcomponent badge (props)
+  "A simple badge that displays a label with a face."
+  :render
+  (let ((label (plist-get props :label))
+        (face (plist-get props :face)))
+    (vui-text label :face face)))
+```
+
+Note: Presentational components should not have local state - they render purely from props. Extract logic into helper functions for easier testing.
+
+## Component Invocation
+
+`vui-defcomponent` registers a component in vui's registry. Components are invoked by name directly, not as function references:
+
+```elisp
+;; Component is registered by vui-defcomponent
+(vui-defcomponent my-badge (props)
+  :render ...)
+
+;; Invoke by name in render expressions
+(vui-vstack
+  (my-badge :label "Status" :face 'bold)
+  (other-component :data some-data))
+```
+
 ## Hook Rules (Critical)
 
 ### Rule 1: Always Call Hooks Unconditionally
@@ -333,6 +363,97 @@ For computed dependencies, use double parentheses:
   :content (lambda () (vui-text "Body content here")))
 ```
 
+## Testing Components
+
+### Component vs Function
+
+**Important**: Components defined with `vui-defcomponent` are NOT functions. Do not use `fboundp` or expect them to be callable as function symbols. Components are registered in vui's component registry and invoked by name.
+
+### Testing Strategies
+
+#### Test Helper Functions Directly
+
+Most components have helper functions for formatting, validation, or prop transformation. Test these directly - they're easier to verify and don't require vui's rendering machinery:
+
+```elisp
+;; In component file
+(defun my-component--format-label (value)
+  "Format VALUE for display."
+  (if value (upcase (symbol-name value)) "UNKNOWN"))
+
+;; In test file
+(ert-deftest my-component-format-label ()
+  "Label formatting handles various inputs."
+  (should (equal (my-component--format-label 'user) "USER"))
+  (should (equal (my-component--format-label nil) "UNKNOWN")))
+```
+
+#### Simple Presentational Components
+
+For pure presentational components (no state, no effects), helper tests are usually sufficient. You don't need to test that the component can be rendered - vui handles that:
+
+```elisp
+;; Component
+(vui-defcomponent status-badge (props)
+  :render
+  (vui-text (status-badge--label (plist-get props :status))
+            :face (status-badge--face (plist-get props :status))))
+
+;; Test only the helpers - no need to test component rendering
+(ert-deftest status-badge-labels ()
+  "Badge labels are correct for known statuses."
+  (should (equal (status-badge--label 'success) "SUCCESS")))
+```
+
+#### Complex Components with State
+
+For components with state or effects, test the behavior by:
+1. Testing helper functions directly
+2. Testing state transitions (if state logic is complex)
+3. Optionally testing vnode structure after rendering (advanced)
+
+```elisp
+;; Test state transition logic if complex
+(ert-deftest my-component-state-updates ()
+  "State updates follow expected patterns."
+  (let ((state (list :count 0)))
+    (should (equal (my-component--update-count state #'1+) '(:count 1)))))
+```
+
+### What NOT to Test
+
+- Do NOT use `fboundp` to check if a component exists
+- Do NOT try to call components as functions
+- Do NOT test vui's internal rendering logic (that's vui's responsibility)
+- Do NOT over-test - focus on your component's specific behavior
+
+### Test File Structure
+
+```elisp
+;;; my-component-test.el --- Tests for My Component -*- lexical-binding: t; -*-
+
+;;; Commentary:
+;; Tests for the My Component.
+
+;;; Code:
+
+(require 'ert)
+(require 'my-component)
+
+;; Helper function tests
+(ert-deftest my-component-helper-does-thing ()
+  "Helper function behavior is correct."
+  (should (equal (my-component--helper "input") "expected-output")))
+
+;; Component-specific behavior tests
+(ert-deftest my-component-handles-edge-case ()
+  "Component handles edge cases correctly."
+  (should (equal (my-component--format-value nil) "fallback")))
+
+(provide 'test/my-component-test)
+;;; my-component-test.el ends here
+```
+
 ## Common Pitfalls
 
 | Pitfall | Symptom | Fix |
@@ -345,6 +466,7 @@ For computed dependencies, use double parentheses:
 | Missing keys | List items lose state on reorder | Use stable IDs from data |
 | Direct mutation | UI doesn't update | Create new data structures |
 | No async context | State updates fail silently | Use `vui-with-async-context` |
+| Testing components with `fboundp` | Tests fail - components aren't functions | Test helper functions directly; components are invoked by name in render expressions |
 
 ## Debugging
 
@@ -381,3 +503,6 @@ Before completing a component, verify:
 - [ ] Async callbacks use `vui-async-callback` or `vui-with-async-context`
 - [ ] Multiple state updates are wrapped in `vui-batch`
 - [ ] Hooks are never called conditionally or in loops
+- [ ] Tests cover helper functions (formatting, validation, prop transformation)
+- [ ] Simple presentational components use only helper function tests
+- [ ] No tests use `fboundp` on component names (components aren't functions)
