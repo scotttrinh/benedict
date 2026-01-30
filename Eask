@@ -12,7 +12,6 @@
 (depends-on "s")
 (depends-on "lgr")
 (depends-on "markdown-mode")
-(depends-on "magit-section")
 (depends-on "svg-lib")
 (depends-on "vui")
 

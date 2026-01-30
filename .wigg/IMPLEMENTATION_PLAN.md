@@ -241,7 +241,7 @@
    - Dependencies: BenedictRoot, existing session event system
    - Notes: Use `vui-use-effect` for session subscription. Return cleanup function.
 
-- [ ] **Use vui.el rendering in chat buffer** (refs: 03_ui_ux.md)
+- [x] **Use vui.el rendering in chat buffer** (refs: 03_ui_ux.md)
   - Scope: Switch chat buffer to use BenedictRoot instead of magit-section
   - Files: Modify `benedict-chat.el`, remove `benedict-chat-render.el`, `benedict-chat-sections.el`
   - Tests:
@@ -250,7 +250,7 @@
     - Navigation commands work
     - Context capture works
   - Dependencies: All vui components, BenedictRoot wired to session
-  - Notes: Keep magit-section requires temporarily for gradual migration. Remove after verification.
+  - Notes: VUI render path is active; magit-section renderers removed. Follow-up tasks below address remaining issues.
 
   **Current checkpoint (WIP commit 6a312c2):**
   - Accomplished:
@@ -270,3 +270,39 @@
     - Confirm intended VUI API for component composition vs helper functions (what should/shouldn't use `vui-component`).
     - Identify any remaining call sites that still assume magit sections (e.g., tool UI, thinking UI, stream handlers).
     - Clarify how to map message navigation to buffer positions with VUI rendering (search-based vs VUI scroll APIs).
+
+### Follow-up Tasks - Post VUI Render Switch
+
+- [x] **Remove leftover magit-section dependencies**
+  - Scope: Strip legacy requires and render helpers that reference deleted magit-section files
+  - Files: `benedict-chat-blocks.el`, `benedict-chat-thinking.el`, `benedict-chat-tool-ui.el`, `benedict-chat.el`
+  - Tests:
+    - Loads without requiring deleted files
+    - No void-function errors from removed helpers
+  - Notes: Decide whether to delete `benedict-chat-blocks.el` or reduce to state helpers.
+
+- [ ] **Stabilize chat/session tests under VUI rendering**
+  - Scope: Update tests to align with `vui-component` dispatch and session wiring
+  - Files: `test/benedict-chat-integration-test.el`, `test/benedict-chat-session-test.el`, `test/benedict-chat-logic-test.el`, component tests
+  - Tests:
+    - Fix `wrong-type-argument benedict-session t`
+    - Fix `number-or-marker-p nil` failures in mount/render
+    - Fix mocks that bypass `vui-component`
+  - Notes: Prefer vnode assertions over function mocks for component composition.
+
+- [ ] **Restore feature parity for folding, tool UI, and navigation**
+  - Scope: Replace magit-section behaviors with VUI state and interactions
+  - Files: `benedict-vui-root.el`, `benedict-chat-nav.el`, `components/benedict-vui-*-block.el`
+  - Tests:
+    - Folding toggles update `:collapsed-blocks`
+    - Tool actions remain reachable via VUI controls
+    - Navigation uses reliable buffer mapping
+  - Notes: Avoid search-only navigation if VUI offers ids or text properties.
+
+- [ ] **Investigate remaining unknowns from the migration**
+  - Scope: Resolve API expectations and any remaining magit-section assumptions
+  - Files: `benedict-chat.el`, `benedict-chat-nav.el`, `components/` and any remaining legacy helpers
+  - Tests:
+    - Confirm intended VUI component composition pattern
+    - Identify any remaining call sites that assume magit sections
+    - Decide navigation strategy (search vs VUI scroll APIs)

@@ -11,11 +11,9 @@
 (require 'benedict-session)
 (require 'benedict-chat-profiles)
 
-(declare-function benedict-chat--refresh-message-header "benedict-chat" (item))
 (declare-function benedict-chat-flywire-active-p "benedict-chat" ())
 
 (defvar benedict-chat--session)
-(defvar benedict-chat--streaming-message)
 (defvar benedict-chat--status-spinner-index)
 (defvar benedict-chat--status-timer)
 (defvar benedict-chat--compose-model-override)
@@ -92,10 +90,6 @@ Values:
           (progn
             (setq benedict-chat--status-spinner-index
                   (1+ benedict-chat--status-spinner-index))
-            (when-let* ((state benedict-chat--streaming-message)
-                        (message (plist-get state :message))
-                        (item (plist-get message :item)))
-              (benedict-chat--refresh-message-header item))
             (benedict-chat-status--status-refresh))
         (benedict-chat-status--status-stop-timer)))))
 

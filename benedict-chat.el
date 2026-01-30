@@ -101,20 +101,6 @@ No effect on terminals or when fringes are unavailable."
   :type 'boolean
   :group 'benedict-chat)
 
-;;; Section Classes and UI Helpers
-
-(defvar-local benedict-chat--conversation-section nil
-  "Conversation root section for the current chat buffer.
-
-All UI sections are inserted under this stable parent to avoid ad-hoc
-root sections when streaming inserts append later.")
-
-(defvar-local benedict-chat--current-turn-section nil
-  "Most recent turn section in the current chat buffer.
-
-Turn sections group user and assistant blocks for stable navigation and
-folding semantics in the UI renderer.")
-
 ;;;###autoload
 (define-derived-mode benedict-chat-mode vui-mode "Benedict-Chat"
   "Major mode for Benedict chat buffers."
@@ -122,21 +108,6 @@ folding semantics in the UI renderer.")
 
 (defvar-local benedict-chat--buffer nil
   "Stable reference to the chat buffer.")
-
-(defvar-local benedict-chat--items nil
-  "Ordered list of rendered chat items (oldest first).")
-
-(defvar-local benedict-chat--item-counter 0
-  "Monotonic counter used to generate unique item identifiers.")
-
-(defvar-local benedict-chat--thinking-items nil
-  "Hash table mapping reasoning/think identifiers to chat items.")
-
-(defvar-local benedict-chat--streaming-message nil
-  "Plist describing the in-progress streaming assistant message.")
-
-(defvar-local benedict-chat--thinking-temp-counter 0
-  "Per-request counter for synthesizing thinking identifiers when absent.")
 
 (defvar benedict-chat-buffer-name "*Benedict Chat*"
   "Default chat buffer name.")
@@ -346,36 +317,6 @@ Returns the session or nil if agent frame is disabled."
   (message "Benedict provider set to %s" (or (benedict-provider-display-name (cdr (assoc choice candidates)))
                                             (symbol-name (cdr (assoc choice candidates)))))))
 
-;; -------------------------------------------------------------------
-;; Internal helpers for block items
-
-(defun benedict-chat--next-item-id ()
-  "Return a fresh identifier for chat items."
-  (setq benedict-chat--item-counter (1+ benedict-chat--item-counter)))
-
-(defun benedict-chat--make-item (kind &rest properties)
-  "Create a new chat item plist of KIND with PROPERTIES."
-  (let ((item (list :id (benedict-chat--next-item-id)
-                    :kind kind
-                    :section nil)))
-    (while properties
-      (let ((key (pop properties))
-            (value (pop properties)))
-        (setq item (plist-put item key value))))
-    item))
-
-(defun benedict-chat--ensure-message-kind (message)
-  "Ensure MESSAGE plist carries a :kind field (defaults to `message')."
-  (cond
-   ((null message) nil)
-   ((plist-member message :kind) message)
-   (t (plist-put message :kind 'message))))
-
-(defun benedict-chat--track-item (item)
-  "Append ITEM to `benedict-chat--items' maintaining chronological order."
-  (setq benedict-chat--items (append benedict-chat--items (list item)))
-  item)
-
 (defun benedict-chat-choose-model ()
   "Prompt for a model override scoped to the current chat compose buffer."
   (interactive)
@@ -401,125 +342,6 @@ Returns the session or nil if agent frame is disabled."
     (if (string-empty-p selection)
         (message "Benedict: cleared compose model override")
       (message "Benedict: model override set to %s" selection))))
-
-;; -------------------------------------------------------------------
-;; Message Rendering
-
-(defun benedict-chat--refresh-message-header (item)
-  "Refresh ITEM's header text based on current message metadata."
-  (when-let ((message (plist-get item :message)))
-    (let ((in-flight (and (benedict-chat-status--status-active-p)
-                          benedict-chat--streaming-message
-                          (eq (plist-get benedict-chat--streaming-message :message) message))))
-      (save-excursion
-        (benedict-chat--update-message-header
-         item
-         (benedict-chat-render--message-header-string message nil)))
-      (when-let ((end (plist-get item :content-end)))
-        (when (markerp end)
-          (goto-char (marker-position end)))))))
-
-(defun benedict-chat--replace-message-content (buffer message content)
-  "Replace MESSAGE content in BUFFER with CONTENT."
-  (with-current-buffer buffer
-    (when-let ((item (plist-get message :item)))
-      (benedict-chat-render--set-item-content item content 'body))))
-
-(defvar-local benedict-chat--has-rendered-block nil
-  "Non-nil once a message/tool block has been rendered in this chat buffer.")
-
-(defun benedict-chat--maybe-insert-item-gap (buffer &optional pos)
-  "Insert a blank line in BUFFER before rendering the next chat block at POS.
-
-This keeps message/tool blocks visually separated while remaining compatible
-with marker-backed streaming inserts."
-  (with-current-buffer buffer
-    (when benedict-chat--has-rendered-block
-      (let ((inhibit-read-only t))
-        (goto-char (or pos (point-max)))
-        ;; Ensure the conversation root's end marker advances when we insert the gap
-        (when-let ((root benedict-chat--conversation-section))
-          (when-let ((root-end (ignore-errors (oref root end))))
-            (when (markerp root-end)
-              (set-marker-insertion-type root-end t))))
-        (let* ((end (point))
-               (start (save-excursion
-                        (skip-chars-backward "\n")
-                        (point)))
-               (trailing-newlines (- end start))
-               (needed (max 0 (- 2 trailing-newlines))))
-          (when (> needed 0)
-            (insert (propertize (make-string needed ?\n) 'benedict-region-kind 'header))))))))
-
-(defun benedict-chat--metadata (&rest pairs)
-  "Build a metadata plist from PAIRS ignoring nil values."
-  (let (metadata)
-    (while pairs
-      (let ((key (pop pairs))
-            (value (pop pairs)))
-        (when value
-          (setq metadata (plist-put metadata key value)))))
-    metadata))
-
-(defun benedict-chat--record-message (buffer message)
-  "Persist MESSAGE in session and render it in BUFFER.
-For user messages, adds to session (observer renders via message-added event).
-For assistant messages during streaming, renders directly (streaming UI)."
-  (with-current-buffer buffer
-    (setq message (benedict-chat--ensure-message-kind message))
-    (let ((role (plist-get message :role))
-          (streaming-p (and benedict-chat--session
-                            (eq (benedict-session-state benedict-chat--session) 'streaming)))
-          (added-to-session nil))
-      ;; For user messages (and non-streaming assistant), add to session.
-      ;; The session-event observer will render them.
-      (when benedict-chat--session
-        (unless (and (memq role '(assistant Assistant)) streaming-p)
-          (benedict-session-add-message benedict-chat--session message)
-          (setq added-to-session t)))
-      ;; For streaming assistant messages, render directly here.
-      ;; These are not added to session (draft handles it).
-      (unless added-to-session
-        (benedict-chat--render-message buffer message))))
-  message)
-
-(defun benedict-chat--render-message (buffer message)
-  "Render MESSAGE into BUFFER.
-Assistant messages are rendered as marker-backed items."
-  (with-current-buffer buffer
-    (setq message (benedict-chat--ensure-message-kind message))
-    (let* ((role (benedict-chat-render--normalize-role (plist-get message :role)))
-           (metadata (plist-get message :metadata))
-           (content (or (plist-get message :display-content)
-                        (plist-get message :content)
-                        ""))
-           (inhibit-read-only t))
-      (goto-char (point-max))
-      (benedict-chat--maybe-insert-item-gap buffer)
-      (pcase role
-        ('assistant
-         (let* ((item (benedict-chat--make-item
-                       'message
-                       :role role
-                       :metadata metadata
-                       :message message)))
-           (plist-put message :item item)
-           (benedict-chat--track-item item)
-           (benedict-chat-sections--with item
-             (benedict-chat--render-message-item
-              buffer
-              item
-              (benedict-chat-render--message-header-string message nil)
-              content))
-           (setq benedict-chat--has-rendered-block t)
-           item))
-        (_
-         (when (eq role 'user)
-           (benedict-chat-sections--begin-turn))
-         (benedict-chat-sections--with message
-           (benedict-chat--insert-message message))
-         (setq benedict-chat--has-rendered-block t)
-         nil)))))
 
 (defun benedict-chat--configure-session ()
   "Configure the session with current buffer settings."
@@ -607,8 +429,6 @@ When SKIP-CONTEXT is non-nil, do not append context slices."
           (user-error "No session attached"))
         (when (benedict-session-busy-p session)
           (user-error "A provider request is already in flight"))
-        ;; Reset UI state
-        (setq benedict-chat--thinking-temp-counter 0)
         ;; Add user message to session
         (let* ((final (if (and benedict-chat--context-slices (not skip-context))
                           (benedict-chat-compose--assemble-message-text
@@ -740,41 +560,6 @@ Returns a function suitable for adding to `benedict-session-event-hook'."
     ;; is relevant to the view. The view tracks session state directly.
     inflight))
 
-(defun benedict-chat--draft-payload (session)
-  "Return a payload plist for rendering SESSION's draft."
-  (list :provider (benedict-session-provider session)
-        :model (benedict-session-model session)))
-
-(defun benedict-chat--apply-draft-snapshot (session draft)
-  "Render DRAFT snapshot for SESSION into the current buffer."
-  (let ((payload (benedict-chat--draft-payload session)))
-    (benedict-chat-stream--reset (current-buffer))
-    (benedict-chat-stream--ensure-message (current-buffer) payload)
-    (let ((content (or (plist-get draft :content) "")))
-      (unless (string-empty-p content)
-        (benedict-chat-stream--append-text (current-buffer) payload content)))))
-
-(defun benedict-chat--finalize-streaming-from-message (buffer message)
-  "Finalize streaming state in BUFFER using MESSAGE data."
-  (with-current-buffer buffer
-    (when-let ((state benedict-chat--streaming-message)
-               (record (plist-get state :message)))
-      (let* ((content (or (plist-get message :content) ""))
-             (display (or (plist-get message :display-content) content))
-             (metadata (plist-get message :metadata)))
-        (plist-put record :content content)
-        (plist-put record :display-content (plist-get message :display-content))
-        (plist-put record :metadata metadata)
-        (when (plist-member message :tool-calls)
-          (plist-put record :tool-calls (plist-get message :tool-calls)))
-        (when (plist-member message :time)
-          (plist-put record :time (plist-get message :time)))
-        (benedict-chat--replace-message-content buffer record display)
-        (when-let ((item (plist-get record :item)))
-          (plist-put item :metadata metadata)
-          (benedict-chat--refresh-message-header item)))
-      (benedict-chat-stream--reset buffer))))
-
 (defun benedict-chat--observe-state-changed (old-state new-state)
   "Handle session state transition from OLD-STATE to NEW-STATE."
   (pcase new-state
@@ -792,47 +577,6 @@ Returns a function suitable for adding to `benedict-session-event-hook'."
      (benedict-chat-status--status-stop-timer)))
   ;; Refresh header line
   (force-mode-line-update))
-
-(defun benedict-chat--observe-message-added (message)
-  "Handle new MESSAGE added to session.
-Renders the message unless it's the finalization of a streaming response
-that was already rendered by the direct buffer handlers."
-  (let ((msg-role (plist-get message :role)))
-    (cond
-     ;; If we have a streaming placeholder, finalize it from the session message.
-     ((and (memq msg-role '(assistant Assistant))
-           benedict-chat--streaming-message)
-      (benedict-chat--finalize-streaming-from-message (current-buffer) message))
-     (t
-      (benedict-chat--render-message (current-buffer) message)))))
-
-(defun benedict-chat--observe-draft-started ()
-  "Handle streaming draft started."
-  (when-let ((session benedict-chat--session)
-             (draft (benedict-session-draft session)))
-    (benedict-chat--apply-draft-snapshot session draft)))
-
-(defun benedict-chat--observe-draft-updated (payload)
-  "Handle draft update with PAYLOAD (:delta or :tool-call)."
-  (when-let ((session benedict-chat--session))
-    (when-let ((data (plist-get payload :payload)))
-      (let ((stream-payload (benedict-chat--draft-payload session)))
-        (benedict-chat-stream--handle-provider-delta
-         (current-buffer)
-         (append stream-payload data))))
-    (when-let ((delta (plist-get payload :delta)))
-      (let ((stream-payload (benedict-chat--draft-payload session)))
-        (benedict-chat-stream--handle-provider-delta
-         (current-buffer)
-         (append stream-payload (list :kind 'content-delta :text delta)))))
-    (when (plist-get payload :tool-call)
-      ;; Tool-call streaming UI is handled on finalization.
-      nil)))
-
-(defun benedict-chat--observe-draft-finalized (payload)
-  "Handle draft finalized (PAYLOAD may have :discarded t)."
-  (when (plist-get payload :discarded)
-    (benedict-chat-stream--reset (current-buffer))))
 
 (defun benedict-chat--observe-request-completed (payload)
   "Handle request completion using PAYLOAD."
@@ -859,11 +603,6 @@ The session persists independently and can be reattached later."
 When SESSION is non-nil, attach to it instead of creating a new one."
   (setq benedict-session-tool-invoke-fn #'benedict-tool-invoke)
   (setq-local benedict-chat--buffer (current-buffer))
-  (setq-local benedict-chat--items nil)
-  (setq-local benedict-chat--item-counter 0)
-  (setq-local benedict-chat--has-rendered-block nil)
-  (setq-local benedict-chat--thinking-items (make-hash-table :test 'equal))
-  (setq-local benedict-chat--thinking-temp-counter 0)
   (setq-local benedict-chat--context-slices nil)
   (setq-local benedict-chat--compose-buffer nil)
   (setq-local benedict-chat--provider-override nil)
