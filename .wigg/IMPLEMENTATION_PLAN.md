@@ -4,7 +4,7 @@
 
 ### vui.el Migration - Leaf Components
 
-- [ ] **TextBlock vui component** (refs: 03_ui_ux.md section 3.2)
+- [x] **TextBlock vui component** (refs: 03_ui_ux.md section 3.2)
   - Scope: Render plain text content with markdown fontification support
   - Files: Create `components/benedict-vui-text-block.el`, `test/benedict-vui-text-block-test.el`
   - Tests:
@@ -345,37 +345,3 @@
     - Edit opens buffer for manual modification
   - Dependencies: None (can use `diff-mode` faces)
   - Notes: Use `diff-no-select` to generate diff. Display in approval prompt.
-
----
-
-## Completed
-
-- [x] Session management core (`benedict-session.el` - 767 lines)
-- [x] Session state machine (idle/streaming/running/checkpoint/error/cancelled)
-- [x] Message history with chronological ordering
-- [x] Draft/streaming accumulator system
-- [x] Tool execution framework
-- [x] Agent loop with turn/time/token limits
-- [x] Repetition guard for stuck agents
-- [x] Telemetry accumulation (tokens, cost, time)
-- [x] Event system with hooks
-- [x] Frontend (buffer) attachment
-- [x] Provider registry and dispatch
-- [x] OpenRouter provider with streaming/SSE
-- [x] Gemini provider with OAuth support
-- [x] Ollama provider for local models
-- [x] Vercel provider
-- [x] Fake provider for testing
-- [x] Credentials system (auth-source, env vars, file)
-- [x] HTTP client with SSE support
-- [x] Tool registry with schema encoding
-- [x] Built-in tools (read-file, write, edit, find-files, project-search, exec-elisp)
-- [x] Tool approval policies (auto/confirm/always)
-- [x] Chat buffer with magit-section rendering (to be replaced by vui.el)
-- [x] Streaming text display with markers (to be replaced by vui.el)
-- [x] Collapsible blocks for thinking/tools (to be replaced by vui.el)
-- [x] Context capture commands (region, defun, buffer, project, git)
-- [x] Profile system for configuration presets
-- [x] Compose buffer for multi-line input
-- [x] Flywire integration for tool isolation
-- [x] Comprehensive test suite (672+ lines session tests, 400+ tool tests)
