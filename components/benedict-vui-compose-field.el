@@ -10,20 +10,28 @@
 (require 'vui)
 (require 'benedict)
 
-(defcustom benedict-vui-compose-field-submit-key "C-c C-c"
-  "Key sequence for submitting composed text."
-  :type 'string
-  :group 'benedict)
+(defvar-local benedict-vui-compose-field--field-key nil
+  "The field key for accessing compose field value.")
 
-(defcustom benedict-vui-compose-field-history-prev-key "M-p"
-  "Key sequence for navigating to previous history item."
-  :type 'string
-  :group 'benedict)
+(defvar-local benedict-vui-compose-field--on-submit nil
+  "Callback for submit action.")
 
-(defcustom benedict-vui-compose-field-history-next-key "M-n"
-  "Key sequence for navigating to next history item."
-  :type 'string
-  :group 'benedict)
+(defvar-local benedict-vui-compose-field--on-change nil
+  "Callback for value changes.")
+
+(defvar-local benedict-vui-compose-field--history nil
+  "History list for navigation.")
+
+(defvar-local benedict-vui-compose-field--history-index -1
+  "Current history position.")
+
+(defvar benedict-vui-compose-field-mode-map
+  (let ((map (make-sparse-keymap)))
+    (define-key map (kbd "C-c C-c") #'benedict-vui-compose-field-submit)
+    (define-key map (kbd "M-p") #'benedict-vui-compose-field-history-prev)
+    (define-key map (kbd "M-n") #'benedict-vui-compose-field-history-next)
+    map)
+  "Keymap for compose field interactions.")
 
 (defun benedict-vui-compose-field--handle-change (value on-change)
   "Handle field VALUE change, calling ON-CHANGE."
@@ -54,9 +62,38 @@ Calls ON-CHANGE with selected history item."
                          -1))))
          (history-value (when (and (>= new-index 0) (> history-len 0))
                           (nth new-index history))))
-    (when (and history-value (not (= new-index history-index)))
+    (when (and history-value (not (= new-index history-index))
+               on-change)
       (funcall on-change history-value))
     new-index))
+
+(defun benedict-vui-compose-field-submit ()
+  "Submit current compose field value."
+  (interactive)
+  (when (and benedict-vui-compose-field--on-submit
+             benedict-vui-compose-field--field-key)
+    (let ((value (vui-field-value benedict-vui-compose-field--field-key)))
+      (funcall benedict-vui-compose-field--on-submit value))))
+
+(defun benedict-vui-compose-field-history-prev ()
+  "Navigate to previous history item."
+  (interactive)
+  (when benedict-vui-compose-field--history
+    (let* ((current-index benedict-vui-compose-field--history-index)
+           (new-index (benedict-vui-compose-field--navigate-history
+                      :prev current-index benedict-vui-compose-field--history
+                      benedict-vui-compose-field--on-change)))
+      (setq benedict-vui-compose-field--history-index new-index))))
+
+(defun benedict-vui-compose-field-history-next ()
+  "Navigate to next history item."
+  (interactive)
+  (when benedict-vui-compose-field--history
+    (let* ((current-index benedict-vui-compose-field--history-index)
+           (new-index (benedict-vui-compose-field--navigate-history
+                      :next current-index benedict-vui-compose-field--history
+                      benedict-vui-compose-field--on-change)))
+      (setq benedict-vui-compose-field--history-index new-index))))
 
 (vui-defcomponent benedict-vui-compose-field (props state)
   :state ((history-index -1))
@@ -68,36 +105,21 @@ Calls ON-CHANGE with selected history item."
          (placeholder (plist-get props :placeholder))
          (size (plist-get props :size))
          (field-key (plist-get props :key))
-         (current-history-index (plist-get state :history-index))
-         (history-len (length history))
-         (submit-key benedict-vui-compose-field-submit-key)
-         (history-prev-key benedict-vui-compose-field-history-prev-key)
-         (history-next-key benedict-vui-compose-field-history-next-key))
-    (vui-use-effect (history)
+         (current-history-index (plist-get state :history-index)))
+    (vui-use-effect ((list on-submit on-change history field-key))
+      (setq benedict-vui-compose-field--field-key field-key)
+      (setq benedict-vui-compose-field--on-submit on-submit)
+      (setq benedict-vui-compose-field--on-change on-change)
+      (setq benedict-vui-compose-field--history history)
       (lambda ()
-        (let ((map (make-sparse-keymap)))
-          (define-key map (kbd submit-key)
-            (lambda ()
-              (interactive)
-              (let ((current-value (or (and field-key (vui-field-value field-key))
-                                       value)))
-                (benedict-vui-compose-field--handle-submit current-value on-submit))))
-          (when history
-            (define-key map (kbd history-prev-key)
-              (lambda ()
-                (interactive)
-                (let ((new-index (benedict-vui-compose-field--navigate-history
-                                  :prev current-history-index history on-change)))
-                  (vui-set-state :history-index new-index))))
-            (define-key map (kbd history-next-key)
-              (lambda ()
-                (interactive)
-                (let ((new-index (benedict-vui-compose-field--navigate-history
-                                  :next current-history-index history on-change)))
-                  (vui-set-state :history-index new-index)))))
-          (use-local-map map)))
+        (setq benedict-vui-compose-field--field-key nil)
+        (setq benedict-vui-compose-field--on-submit nil)
+        (setq benedict-vui-compose-field--on-change nil)
+        (setq benedict-vui-compose-field--history nil)))
+    (vui-use-effect (current-history-index)
+      (setq benedict-vui-compose-field--history-index current-history-index)
       (lambda ()
-        (use-local-map nil)))
+        (setq benedict-vui-compose-field--history-index -1)))
     (vui-field
      :value (or value "")
      :size (or size 80)
