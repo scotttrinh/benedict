@@ -177,7 +177,7 @@
 
 ### vui.el Migration - Header & Status
 
-- [ ] **ProviderBadge vui component** (refs: 03_ui_ux.md section 1.2)
+- [x] **ProviderBadge vui component** (refs: 03_ui_ux.md section 1.2)
   - Scope: Clickable provider/model selector in header
   - Files: Create `components/benedict-vui-provider-badge.el`, `test/benedict-vui-provider-badge-test.el`
   - Tests:
