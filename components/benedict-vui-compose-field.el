@@ -46,7 +46,7 @@
   t)
 
 (defun benedict-vui-compose-field--navigate-history (direction history-index history on-change)
-  "Navigate in DIRECTION (:prev or :next) through HISTORY.
+  "Navigate in DIRECTION (:prev or :next) through HISTORY from HISTORY-INDEX.
 Calls ON-CHANGE with selected history item."
   (let* ((history-len (length history))
          (new-index (pcase direction

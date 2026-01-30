@@ -144,21 +144,22 @@
    - Dependencies: StatusBadge
    - Notes: Props: `:slices`, `:on-remove`.
 
- - [x] **ComposeField vui component** (refs: 03_ui_ux.md section 1.2)
-   - Scope: Controlled text input for composing messages
-   - Files: Create `components/benedict-vui-compose-field.el`, `test/benedict-vui-compose-field-test.el`
-   - Tests:
-     - Controlled input via `:value` and `:on-change`
-     - Submit on configured key (via parent keymap)
-     - History navigation with M-p/M-n (via parent keymap)
-     - Multiline support
-   - Dependencies: None
-   - Notes:
-     - Local state: `:history-index` for tracking history position
-     - Props: `:value`, `:on-change`, `:on-submit`, `:placeholder`, `:key` (for vui-field-value)
-     - **Pattern**: Define `benedict-vui-compose-field-mode-map` variable with keybindings to interactive commands
-     - Component renders only - no keymap setup in render
-     - Parent buffer (e.g., BenedictRoot or InputArea) sets up keymaps during initialization
+  - [x] **ComposeField vui component** (refs: 03_ui_ux.md section 1.2)
+    - Scope: Controlled text input for composing messages
+    - Files: Create `components/benedict-vui-compose-field.el`, `test/benedict-vui-compose-field-test.el`
+    - Tests:
+      - Controlled input via `:value` and `:on-change`
+      - Submit on configured key (via parent keymap)
+      - History navigation with M-p/M-n (via parent keymap)
+      - Multiline support
+    - Dependencies: None
+    - Notes:
+      - Local state: `:history-index` for tracking history position
+      - Props: `:value`, `:on-change`, `:on-submit`, `:placeholder`, `:key` (for vui-field-value)
+      - Pattern: Define `benedict-vui-compose-field-mode-map` variable with keybindings to interactive commands
+      - Component renders only - uses dynamic variables for callbacks/state
+      - Parent buffer (e.g., BenedictRoot or InputArea) sets up keymaps during initialization
+      - All 9 tests pass
 
  - [ ] **InputArea vui component** (refs: 03_ui_ux.md section 1.2)
    - Scope: Compose area with context indicators and input field
