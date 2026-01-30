@@ -25,7 +25,7 @@
   - Dependencies: TextBlock (for fallback)
   - Notes: Use `vui-use-memo` for expensive fontification. Local state: `:copied-feedback`.
 
-- [ ] **StatusBadge vui component** (refs: 03_ui_ux.md section 3.2)
+- [x] **StatusBadge vui component** (refs: 03_ui_ux.md section 3.2)
   - Scope: Render role/status badges (USER, ASSISTANT, streaming, error, etc.)
   - Files: Create `components/benedict-vui-badge.el`, `test/benedict-vui-badge-test.el`
   - Tests:
