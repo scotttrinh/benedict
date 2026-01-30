@@ -220,15 +220,15 @@
    - Dependencies: TurnList, StreamingIndicator
    - Notes: Props: `:conversation`, `:streaming`, `:collapsed-blocks`.
 
-- [ ] **BenedictRoot vui component** (refs: 03_ui_ux.md section 1.2, 2.1)
-  - Scope: Root component owning all shared application state
-  - Files: Create `components/benedict-vui-root.el`, `test/benedict-vui-root-test.el`
-  - Tests:
-    - State structure matches spec (:conversation, :streaming, :provider, :model, :collapsed-blocks, :error)
-    - State updates propagate to children
-    - Event handlers wire correctly to session
-  - Dependencies: ChatHeader, ConversationView, InputArea, StatusBar
-  - Notes: This is the integration point. Wire to `benedict-session` events.
+ - [x] **BenedictRoot vui component** (refs: 03_ui_ux.md section 1.2, 2.1)
+   - Scope: Root component owning all shared application state
+   - Files: Create `components/benedict-vui-root.el`, `test/benedict-vui-root-test.el`
+   - Tests:
+     - State structure matches spec (:conversation, :streaming, :provider, :model, :collapsed-blocks, :error)
+     - State updates propagate to children
+     - Event handlers wire correctly to session
+   - Dependencies: ChatHeader, ConversationView, InputArea, StatusBar
+   - Notes: This is the integration point. Wire to `benedict-session` events.
 
 - [ ] **Wire BenedictRoot to benedict-session events** (refs: 03_ui_ux.md, 02_architecture.md)
   - Scope: Connect vui state updates to session event system
