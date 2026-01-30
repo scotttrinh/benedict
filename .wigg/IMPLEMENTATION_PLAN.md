@@ -81,7 +81,7 @@
 
 ### vui.el Migration - Container Components
 
-- [ ] **TurnHeader vui component** (refs: 03_ui_ux.md section 1.2)
+- [x] **TurnHeader vui component** (refs: 03_ui_ux.md section 1.2)
   - Scope: Render turn header with role badge and timestamp
   - Files: Create `components/benedict-vui-turn-header.el`, `test/benedict-vui-turn-header-test.el`
   - Tests:
