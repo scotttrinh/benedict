@@ -210,15 +210,15 @@
 
 ### vui.el Migration - Root & Integration
 
-- [ ] **ConversationView vui component** (refs: 03_ui_ux.md section 1.2)
-  - Scope: Main conversation area containing TurnList and StreamingIndicator
-  - Files: Create `components/benedict-vui-conversation-view.el`, `test/benedict-vui-conversation-view-test.el`
-  - Tests:
-    - Renders TurnList with conversation
-    - Shows StreamingIndicator during streaming
-    - Scroll behavior on new content
-  - Dependencies: TurnList, StreamingIndicator
-  - Notes: Props: `:conversation`, `:streaming`, `:collapsed-blocks`.
+ - [x] **ConversationView vui component** (refs: 03_ui_ux.md section 1.2)
+   - Scope: Main conversation area containing TurnList and StreamingIndicator
+   - Files: Create `components/benedict-vui-conversation-view.el`, `test/benedict-vui-conversation-view-test.el`
+   - Tests:
+     - Renders TurnList with conversation
+     - Shows StreamingIndicator during streaming
+     - Scroll behavior on new content
+   - Dependencies: TurnList, StreamingIndicator
+   - Notes: Props: `:conversation`, `:streaming`, `:collapsed-blocks`.
 
 - [ ] **BenedictRoot vui component** (refs: 03_ui_ux.md section 1.2, 2.1)
   - Scope: Root component owning all shared application state
