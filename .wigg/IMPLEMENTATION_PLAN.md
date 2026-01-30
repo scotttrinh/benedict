@@ -161,18 +161,19 @@
       - Parent buffer (e.g., BenedictRoot or InputArea) sets up keymaps during initialization
       - All 9 tests pass
 
- - [ ] **InputArea vui component** (refs: 03_ui_ux.md section 1.2)
-   - Scope: Compose area with context indicators and input field
-   - Files: Create `components/benedict-vui-input-area.el`, `test/benedict-vui-input-area-test.el`
-   - Tests:
-     - Composes ContextIndicator and ComposeField
-     - Passes callbacks correctly
-     - Handles empty state
-   - Dependencies: ContextIndicator, ComposeField
-   - Notes:
-     - Props: `:slices`, `:input-text`, `:on-input-change`, `:on-submit`, `:on-slice-remove`
-     - Sets up keymaps using `benedict-vui-compose-field-mode-map` during buffer initialization
-     - Keybindings composed with parent mode map (not set by child components)
+ - [x] **InputArea vui component** (refs: 03_ui_ux.md section 1.2)
+    - Scope: Compose area with context indicators and input field
+    - Files: Create `components/benedict-vui-input-area.el`, `test/benedict-vui-input-area-test.el`
+    - Tests:
+      - Component can be loaded successfully
+      - Composes ContextIndicator and ComposeField
+      - Passes callbacks correctly
+      - Handles empty state
+    - Dependencies: ContextIndicator, ComposeField
+    - Notes:
+      - Props: `:slices`, `:input-text`, `:on-input-change`, `:on-submit`, `:on-slice-remove`, `:placeholder`, `:size`, `:field-key`
+      - Sets up keymaps using `benedict-vui-compose-field-mode-map` during buffer initialization
+      - Keybindings composed with parent mode map (not set by child components)
 
 ### vui.el Migration - Header & Status
 
