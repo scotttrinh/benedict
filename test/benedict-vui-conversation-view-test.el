@@ -22,7 +22,7 @@
                (lambda (&rest _args) 'streaming-indicator))
               ((symbol-function 'vui-vstack)
                (lambda (&rest args) 'vstack)))
-      (benedict-vui-conversation-view--render (list :conversation conversation
+      (vui-component 'benedict-vui-conversation-view--render (list :conversation conversation
                                                     :collapsed-blocks collapsed-blocks
                                                     :streaming nil))
       (should captured-props)
@@ -43,7 +43,7 @@
                  'streaming-indicator))
               ((symbol-function 'vui-vstack)
                (lambda (&rest args) 'vstack)))
-      (benedict-vui-conversation-view--render (list :conversation conversation
+      (vui-component 'benedict-vui-conversation-view--render (list :conversation conversation
                                                     :collapsed-blocks collapsed-blocks
                                                     :streaming streaming-active))
       (should captured-props)
@@ -63,7 +63,7 @@
                  'streaming-indicator))
               ((symbol-function 'vui-vstack)
                (lambda (&rest args) 'vstack)))
-      (benedict-vui-conversation-view--render (list :conversation conversation
+      (vui-component 'benedict-vui-conversation-view--render (list :conversation conversation
                                                     :collapsed-blocks collapsed-blocks
                                                     :streaming streaming-inactive))
       (should (not captured-visible)))))
@@ -81,24 +81,24 @@
                  'streaming-indicator))
               ((symbol-function 'vui-vstack)
                (lambda (&rest args) 'vstack)))
-      (benedict-vui-conversation-view--render (list :conversation conversation
+      (vui-component 'benedict-vui-conversation-view--render (list :conversation conversation
                                                     :collapsed-blocks collapsed-blocks
                                                     :streaming nil))
       (should (not captured-visible)))))
 
 (ert-deftest benedict-vui-conversation-view-streaming-active-p ()
   "Helper function correctly identifies active streaming state."
-  (should (benedict-vui-conversation-view--streaming-active-p
+  (should (vui-component 'benedict-vui-conversation-view--streaming-active-p
            (list :status 'active)))
-  (should (benedict-vui-conversation-view--streaming-active-p
+  (should (vui-component 'benedict-vui-conversation-view--streaming-active-p
            (list :status 'active :turn-id "turn-1" :content "text")))
-  (should (not (benedict-vui-conversation-view--streaming-active-p
+  (should (not (vui-component 'benedict-vui-conversation-view--streaming-active-p
                 (list :status 'complete))))
-  (should (not (benedict-vui-conversation-view--streaming-active-p
+  (should (not (vui-component 'benedict-vui-conversation-view--streaming-active-p
                 (list :status 'pending))))
-  (should (not (benedict-vui-conversation-view--streaming-active-p
+  (should (not (vui-component 'benedict-vui-conversation-view--streaming-active-p
                 nil)))
-  (should (not (benedict-vui-conversation-view--streaming-active-p
+  (should (not (vui-component 'benedict-vui-conversation-view--streaming-active-p
                 (list)))))
 
 (provide 'test/benedict-vui-conversation-view-test)

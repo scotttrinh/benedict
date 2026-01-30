@@ -33,23 +33,27 @@
 
 (defun benedict-vui-turn-header--timestamp-node (timestamp)
   "Return a timestamp node for TIMESTAMP or nil."
-  (let ((text (benedict-vui-turn-header--timestamp-string timestamp)))
+  (let ((text (vui-component 'benedict-vui-turn-header--timestamp-string timestamp)))
     (when text
       (vui-text (propertize text 'face 'benedict-chat-header-time)))))
 
 (defun benedict-vui-turn-header--render (props)
   "Render the turn header for PROPS."
-  (let* ((role (benedict-vui-turn-header--normalize-role (plist-get props :role)))
-         (timestamp-node (benedict-vui-turn-header--timestamp-node
+  (let* ((role (vui-component 'benedict-vui-turn-header--normalize-role (plist-get props :role)))
+         (timestamp-node (vui-component 'benedict-vui-turn-header--timestamp-node
                           (plist-get props :timestamp)))
-         (children (list (benedict-vui-badge :status role))))
+         (children (list (vui-component 'benedict-vui-badge :status role))))
     (when timestamp-node
       (setq children (append children (list timestamp-node))))
     (apply #'vui-hstack children)))
 
 (vui-defcomponent benedict-vui-turn-header (props)
   :render
-  (benedict-vui-turn-header--render props))
+  (vui-component 'benedict-vui-turn-header--render props))
+
+(defun benedict-vui-turn-header (&rest props)
+  "Create a turn header component node from PROPS."
+  (apply #'vui-component 'benedict-vui-turn-header props))
 
 (provide 'benedict-vui-turn-header)
 ;;; benedict-vui-turn-header.el ends here

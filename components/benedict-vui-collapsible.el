@@ -14,7 +14,7 @@
 
 (defun benedict-vui-collapsible--collapsed-p (props state)
   "Return non-nil when PROPS/STATE indicate collapse."
-  (if (benedict-vui-collapsible--controlled-p props)
+  (if (vui-component 'benedict-vui-collapsible--controlled-p props)
       (plist-get props :collapsed)
     (plist-get state :collapsed)))
 
@@ -48,19 +48,23 @@ When CONTROLLED is non-nil, returns COLLAPSED to avoid local state changes."
   (let* ((header (plist-get props :header))
          (content (plist-get props :content))
          (on-toggle (plist-get props :on-toggle))
-         (controlled (benedict-vui-collapsible--controlled-p props))
-         (collapsed (benedict-vui-collapsible--collapsed-p props state))
+         (controlled (vui-component 'benedict-vui-collapsible--controlled-p props))
+         (collapsed (vui-component 'benedict-vui-collapsible--collapsed-p props state))
          (toggle-handler (vui-use-callback (collapsed controlled on-toggle)
-                           (let ((next (benedict-vui-collapsible--apply-toggle
+                           (let ((next (vui-component 'benedict-vui-collapsible--apply-toggle
                                         collapsed controlled on-toggle)))
                              (unless controlled
                                (vui-set-state :collapsed next))))))
     (vui-vstack
      (vui-hstack
-      (vui-button (benedict-vui-collapsible--indicator collapsed)
+      (vui-button (vui-component 'benedict-vui-collapsible--indicator collapsed)
                   :on-click toggle-handler)
-      (benedict-vui-collapsible--render-header header))
-     (benedict-vui-collapsible--render-content collapsed content))))
+      (vui-component 'benedict-vui-collapsible--render-header header))
+     (vui-component 'benedict-vui-collapsible--render-content collapsed content))))
+
+(defun benedict-vui-collapsible (&rest props)
+  "Create a collapsible component node from PROPS."
+  (apply #'vui-component 'benedict-vui-collapsible props))
 
 (provide 'benedict-vui-collapsible)
 ;;; benedict-vui-collapsible.el ends here

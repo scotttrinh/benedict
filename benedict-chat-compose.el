@@ -29,6 +29,7 @@
 (declare-function benedict-chat-choose-profile "benedict-chat")
 (declare-function benedict-chat-choose-provider "benedict-chat")
 (declare-function benedict-chat-choose-model "benedict-chat")
+(declare-function benedict-chat--set-context-slices "benedict-chat")
 
 ;;; Configuration
 
@@ -328,9 +329,9 @@ Return a plist with :slice and :replacing entries; :slice carries the final hand
            (text (benedict-chat-compose--assemble-message-text prompt slices)))
       (benedict-chat-compose--warn-unknown-handles body-handles slices)
       (with-current-buffer stable-chat
-        (benedict-chat--send-text text stable-chat)
+        (benedict-chat--send-text text stable-chat t)
         (unless benedict-chat-context-retain-after-send
-          (setq benedict-chat--context-slices nil))
+          (benedict-chat--set-context-slices nil))
         (benedict-chat-compose--clear-state))
       (when (buffer-live-p stable-chat)
         (pop-to-buffer stable-chat))
@@ -346,7 +347,7 @@ Return a plist with :slice and :replacing entries; :slice carries the final hand
   (let ((chat benedict-chat-compose--chat-buffer))
     (when (buffer-live-p chat)
       (with-current-buffer chat
-        (setq benedict-chat--context-slices nil)
+        (benedict-chat--set-context-slices nil)
         (benedict-chat-compose--clear-state))))
   (when (buffer-live-p benedict-chat-compose--chat-buffer)
     (pop-to-buffer benedict-chat-compose--chat-buffer))
@@ -370,6 +371,8 @@ Return a plist with :slice and :replacing entries; :slice carries the final hand
                   (benedict-chat-compose--upsert-context-slice benedict-chat--context-slices final))
             (setq existing (benedict-chat-compose--context-handles benedict-chat--context-slices)))))
       (setq prepared (nreverse prepared)))
+    (with-current-buffer chat
+      (benedict-chat--set-context-slices benedict-chat--context-slices))
     (when (buffer-live-p compose)
       (with-current-buffer compose
         (benedict-chat-compose--render-header)

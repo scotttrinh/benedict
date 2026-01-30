@@ -21,7 +21,7 @@
          (on-provider-click (plist-get props :on-provider-click)))
     (vui-hstack
       :spacing 1
-      (benedict-vui-provider-badge
+      (vui-component 'benedict-vui-provider-badge
         :provider provider
         :model model
         :on-click on-provider-click)
@@ -29,7 +29,7 @@
         (vui-text "·"
           :face 'benedict-chat-header-separator))
       (when status
-        (benedict-vui-badge
+        (vui-component 'benedict-vui-badge
           :status status
           :theme 'benedict-chat-header-time))
       (when (and title (or provider model))
@@ -38,6 +38,10 @@
       (when title
         (vui-text title
           :face 'benedict-chat-header)))))
+
+(defun benedict-vui-chat-header (&rest props)
+  "Create a chat header component node from PROPS."
+  (apply #'vui-component 'benedict-vui-chat-header props))
 
 (provide 'benedict-vui-chat-header)
 ;;; benedict-vui-chat-header.el ends here

@@ -32,7 +32,7 @@
 
 (defun benedict-vui-turn--message-role (message props)
   "Return the role for MESSAGE or PROPS."
-  (benedict-vui-turn--normalize-role
+  (vui-component 'benedict-vui-turn--normalize-role
    (or (plist-get props :role)
        (and message (plist-get message :role)))))
 
@@ -65,7 +65,7 @@
 
 (defun benedict-vui-turn--block-type (block)
   "Return normalized type for BLOCK plist."
-  (benedict-vui-turn--normalize-type
+  (vui-component 'benedict-vui-turn--normalize-type
    (or (plist-get block :type)
        (plist-get block :kind)
        (plist-get block :block-type)
@@ -73,7 +73,7 @@
 
 (defun benedict-vui-turn--text-block-p (block)
   "Return non-nil when BLOCK should receive role text styling."
-  (let ((type (benedict-vui-turn--block-type block)))
+  (let ((type (vui-component 'benedict-vui-turn--block-type block)))
     (and (not (plist-member block :tool-call))
          (not (plist-member block :result))
          (not (plist-member block :thinking-data))
@@ -94,13 +94,13 @@
 (defun benedict-vui-turn--apply-face-to-block (block face)
   "Return BLOCK with FACE applied to text content when appropriate."
   (cond
-   ((stringp block) (benedict-vui-turn--apply-face block face))
-   ((and (listp block) (benedict-vui-turn--text-block-p block))
+   ((stringp block) (vui-component 'benedict-vui-turn--apply-face block face))
+   ((and (listp block) (vui-component 'benedict-vui-turn--text-block-p block))
     (let* ((copy (copy-sequence block))
-           (content (benedict-vui-turn--block-content copy)))
+           (content (vui-component 'benedict-vui-turn--block-content copy)))
       (when content
         (plist-put copy :content
-                   (benedict-vui-turn--apply-face content face)))
+                   (vui-component 'benedict-vui-turn--apply-face content face)))
       copy))
    (t block)))
 
@@ -123,11 +123,11 @@
   (cond
    ((null message) nil)
    ((plist-member message :blocks) (plist-get message :blocks))
-   ((eq role 'tool) (benedict-vui-turn--tool-result-block message))
+   ((eq role 'tool) (vui-component 'benedict-vui-turn--tool-result-block message))
    (t
     (let* ((content (or (plist-get message :display-content)
                         (plist-get message :content)))
-           (blocks (benedict-vui-turn--normalize-content-blocks content))
+           (blocks (vui-component 'benedict-vui-turn--normalize-content-blocks content))
            (thinking (plist-get message :thinking))
            (tool-calls (plist-get message :tool-calls)))
       (when thinking
@@ -143,34 +143,38 @@
 (defun benedict-vui-turn--blocks (props)
   "Return content blocks for PROPS."
   (let* ((message (plist-get props :message))
-         (role (benedict-vui-turn--message-role message props))
-         (metadata (benedict-vui-turn--message-metadata message props))
-         (face (benedict-vui-turn--face-for-role role metadata))
+         (role (vui-component 'benedict-vui-turn--message-role message props))
+         (metadata (vui-component 'benedict-vui-turn--message-metadata message props))
+         (face (vui-component 'benedict-vui-turn--face-for-role role metadata))
          (blocks (or (plist-get props :blocks)
-                     (benedict-vui-turn--build-blocks message role))))
+                     (vui-component 'benedict-vui-turn--build-blocks message role))))
     (mapcar (lambda (block)
-              (benedict-vui-turn--apply-face-to-block block face))
+              (vui-component 'benedict-vui-turn--apply-face-to-block block face))
             blocks)))
 
 (defun benedict-vui-turn--render (props)
   "Render a full turn from PROPS."
   (let* ((message (plist-get props :message))
-         (role (benedict-vui-turn--message-role message props))
-         (timestamp (benedict-vui-turn--message-timestamp message props))
-         (metadata (benedict-vui-turn--message-metadata message props))
-         (blocks (benedict-vui-turn--blocks props))
+         (role (vui-component 'benedict-vui-turn--message-role message props))
+         (timestamp (vui-component 'benedict-vui-turn--message-timestamp message props))
+         (metadata (vui-component 'benedict-vui-turn--message-metadata message props))
+         (blocks (vui-component 'benedict-vui-turn--blocks props))
          (collapsed-blocks (plist-get props :collapsed-blocks))
-         (header (benedict-vui-turn-header :role role
+         (header (vui-component 'benedict-vui-turn-header :role role
                                            :timestamp timestamp
                                            :metadata metadata))
-         (content (benedict-vui-content-block-list
+         (content (vui-component 'benedict-vui-content-block-list
                    :blocks blocks
                    :collapsed-blocks collapsed-blocks)))
     (vui-vstack header content)))
 
 (vui-defcomponent benedict-vui-turn (props)
   :render
-  (benedict-vui-turn--render props))
+  (vui-component 'benedict-vui-turn--render props))
+
+(defun benedict-vui-turn (&rest props)
+  "Create a turn component node from PROPS."
+  (apply #'vui-component 'benedict-vui-turn props))
 
 (provide 'benedict-vui-turn)
 ;;; benedict-vui-turn.el ends here

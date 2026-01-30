@@ -8,7 +8,7 @@
   "Test that benedict-chat-mode sets up the buffer correctly."
   (with-temp-buffer
     (benedict-chat-mode)
-    (should (derived-mode-p 'magit-section-mode))
+    (should (derived-mode-p 'vui-mode))
     (should buffer-read-only)
     (should (eq benedict-region-kind-property 'benedict-region-kind))
     (should (local-variable-p 'markdown-fontify-code-blocks-natively))
@@ -22,14 +22,12 @@ and `syntax-propertize-function' is valid."
     (benedict-chat-mode)
     ;; Force font-lock to be active
     (font-lock-mode 1)
-    
-    (let ((item (list :content-start (copy-marker (point-min) nil)
-                      :content-end (copy-marker (point-min) t))))
-      (benedict-chat-stream--init (current-buffer) item))
-    
-    ;; Insert enough text to potentially trigger font-lock extension
-    (benedict-chat-stream--insert-delta benedict-chat-stream--state "Some text\n")
-    (benedict-chat-stream--insert-delta benedict-chat-stream--state "```python\nprint('hello')\n```\n")
+
+    ;; Insert enough text to potentially trigger font-lock extension.
+    (let ((inhibit-read-only t))
+      (insert (propertize "Some text\n" 'benedict-region-kind 'body))
+      (insert (propertize "```python\nprint('hello')\n```\n"
+                          'benedict-region-kind 'body)))
     
     ;; Trigger fontification explicitly which calls extend-region functions
     (font-lock-ensure)

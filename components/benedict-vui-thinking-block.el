@@ -52,11 +52,11 @@
    ((listp entry)
     (let* ((plist (if (and (consp (car entry))
                            (not (keywordp (caar entry))))
-                      (benedict-vui-thinking-block--alist-to-plist entry)
+                      (vui-component 'benedict-vui-thinking-block--alist-to-plist entry)
                     entry))
            (result (copy-sequence plist)))
       (when-let ((chunks (plist-get result :chunks)))
-        (plist-put result :chunks (benedict-vui-thinking-block--normalize-seq chunks)))
+        (plist-put result :chunks (vui-component 'benedict-vui-thinking-block--normalize-seq chunks)))
       result))
    (t nil)))
 
@@ -65,12 +65,12 @@
   (cond
    ((null thinking) nil)
    ((stringp thinking)
-    (list (benedict-vui-thinking-block--normalize-entry thinking)))
+    (list (vui-component 'benedict-vui-thinking-block--normalize-entry thinking)))
    ((vectorp thinking)
-    (benedict-vui-thinking-block--normalize-payload (append thinking nil)))
+    (vui-component 'benedict-vui-thinking-block--normalize-payload (append thinking nil)))
    ((and (listp thinking)
          (cl-every #'stringp thinking))
-    (list (benedict-vui-thinking-block--normalize-entry
+    (list (vui-component 'benedict-vui-thinking-block--normalize-entry
            (string-join thinking "\n\n"))))
    ((listp thinking)
     (delq nil (mapcar #'benedict-vui-thinking-block--normalize-entry thinking)))
@@ -81,9 +81,9 @@
   (let ((text (or (plist-get detail :text)
                   (plist-get detail :summary))))
     (cond
-     (text (benedict-vui-thinking-block--normalize-string text))
+     (text (vui-component 'benedict-vui-thinking-block--normalize-string text))
      ((plist-get detail :data)
-      (let ((data (benedict-vui-thinking-block--normalize-string
+      (let ((data (vui-component 'benedict-vui-thinking-block--normalize-string
                    (plist-get detail :data))))
         (if (string-empty-p data)
             benedict-vui-thinking-block--encrypted-placeholder
@@ -92,19 +92,19 @@
                   data))))
      ((plist-get detail :chunks)
       (mapconcat #'benedict-vui-thinking-block--normalize-string
-                 (benedict-vui-thinking-block--normalize-seq
+                 (vui-component 'benedict-vui-thinking-block--normalize-seq
                   (plist-get detail :chunks))
                  ""))
      (t ""))))
 
 (defun benedict-vui-thinking-block--content-text (thinking)
   "Return combined text for THINKING payload."
-  (let ((details (benedict-vui-thinking-block--normalize-payload thinking)))
+  (let ((details (vui-component 'benedict-vui-thinking-block--normalize-payload thinking)))
     (mapconcat #'benedict-vui-thinking-block--detail-text details "\n\n")))
 
 (defun benedict-vui-thinking-block--propertize (content)
   "Return CONTENT with thinking text properties applied."
-  (propertize (benedict-vui-thinking-block--normalize-string content)
+  (propertize (vui-component 'benedict-vui-thinking-block--normalize-string content)
               'benedict-region-kind 'thinking
               'face 'benedict-chat-thinking))
 
@@ -114,46 +114,50 @@
 
 (defun benedict-vui-thinking-block--collapsed-p (props state)
   "Return non-nil when PROPS/STATE indicate collapse."
-  (if (benedict-vui-thinking-block--controlled-p props)
+  (if (vui-component 'benedict-vui-thinking-block--controlled-p props)
       (plist-get props :collapsed)
     (plist-get state :collapsed)))
 
 (defun benedict-vui-thinking-block--header ()
   "Return the thinking block header content."
   (vui-hstack
-   (benedict-vui-badge :status 'thinking
+   (vui-component 'benedict-vui-badge :status 'thinking
                        :theme 'benedict-chat-thinking)))
 
 (defun benedict-vui-thinking-block--content (thinking)
   "Return the thinking block content node for THINKING payload."
-  (vui-text (benedict-vui-thinking-block--propertize
-             (benedict-vui-thinking-block--content-text thinking))))
+  (vui-text (vui-component 'benedict-vui-thinking-block--propertize
+             (vui-component 'benedict-vui-thinking-block--content-text thinking))))
 
 (defun benedict-vui-thinking-block--collapsible-props (props state toggle-handler)
   "Return collapsible props for PROPS/STATE and TOGGLE-HANDLER."
   (let* ((thinking (plist-get props :thinking-data))
-         (collapsed (benedict-vui-thinking-block--collapsed-p props state)))
+         (collapsed (vui-component 'benedict-vui-thinking-block--collapsed-p props state)))
     (list :collapsed collapsed
           :on-toggle toggle-handler
           :header #'benedict-vui-thinking-block--header
           :content (lambda ()
-                     (benedict-vui-thinking-block--content thinking)))))
+                     (vui-component 'benedict-vui-thinking-block--content thinking)))))
 
 (defun benedict-vui-thinking-block--render (props state)
   "Return the rendered thinking block for PROPS/STATE."
-  (let* ((controlled (benedict-vui-thinking-block--controlled-p props))
+  (let* ((controlled (vui-component 'benedict-vui-thinking-block--controlled-p props))
          (toggle-handler (vui-use-memo (controlled)
                            (lambda (next)
                              (unless controlled
                                (vui-set-state :collapsed next)))))
-         (collapsible-props (benedict-vui-thinking-block--collapsible-props
+         (collapsible-props (vui-component 'benedict-vui-thinking-block--collapsible-props
                              props state toggle-handler)))
     (apply #'benedict-vui-collapsible collapsible-props)))
 
 (vui-defcomponent benedict-vui-thinking-block (props state)
   :state ((collapsed t))
   :render
-  (benedict-vui-thinking-block--render props state))
+  (vui-component 'benedict-vui-thinking-block--render props state))
+
+(defun benedict-vui-thinking-block (&rest props)
+  "Create a thinking block component node from PROPS."
+  (apply #'vui-component 'benedict-vui-thinking-block props))
 
 (provide 'benedict-vui-thinking-block)
 ;;; benedict-vui-thinking-block.el ends here

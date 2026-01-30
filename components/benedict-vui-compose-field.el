@@ -80,7 +80,7 @@ Calls ON-CHANGE with selected history item."
   (interactive)
   (when benedict-vui-compose-field--history
     (let* ((current-index benedict-vui-compose-field--history-index)
-           (new-index (benedict-vui-compose-field--navigate-history
+           (new-index (vui-component 'benedict-vui-compose-field--navigate-history
                       :prev current-index benedict-vui-compose-field--history
                       benedict-vui-compose-field--on-change)))
       (setq benedict-vui-compose-field--history-index new-index))))
@@ -90,7 +90,7 @@ Calls ON-CHANGE with selected history item."
   (interactive)
   (when benedict-vui-compose-field--history
     (let* ((current-index benedict-vui-compose-field--history-index)
-           (new-index (benedict-vui-compose-field--navigate-history
+           (new-index (vui-component 'benedict-vui-compose-field--navigate-history
                       :next current-index benedict-vui-compose-field--history
                       benedict-vui-compose-field--on-change)))
       (setq benedict-vui-compose-field--history-index new-index))))
@@ -125,11 +125,11 @@ Calls ON-CHANGE with selected history item."
      :size (or size 80)
      :placeholder placeholder
      :on-change (lambda (new-value)
-                  (benedict-vui-compose-field--handle-change new-value on-change)
+                  (vui-component 'benedict-vui-compose-field--handle-change new-value on-change)
                   (when (and history (>= current-history-index 0))
                     (vui-set-state :history-index -1)))
      :on-submit (lambda (new-value)
-                  (benedict-vui-compose-field--handle-submit new-value on-submit))
+                  (vui-component 'benedict-vui-compose-field--handle-submit new-value on-submit))
      :key field-key)))
 
 (provide 'benedict-vui-compose-field)

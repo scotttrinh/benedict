@@ -29,12 +29,12 @@
       (unless (string-empty-p trimmed)
         (downcase trimmed))))
    ((symbolp language)
-    (benedict-vui-code-block--normalize-language (symbol-name language)))
+    (vui-component 'benedict-vui-code-block--normalize-language (symbol-name language)))
    (t nil)))
 
 (defun benedict-vui-code-block--resolve-mode (language)
   "Return a major mode function for LANGUAGE, or nil if unknown."
-  (let ((lang (benedict-vui-code-block--normalize-language language)))
+  (let ((lang (vui-component 'benedict-vui-code-block--normalize-language language)))
     (cond
      ((null lang) nil)
      ((member lang '("elisp" "emacs-lisp")) #'emacs-lisp-mode)
@@ -53,8 +53,8 @@
 
 (defun benedict-vui-code-block--fontify (code language)
   "Return CODE with syntax highlighting for LANGUAGE when possible."
-  (let* ((normalized-code (benedict-vui-code-block--normalize code))
-         (mode (benedict-vui-code-block--resolve-mode language)))
+  (let* ((normalized-code (vui-component 'benedict-vui-code-block--normalize code))
+         (mode (vui-component 'benedict-vui-code-block--resolve-mode language)))
     (if (string-empty-p normalized-code)
         ""
       (if mode
@@ -62,25 +62,25 @@
             (insert normalized-code)
             (funcall mode)
             (font-lock-ensure (point-min) (point-max))
-            (benedict-vui-code-block--apply-base-face
+            (vui-component 'benedict-vui-code-block--apply-base-face
              (buffer-substring (point-min) (point-max))))
-        (benedict-vui-code-block--apply-base-face normalized-code)))))
+        (vui-component 'benedict-vui-code-block--apply-base-face normalized-code)))))
 
 (defun benedict-vui-code-block--fallback-content (code language)
   "Return CODE wrapped in fenced markdown for LANGUAGE."
-  (let ((lang (or (benedict-vui-code-block--normalize-language language) "")))
-    (concat "```" lang "\n" (benedict-vui-code-block--normalize code) "\n```")))
+  (let ((lang (or (vui-component 'benedict-vui-code-block--normalize-language language) "")))
+    (concat "```" lang "\n" (vui-component 'benedict-vui-code-block--normalize code) "\n```")))
 
 (defun benedict-vui-code-block--label (language)
   "Return a display label for LANGUAGE."
-  (let ((lang (benedict-vui-code-block--normalize-language language)))
+  (let ((lang (vui-component 'benedict-vui-code-block--normalize-language language)))
     (if lang (upcase lang) "TEXT")))
 
 (defun benedict-vui-code-block--copy (code on-feedback)
   "Copy CODE and toggle feedback using ON-FEEDBACK callback.
 
 Returns the timer created to clear feedback."
-  (let ((normalized-code (benedict-vui-code-block--normalize code)))
+  (let ((normalized-code (vui-component 'benedict-vui-code-block--normalize code)))
     (kill-new normalized-code)
     (funcall on-feedback t)
     (run-at-time benedict-vui-code-block-copy-feedback-timeout nil
@@ -91,11 +91,11 @@ Returns the timer created to clear feedback."
   :render
   (let* ((code (plist-get props :code))
          (language (plist-get props :language))
-         (normalized-code (benedict-vui-code-block--normalize code))
-         (normalized-language (benedict-vui-code-block--normalize-language language))
+         (normalized-code (vui-component 'benedict-vui-code-block--normalize code))
+         (normalized-language (vui-component 'benedict-vui-code-block--normalize-language language))
          (timer-ref (vui-use-ref nil))
          (fontified (vui-use-memo (normalized-code normalized-language)
-                      (benedict-vui-code-block--fontify normalized-code normalized-language)))
+                      (vui-component 'benedict-vui-code-block--fontify normalized-code normalized-language)))
          (copy-label (if (plist-get state :copied-feedback) "Copied!" "Copy"))
          (copy-handler (vui-use-callback (normalized-code)
                          (let ((callback (vui-async-callback (value)
@@ -104,7 +104,7 @@ Returns the timer created to clear feedback."
                              (cancel-timer (car timer-ref))
                              (setcar timer-ref nil))
                            (setcar timer-ref
-                                   (benedict-vui-code-block--copy normalized-code callback))))))
+                                   (vui-component 'benedict-vui-code-block--copy normalized-code callback))))))
     (vui-use-effect ()
       (lambda ()
         (when (car timer-ref)
@@ -112,13 +112,17 @@ Returns the timer created to clear feedback."
           (setcar timer-ref nil))))
     (vui-vstack
      (vui-hstack
-      (vui-text (propertize (benedict-vui-code-block--label normalized-language)
+      (vui-text (propertize (vui-component 'benedict-vui-code-block--label normalized-language)
                             'face 'shadow))
       (vui-button copy-label :on-click copy-handler))
-     (if (benedict-vui-code-block--resolve-mode normalized-language)
-         (vui-text fontified)
-       (benedict-vui-text-block
-        :content (benedict-vui-code-block--fallback-content normalized-code normalized-language))))))
+      (if (vui-component 'benedict-vui-code-block--resolve-mode normalized-language)
+          (vui-text fontified)
+        (vui-component 'benedict-vui-text-block
+         :content (vui-component 'benedict-vui-code-block--fallback-content normalized-code normalized-language))))))
+
+(defun benedict-vui-code-block (&rest props)
+  "Create a code block component node from PROPS."
+  (apply #'vui-component 'benedict-vui-code-block props))
 
 (provide 'benedict-vui-code-block)
 ;;; benedict-vui-code-block.el ends here

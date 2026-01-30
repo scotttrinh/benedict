@@ -44,7 +44,7 @@
                (lambda (&rest _args)
                  (setq calls (append calls (list 'tool-result)))
                  'tool-result-node)))
-      (benedict-vui-content-block-list--render (list :blocks blocks))
+      (vui-component 'benedict-vui-content-block-list--render (list :blocks blocks))
       (dolist (item items)
         (funcall render-fn item))
       (should (equal calls '(text code thinking tool-use tool-result))))))
@@ -58,7 +58,7 @@
                (lambda (_value _r-fn &optional k-fn &rest _args)
                  (setq key-fn k-fn)
                  'list)))
-      (benedict-vui-content-block-list--render (list :blocks blocks))
+      (vui-component 'benedict-vui-content-block-list--render (list :blocks blocks))
       (should (equal (funcall key-fn (car blocks) 0) "alpha"))
       (should (stringp (funcall key-fn (cadr blocks) 1))))))
 

@@ -75,9 +75,9 @@
     (with-temp-buffer
       (benedict-chat-mode)
       (benedict-chat--init-buffer)
-      ;; Use benedict-chat--record-message which should write to session
-      (benedict-chat--record-message (current-buffer)
-                                     '(:role user :content "Hello"))
+      ;; Add a message to the session directly.
+      (benedict-session-add-message benedict-chat--session
+                                    '(:role user :content "Hello"))
       (should (= 1 (length (benedict-session-messages benedict-chat--session))))
       (let ((msg (car (benedict-session-messages benedict-chat--session))))
         (should (string= "Hello" (plist-get msg :content)))
@@ -161,8 +161,8 @@
       (benedict-chat-mode)
       (benedict-chat--init-buffer)
       (dotimes (i n)
-        (benedict-chat--record-message (current-buffer)
-                                       `(:role user :content ,(format "msg %d" i))))
+        (benedict-session-add-message benedict-chat--session
+                                      `(:role user :content ,(format "msg %d" i))))
       (propcheck-should (= n (length (benedict-session-messages benedict-chat--session)))))))
 
 ;;; Routing Tests (Phase 3)

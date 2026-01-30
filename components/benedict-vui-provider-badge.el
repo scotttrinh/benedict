@@ -30,8 +30,8 @@
   (let* ((provider (plist-get props :provider))
          (model (plist-get props :model))
          (on-click (plist-get props :on-click))
-         (provider-label (benedict-vui-provider-badge--format-provider provider))
-         (model-label (benedict-vui-provider-badge--format-model model)))
+         (provider-label (vui-component 'benedict-vui-provider-badge--format-provider provider))
+         (model-label (vui-component 'benedict-vui-provider-badge--format-model model)))
     (vui-hstack
       :spacing 1
       :on-click on-click
@@ -41,6 +41,10 @@
         :face 'benedict-chat-header-separator)
       (vui-text model-label
         :face 'benedict-chat-header-model))))
+
+(defun benedict-vui-provider-badge (&rest props)
+  "Create a provider badge component node from PROPS."
+  (apply #'vui-component 'benedict-vui-provider-badge props))
 
 (provide 'benedict-vui-provider-badge)
 ;;; benedict-vui-provider-badge.el ends here

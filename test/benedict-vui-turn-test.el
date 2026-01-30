@@ -32,7 +32,7 @@
                (lambda (&rest children)
                  (setq stack-children children)
                  'stack)))
-      (benedict-vui-turn--render
+      (vui-component 'benedict-vui-turn--render
        (list :message (list :role 'user :content "Hi" :timestamp 123)))
       (should (equal stack-children '(header blocks)))
       (should (eq (plist-get header-props :role) 'user))
@@ -43,19 +43,19 @@
   "Turn applies role faces to text block content."
   (let* ((user-message (list :role 'user :content "Hello"))
          (assistant-message (list :role 'assistant :content "Hi"))
-         (user-block (car (benedict-vui-turn--blocks (list :message user-message))))
-         (assistant-block (car (benedict-vui-turn--blocks (list :message assistant-message)))))
-    (should (benedict-vui-turn-test--face-member-p
+         (user-block (car (vui-component 'benedict-vui-turn--blocks (list :message user-message))))
+         (assistant-block (car (vui-component 'benedict-vui-turn--blocks (list :message assistant-message)))))
+    (should (vui-component 'benedict-vui-turn-test--face-member-p
              'benedict-chat-user
              (plist-get user-block :content)))
-    (should (benedict-vui-turn-test--face-member-p
+    (should (vui-component 'benedict-vui-turn-test--face-member-p
              'benedict-chat-assistant
              (plist-get assistant-block :content)))))
 
 (ert-deftest benedict-vui-turn-tool-messages-render-results ()
   "Tool role messages render as tool result blocks."
   (let* ((message (list :role 'tool :content "ok" :metadata '(:status success)))
-         (blocks (benedict-vui-turn--blocks (list :message message)))
+         (blocks (vui-component 'benedict-vui-turn--blocks (list :message message)))
          (block (car blocks)))
     (should (eq (plist-get block :type) 'tool-result))
     (should (equal (plist-get block :result) message))))

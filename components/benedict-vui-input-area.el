@@ -18,17 +18,19 @@
         (on-input-change (plist-get props :on-input-change))
         (on-submit (plist-get props :on-submit))
         (on-slice-remove (plist-get props :on-slice-remove))
+        (history (plist-get props :history))
         (placeholder (plist-get props :placeholder))
         (size (plist-get props :size))
         (field-key (plist-get props :field-key)))
     (vui-vstack
-     (benedict-vui-context-indicator
+     (vui-component 'benedict-vui-context-indicator
       :slices slices
       :on-remove on-slice-remove)
-     (benedict-vui-compose-field
+     (vui-component 'benedict-vui-compose-field
       :value input-text
       :on-change on-input-change
       :on-submit on-submit
+      :history history
       :placeholder placeholder
       :size size
       :key field-key))))

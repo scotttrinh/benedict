@@ -22,7 +22,7 @@
                  'list))
               ((symbol-function 'vui--register-effect)
                (lambda (&rest _args) nil)))
-      (benedict-vui-turn-list--render (list :conversation conversation))
+      (vui-component 'benedict-vui-turn-list--render (list :conversation conversation))
       (should (= (length items) 2))
       (should (= (length (car items)) 2))
       (should (= (length (cadr items)) 2)))))
@@ -42,7 +42,7 @@
                  'list))
               ((symbol-function 'vui--register-effect)
                (lambda (&rest _args) nil)))
-      (benedict-vui-turn-list--render (list :conversation conversation))
+      (vui-component 'benedict-vui-turn-list--render (list :conversation conversation))
       (should (equal (funcall key-fn (car items) 0) "msg-1"))
       (should (equal (funcall key-fn (cadr items) 1) "msg-3")))))
 
@@ -58,7 +58,7 @@
                  'list))
               ((symbol-function 'vui--register-effect)
                (lambda (&rest _args) nil)))
-      (benedict-vui-turn-list--render (list :conversation conversation))
+      (vui-component 'benedict-vui-turn-list--render (list :conversation conversation))
       (should (= (length items) 1))
       (should (stringp (funcall key-fn (car items) 0))))))
 
@@ -78,10 +78,10 @@
                  nil))
               ((symbol-function 'benedict-vui-turn-list--scroll-to-bottom)
                (lambda () (setq scrolled t))))
-      (benedict-vui-turn-list--render (list :conversation conversation))
+      (vui-component 'benedict-vui-turn-list--render (list :conversation conversation))
       ;; Note: double parens in implementation result in ((deps)) here
       (should (equal captured-deps
-                     (list (benedict-vui-turn-list--scroll-deps conversation))))
+                     (list (vui-component 'benedict-vui-turn-list--scroll-deps conversation))))
       (funcall captured-effect)
       (should scrolled))))
 

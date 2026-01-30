@@ -26,7 +26,7 @@
 
 (defun benedict-vui-tool-result-block--tool-name (result)
   "Return the tool name string from RESULT plist."
-  (benedict-vui-tool-result-block--name-string
+  (vui-component 'benedict-vui-tool-result-block--name-string
    (or (plist-get result :name)
        (plist-get result :tool)
        (plist-get result :id)
@@ -47,7 +47,7 @@
    ((stringp status)
     (let ((normalized (replace-regexp-in-string
                        "[[:space:]]+" "-" (downcase status))))
-      (benedict-vui-tool-result-block--normalize-status (intern normalized))))
+      (vui-component 'benedict-vui-tool-result-block--normalize-status (intern normalized))))
    (t 'success)))
 
 (defun benedict-vui-tool-result-block--value-string (value)
@@ -65,7 +65,7 @@
 
 (defun benedict-vui-tool-result-block--result-status (props result)
   "Return normalized status for PROPS and RESULT."
-  (let* ((ui (benedict-vui-tool-result-block--ui result))
+  (let* ((ui (vui-component 'benedict-vui-tool-result-block--ui result))
          (status (or (plist-get props :status)
                      (and (listp result) (plist-get result :status))
                      (and (listp result)
@@ -74,7 +74,7 @@
          (error-info (or (and (listp result) (plist-get result :error))
                          (and (listp result)
                               (plist-get (plist-get result :metadata) :error)))))
-    (benedict-vui-tool-result-block--normalize-status
+    (vui-component 'benedict-vui-tool-result-block--normalize-status
      (if error-info 'failure status))))
 
 (defun benedict-vui-tool-result-block--normalize-actions (actions)
@@ -90,28 +90,28 @@
 (defun benedict-vui-tool-result-block--resolve-actions (props result)
   "Return validated action plists from PROPS or RESULT UI."
   (let* ((direct (plist-get props :actions))
-         (ui (benedict-vui-tool-result-block--ui result))
+         (ui (vui-component 'benedict-vui-tool-result-block--ui result))
          (ui-actions (and (listp ui) (plist-get ui :actions))))
-    (benedict-vui-tool-result-block--normalize-actions (or direct ui-actions))))
+    (vui-component 'benedict-vui-tool-result-block--normalize-actions (or direct ui-actions))))
 
 (defun benedict-vui-tool-result-block--header-title (result)
   "Return header title for RESULT."
-  (let* ((ui (benedict-vui-tool-result-block--ui result))
+  (let* ((ui (vui-component 'benedict-vui-tool-result-block--ui result))
          (ui-header (and (listp ui) (plist-get ui :header))))
     (if (and (stringp ui-header) (not (string-empty-p ui-header)))
         ui-header
-      (format "Result: %s" (benedict-vui-tool-result-block--tool-name result)))))
+      (format "Result: %s" (vui-component 'benedict-vui-tool-result-block--tool-name result)))))
 
 (defun benedict-vui-tool-result-block--header (result status)
   "Return the tool result header node for RESULT and STATUS."
   (vui-hstack
-   (benedict-vui-badge :status status)
-   (vui-text (propertize (benedict-vui-tool-result-block--header-title result)
+   (vui-component 'benedict-vui-badge :status status)
+   (vui-text (propertize (vui-component 'benedict-vui-tool-result-block--header-title result)
                          'face 'benedict-chat-tool-label))))
 
 (defun benedict-vui-tool-result-block--body-text (result)
   "Return formatted body text for RESULT."
-  (let* ((ui (benedict-vui-tool-result-block--ui result))
+  (let* ((ui (vui-component 'benedict-vui-tool-result-block--ui result))
          (ui-body (and (listp ui) (plist-get ui :body)))
          (text (cond
                 ((and (stringp ui-body) (not (string-empty-p ui-body))) ui-body)
@@ -123,7 +123,7 @@
                  (plist-get result :text))
                 ((stringp result) result)
                 ((null result) "Tool returned no output.")
-                (t (benedict-vui-tool-result-block--value-string result)))))
+                (t (vui-component 'benedict-vui-tool-result-block--value-string result)))))
     (if (and text (not (string-empty-p text)))
         text
       "Tool returned no output.")))
@@ -164,11 +164,11 @@ STATUS controls error styling for failures."
 
 TRUNCATED and EXPANDED control expansion UI, using TOGGLE-EXPAND.
 STATUS determines error styling."
-  (let* ((body-node (vui-text (benedict-vui-tool-result-block--propertize text status)))
+  (let* ((body-node (vui-text (vui-component 'benedict-vui-tool-result-block--propertize text status)))
          (toggle-node (when truncated
                         (vui-button (if expanded "Show less" "Show more")
                                     :on-click toggle-expand)))
-         (actions-node (benedict-vui-tool-result-block--actions-node actions))
+         (actions-node (vui-component 'benedict-vui-tool-result-block--actions-node actions))
          (nodes (delq nil (list body-node toggle-node actions-node))))
     (apply #'vui-vstack nodes)))
 
@@ -178,7 +178,7 @@ STATUS determines error styling."
 
 (defun benedict-vui-tool-result-block--collapsed-p (props state)
   "Return non-nil when PROPS/STATE indicate collapse."
-  (if (benedict-vui-tool-result-block--controlled-p props)
+  (if (vui-component 'benedict-vui-tool-result-block--controlled-p props)
       (plist-get props :collapsed)
     (plist-get state :collapsed)))
 
@@ -187,7 +187,7 @@ STATUS determines error styling."
   "Return collapsible props for PROPS/STATE and TOGGLE-HANDLER.
 
 CONTENT-NODE and HEADER-NODE are precomputed VUI nodes."
-  (let ((collapsed (benedict-vui-tool-result-block--collapsed-p props state)))
+  (let ((collapsed (vui-component 'benedict-vui-tool-result-block--collapsed-p props state)))
     (list :collapsed collapsed
           :on-toggle toggle-handler
           :header (lambda () header-node)
@@ -196,13 +196,13 @@ CONTENT-NODE and HEADER-NODE are precomputed VUI nodes."
 (defun benedict-vui-tool-result-block--render (props state)
   "Return the rendered tool result block for PROPS/STATE."
   (let* ((result (plist-get props :result))
-         (controlled (benedict-vui-tool-result-block--controlled-p props))
-         (collapsed (benedict-vui-tool-result-block--collapsed-p props state))
-         (status (benedict-vui-tool-result-block--result-status props result))
-         (body-text (benedict-vui-tool-result-block--body-text result))
-         (actions (benedict-vui-tool-result-block--resolve-actions props result))
+         (controlled (vui-component 'benedict-vui-tool-result-block--controlled-p props))
+         (collapsed (vui-component 'benedict-vui-tool-result-block--collapsed-p props state))
+         (status (vui-component 'benedict-vui-tool-result-block--result-status props result))
+         (body-text (vui-component 'benedict-vui-tool-result-block--body-text result))
+         (actions (vui-component 'benedict-vui-tool-result-block--resolve-actions props result))
          (expanded (plist-get state :expanded))
-         (truncation (benedict-vui-tool-result-block--truncate
+         (truncation (vui-component 'benedict-vui-tool-result-block--truncate
                       body-text
                       benedict-vui-tool-result-block--truncate-limit))
          (truncated (cdr truncation))
@@ -215,10 +215,10 @@ CONTENT-NODE and HEADER-NODE are precomputed VUI nodes."
                               (vui-set-state :collapsed next))))
          (toggle-expand (vui-use-callback ()
                           (vui-set-state :expanded (lambda (value) (not value)))))
-         (header-node (benedict-vui-tool-result-block--header result status))
-         (content-node (benedict-vui-tool-result-block--content-node
+         (header-node (vui-component 'benedict-vui-tool-result-block--header result status))
+         (content-node (vui-component 'benedict-vui-tool-result-block--content-node
                         display-text truncated expanded toggle-expand actions status))
-         (collapsible-props (benedict-vui-tool-result-block--collapsible-props
+         (collapsible-props (vui-component 'benedict-vui-tool-result-block--collapsible-props
                              props state toggle-collapse content-node header-node)))
     (vui-use-effect (body-text)
       (let ((prev (car body-ref)))
@@ -232,7 +232,11 @@ CONTENT-NODE and HEADER-NODE are precomputed VUI nodes."
   :state ((collapsed t)
           (expanded nil))
   :render
-  (benedict-vui-tool-result-block--render props state))
+  (vui-component 'benedict-vui-tool-result-block--render props state))
+
+(defun benedict-vui-tool-result-block (&rest props)
+  "Create a tool result block component node from PROPS."
+  (apply #'vui-component 'benedict-vui-tool-result-block props))
 
 (provide 'benedict-vui-tool-result-block)
 ;;; benedict-vui-tool-result-block.el ends here

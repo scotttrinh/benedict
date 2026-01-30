@@ -29,11 +29,11 @@
    ((null message) nil)
    ((stringp message) (list :role 'assistant :content message))
    ((vectorp message)
-    (benedict-vui-turn-list--normalize-message (append message nil)))
+    (vui-component 'benedict-vui-turn-list--normalize-message (append message nil)))
    ((listp message)
     (let ((plist (if (and (consp (car message))
                           (not (keywordp (caar message))))
-                     (benedict-vui-turn-list--alist-to-plist message)
+                     (vui-component 'benedict-vui-turn-list--alist-to-plist message)
                    message)))
       (copy-sequence plist)))
    (t (list :role 'assistant :content (format "%s" message)))))
@@ -43,10 +43,10 @@
   (cond
    ((null messages) nil)
    ((vectorp messages)
-    (benedict-vui-turn-list--normalize-messages (append messages nil)))
+    (vui-component 'benedict-vui-turn-list--normalize-messages (append messages nil)))
    ((listp messages)
     (delq nil (mapcar #'benedict-vui-turn-list--normalize-message messages)))
-   (t (list (benedict-vui-turn-list--normalize-message messages)))))
+   (t (list (vui-component 'benedict-vui-turn-list--normalize-message messages)))))
 
 (defun benedict-vui-turn-list--normalize-role (role)
   "Normalize ROLE into a symbol."
@@ -60,7 +60,7 @@
   "Group MESSAGES into turns, starting a new turn at each user message."
   (let (turns current)
     (dolist (message messages)
-      (let ((role (benedict-vui-turn-list--normalize-role (plist-get message :role))))
+      (let ((role (vui-component 'benedict-vui-turn-list--normalize-role (plist-get message :role))))
         (if (eq role 'user)
             (progn
               (when current
@@ -88,8 +88,8 @@
 
 (defun benedict-vui-turn-list--turn-id (turn index)
   "Return a stable identifier for TURN at INDEX."
-  (let* ((message (benedict-vui-turn-list--turn-message turn))
-          (id (and (listp message) (benedict-vui-turn-list--message-id message))))
+  (let* ((message (vui-component 'benedict-vui-turn-list--turn-message turn))
+          (id (and (listp message) (vui-component 'benedict-vui-turn-list--message-id message))))
     (or id
         (format "turn-%s"
                 (if (numberp index)
@@ -100,7 +100,7 @@
   "Return dependency list for scroll-to-bottom effects on MESSAGES."
   (let* ((count (length messages))
          (last-message (car (last messages)))
-         (id (and last-message (benedict-vui-turn-list--message-id last-message)))
+         (id (and last-message (vui-component 'benedict-vui-turn-list--message-id last-message)))
          (content (and last-message
                        (or (plist-get last-message :display-content)
                            (plist-get last-message :content))))
@@ -123,30 +123,34 @@
                      turn))
          (nodes (delq nil
                       (mapcar (lambda (message)
-                                (benedict-vui-turn :message message
+                                (vui-component 'benedict-vui-turn :message message
                                                    :collapsed-blocks collapsed-blocks))
                               messages))))
     (apply #'vui-vstack nodes)))
 
 (defun benedict-vui-turn-list--render (props)
   "Render the turn list for PROPS."
-  (let* ((messages (benedict-vui-turn-list--normalize-messages
+  (let* ((messages (vui-component 'benedict-vui-turn-list--normalize-messages
                     (plist-get props :conversation)))
-         (turns (benedict-vui-turn-list--group-turns messages))
+         (turns (vui-component 'benedict-vui-turn-list--group-turns messages))
          (collapsed-blocks (plist-get props :collapsed-blocks)))
-     (vui-use-effect ((benedict-vui-turn-list--scroll-deps messages))
-       (benedict-vui-turn-list--scroll-to-bottom)
+     (vui-use-effect ((vui-component 'benedict-vui-turn-list--scroll-deps messages))
+       (vui-component 'benedict-vui-turn-list--scroll-to-bottom)
        nil)
      (vui-list turns
                (lambda (turn &optional index)
-                 (benedict-vui-turn-list--render-turn
+                 (vui-component 'benedict-vui-turn-list--render-turn
                   turn collapsed-blocks))
                (lambda (turn &optional index)
-                 (benedict-vui-turn-list--turn-id turn index)))))
+                 (vui-component 'benedict-vui-turn-list--turn-id turn index)))))
 
 (vui-defcomponent benedict-vui-turn-list (props)
   :render
-  (benedict-vui-turn-list--render props))
+  (vui-component 'benedict-vui-turn-list--render props))
+
+(defun benedict-vui-turn-list (&rest props)
+  "Create a turn list component node from PROPS."
+  (apply #'vui-component 'benedict-vui-turn-list props))
 
 (provide 'benedict-vui-turn-list)
 ;;; benedict-vui-turn-list.el ends here

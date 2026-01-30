@@ -38,18 +38,18 @@
         (toggle-handler (vui-use-callback (expanded)
                           (lambda (_)
                             (vui-set-state :expanded #'not)))))
-    (benedict-vui-collapsible
+    (vui-component 'benedict-vui-collapsible
       :header (lambda ()
                 (vui-hstack
-                 (benedict-vui-badge :status 'context :theme 'benedict-chat-header-time)
-                 (vui-text (benedict-vui-context-indicator--summary slices))))
+                 (vui-component 'benedict-vui-badge :status 'context :theme 'benedict-chat-header-time)
+                 (vui-text (vui-component 'benedict-vui-context-indicator--summary slices))))
       :content (lambda ()
                  (vui-vstack
                   (vui-list slices
                             (lambda (slice)
                               (let ((id (plist-get slice :id)))
                                 (vui-hstack
-                                 (vui-text (benedict-vui-context-indicator--slice-label slice))
+                                 (vui-text (vui-component 'benedict-vui-context-indicator--slice-label slice))
                                  (vui-text " ")
                                  (when (functionp on-remove)
                                    (vui-button "×"
