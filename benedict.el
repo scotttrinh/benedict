@@ -1,7 +1,7 @@
 ;;; benedict.el --- Emacs-first AI assistant  -*- lexical-binding: t; -*-
 ;; Author: Benedict maintainers
 ;; Version: 0.1.0pre
-;; Package-Requires: ((emacs "27.1") (lgr "0.3") (dash "2.26.0") (s "1.12.0") (markdown-mode "2.5") (magit-section "3.3.0") (svg-lib "0.2.8"))
+;; Package-Requires: ((emacs "27.1") (lgr "0.3") (dash "2.26.0") (s "1.12.0") (markdown-mode "2.5") (magit-section "3.3.0") (svg-lib "0.2.8") (vui "0.1.0"))
 ;; Keywords: tools, convenience, ai
 ;; URL: https://github.com/scotttrinh/benedict
 
@@ -13,6 +13,14 @@
 ;;; Code:
 
 (eval-when-compile (require 'cl-lib))
+
+(defconst benedict--components-directory
+  (expand-file-name "components"
+                    (file-name-directory (or load-file-name buffer-file-name)))
+  "Directory that stores Benedict Vui components.")
+
+(when (file-directory-p benedict--components-directory)
+  (add-to-list 'load-path benedict--components-directory))
 
 ;; Customization
 (defgroup benedict nil
@@ -32,6 +40,7 @@
 
 (require 'benedict-logging)
 (require 'benedict-provider)
+(require 'benedict-errors)
 
 ;; Faces
 (defgroup benedict-chat nil
@@ -131,10 +140,6 @@
   '((t :inherit warning))
   "Face for running tool call status indicators."
   :group 'benedict-chat)
-
-;; Error hierarchy
-(define-error 'benedict-error "Benedict error")
-(define-error 'benedict-provider-error "Benedict provider error" 'benedict-error)
 
 ;; Minor mode
 (defvar benedict-prefix-map

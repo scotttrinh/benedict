@@ -5,7 +5,7 @@
 (package-file "benedict.el")
 (website-url "https://github.com/scotttrinh/benedict")
 (keywords "tools" "convenience" "ai")
-(files "benedict.el" "benedict-*.el" "test/*.el")
+(files "benedict.el" "benedict-*.el" "components/*.el" "test/*.el")
 
 (depends-on "emacs" "27.1")
 (depends-on "dash")
@@ -14,6 +14,7 @@
 (depends-on "markdown-mode")
 (depends-on "magit-section")
 (depends-on "svg-lib")
+(depends-on "vui")
 
 (development
  (depends-on "ert-async")
