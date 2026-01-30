@@ -104,11 +104,12 @@ Values computed from state are calculated on-the-fly, not stored:
 
 The Chat Buffer is the primary interface, rendered as a vui.el component tree.
 
-### 3.1 Layout
+ ### 3.1 Layout
 
 - **Header**: Provider/Model badge, status indicator, session title
 - **Conversation Stream**: `vui-list` of turns with stable keys
-- **Compose Area**: Controlled `vui-text-field` at buffer bottom
+- **Compose Area**: Controlled `vui-field` at buffer bottom with context indicators
+  - Keybindings for submit/history are set up by parent buffer, not by component render
 
 ### 3.2 Visual Elements
 
@@ -168,8 +169,8 @@ Thinking blocks, tool calls, and tool results use a compound component pattern:
   :on-click (lambda () (benedict--show-model-selector)))
 ```
 
-#### Keybindings
-Keybindings are registered in `benedict-mode-map` and dispatch actions to the root component:
+ #### Keybindings
+Keybindings are registered in `benedict-mode-map` and dispatch actions to a root component:
 
 | Key       | Action                        |
 |-----------|-------------------------------|
@@ -179,6 +180,42 @@ Keybindings are registered in `benedict-mode-map` and dispatch actions to the ro
 | `w`       | Copy last response            |
 | `n` / `p` | Next/Prev turn                |
 | `TAB`     | Toggle block collapse         |
+
+##### Keybinding Pattern Guidelines
+
+Components should NOT set keymaps during render (avoiding side effects in `vui-use-effect`). Instead:
+
+1. **Define named keymap variable** for component-specific bindings:
+   ```elisp
+   (defvar my-component-mode-map
+     (let ((map (make-sparse-keymap)))
+       (define-key map (kbd "C-c C-c") #'my-component-submit)
+       map)
+     "Keymap for my-component.")
+   ```
+
+2. **Define interactive commands** that operate on component state:
+   ```elisp
+   (defun my-component-submit ()
+     "Submit the component."
+     (interactive)
+     (let ((value (vui-field-value 'my-input)))
+       (when my-component--on-submit-callback
+         (funcall my-component--on-submit-callback value))))
+   ```
+
+3. **Parent buffer initializes keymaps** once (not per render):
+   ```elisp
+   (define-derived-mode benedict-chat-mode vui-mode "Benedict Chat"
+     (use-local-map benedict-chat-mode-map)  ; Compose maps together
+     ...)
+   ```
+
+4. **Users can customize** by modifying keymap variables before loading:
+   ```elisp
+   (with-eval-after-load 'benedict-vui-compose-field
+     (define-key benedict-vui-compose-field-mode-map (kbd "RET") 'my-submit))
+   ```
 
 ## 4. Streaming Architecture
 
@@ -454,6 +491,41 @@ Extract a new component when:
 - Same UI pattern appears in multiple places
 - Logic would benefit from isolation/testing
 
-### 11.3 Prop Drilling Threshold
+ ### 11.3 Prop Drilling Threshold
 
 If passing the same prop through 3+ intermediate components that don't use it, use Context instead.
+
+### 11.4 Keybinding Patterns
+
+Components must follow separation of concerns for keybindings:
+
+- **Don't set keymaps in render**: Avoid `use-local-map` in `vui-use-effect` - it clobbers maps and recreates on every render
+- **Define named keymap variables**: Allow users to customize by setting variables before loading
+- **Define interactive commands**: Commands that read from component state (via `vui-field-value` or callbacks)
+- **Parent initializes keymaps**: Buffer setup (mode init or `:on-mount`) composes keymaps once
+- **Component renders only**: Pure function that takes props and returns vnodes
+
+Example pattern:
+```elisp
+;; Component file - pure rendering
+(vui-defcomponent my-component (props state)
+  :render
+  (vui-field :key 'my-input ...))
+
+;; Commands file - interactive functions
+(defvar my-component-mode-map
+  (let ((map (make-sparse-keymap)))
+    (define-key map (kbd "C-c C-c") #'my-component-submit)
+    map))
+
+(defun my-component-submit ()
+  "Submit component."
+  (interactive)
+  (let ((value (vui-field-value 'my-input)))
+    (when my-component--on-submit
+      (funcall my-component--on-submit value))))
+
+;; Parent buffer - initialization
+(define-derived-mode my-mode vui-mode "My Mode"
+  (use-local-map my-component-mode-map))
+```
