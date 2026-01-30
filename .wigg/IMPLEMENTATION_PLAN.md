@@ -14,7 +14,7 @@
   - Dependencies: vui.el must be available as dependency
   - Notes: Use `vui-defcomponent`, accept `:content` prop. No local state needed.
 
-- [ ] **CodeBlock vui component** (refs: 03_ui_ux.md section 3.2)
+- [x] **CodeBlock vui component** (refs: 03_ui_ux.md section 3.2)
   - Scope: Render syntax-highlighted code with language detection, copy button
   - Files: Create `components/benedict-vui-code-block.el`, `test/benedict-vui-code-block-test.el`
   - Tests:
