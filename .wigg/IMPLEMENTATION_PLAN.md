@@ -46,7 +46,7 @@
   - Dependencies: None
   - Notes: Props: `:header` (function), `:content` (function), `:collapsed`, `:on-toggle`.
 
-- [ ] **ThinkingBlock vui component** (refs: 03_ui_ux.md section 1.2)
+- [x] **ThinkingBlock vui component** (refs: 03_ui_ux.md section 1.2)
   - Scope: Render reasoning/thinking content in collapsible block
   - Files: Create `components/benedict-vui-thinking-block.el`, `test/benedict-vui-thinking-block-test.el`
   - Tests:
