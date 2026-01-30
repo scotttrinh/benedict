@@ -20,20 +20,14 @@ plan, validate it, and commit.
 ## Workflow
 1) Read specs and the implementation plan.
 2) Select the highest priority uncompleted task.
-3) Use subagents to study relevant code.
+3) Use subagents to explore and study relevant code.
 4) Implement the task.
 5) Run build/tests to validate.
 6) Mark task complete in the plan.
-7) Commit changes with a clear message.
+7) Commit changes with a clear, concise message.
 8) Stop.
 
 ## Validation
 - Run the project's build and test commands.
 - Do not commit if validation fails. Fix issues first.
 
-## Initial response
-When invoked, say:
-
-```
-Reading the implementation plan to select the next task. I'll implement, validate, update the plan, and commit.
-```
