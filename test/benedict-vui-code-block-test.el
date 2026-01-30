@@ -19,26 +19,26 @@
 
 (ert-deftest benedict-vui-code-block-fontify-applies-base-face ()
   "Fontified code includes the base code face."
-  (let ((text (vui-component 'benedict-vui-code-block--fontify "(message \"hi\")" "emacs-lisp")))
-    (should (vui-component 'benedict-vui-code-block-test--face-member-p
+  (let ((text (benedict-vui-code-block--fontify "(message \"hi\")" "emacs-lisp")))
+    (should (benedict-vui-code-block-test--face-member-p
              'markdown-code-face
              (get-text-property 0 'face text)))))
 
 (ert-deftest benedict-vui-code-block-fontify-adds-syntax-face ()
   "Fontified code preserves syntax highlighting faces."
-  (let ((text (vui-component 'benedict-vui-code-block--fontify ";; comment" "emacs-lisp")))
-    (should (or (vui-component 'benedict-vui-code-block-test--face-member-p
+  (let ((text (benedict-vui-code-block--fontify ";; comment" "emacs-lisp")))
+    (should (or (benedict-vui-code-block-test--face-member-p
                  'font-lock-comment-face
                  (get-text-property 0 'face text))
-                (vui-component 'benedict-vui-code-block-test--face-member-p
+                (benedict-vui-code-block-test--face-member-p
                  'font-lock-comment-delimiter-face
                  (get-text-property 0 'face text))))))
 
 (ert-deftest-async benedict-vui-code-block-copy-feedback-clears (done)
   "Copy feedback toggles on and clears after timeout."
-  (let ((vui-component 'benedict-vui-code-block-copy-feedback-timeout 0.01)
+  (let ((benedict-vui-code-block-copy-feedback-timeout 0.01)
         (states nil))
-    (vui-component 'benedict-vui-code-block--copy "hello"
+    (benedict-vui-code-block--copy "hello"
                                    (lambda (value)
                                      (push value states)))
     (should (equal states '(t)))
@@ -49,10 +49,10 @@
 
 (ert-deftest benedict-vui-code-block-handles-unknown-language ()
   "Unknown languages fall back to plain rendering."
-  (let ((text (vui-component 'benedict-vui-code-block--fontify "hi" "unknownlang")))
+  (let ((text (benedict-vui-code-block--fontify "hi" "unknownlang")))
     (should (stringp text))
     (should (equal text "hi"))
-    (should (vui-component 'benedict-vui-code-block-test--face-member-p
+    (should (benedict-vui-code-block-test--face-member-p
              'markdown-code-face
              (get-text-property 0 'face text)))))
 

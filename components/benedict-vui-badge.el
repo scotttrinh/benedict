@@ -54,7 +54,7 @@
 
 (defun benedict-vui-badge--label (status)
   "Return a display label for STATUS."
-  (let* ((normalized (vui-component 'benedict-vui-badge--normalize-status status))
+  (let* ((normalized (benedict-vui-badge--normalize-status status))
          (label (cdr (assq normalized benedict-vui-badge--labels))))
     (cond
      (label label)
@@ -63,15 +63,15 @@
 
 (defun benedict-vui-badge--face (status theme)
   "Return a face for STATUS with optional THEME fallback."
-  (let* ((normalized (vui-component 'benedict-vui-badge--normalize-status status))
-         (theme-face (vui-component 'benedict-vui-badge--coerce-face theme))
+  (let* ((normalized (benedict-vui-badge--normalize-status status))
+         (theme-face (benedict-vui-badge--coerce-face theme))
          (face (cdr (assq normalized benedict-vui-badge--faces))))
     (or face theme-face 'benedict-chat-header)))
 
 (defun benedict-vui-badge--propertize (label face)
   "Return LABEL with FACE applied."
   (let* ((label (format "%s" label))
-         (face (or (vui-component 'benedict-vui-badge--coerce-face face) 'benedict-chat-header))
+         (face (or (benedict-vui-badge--coerce-face face) 'benedict-chat-header))
          (text (copy-sequence label)))
     (when (> (length text) 0)
       (add-face-text-property 0 (length text) face t text))
@@ -81,9 +81,9 @@
   :render
   (let* ((status (plist-get props :status))
          (theme (plist-get props :theme))
-         (label (vui-component 'benedict-vui-badge--label status))
-         (face (vui-component 'benedict-vui-badge--face status theme)))
-    (vui-text (vui-component 'benedict-vui-badge--propertize label face))))
+         (label (benedict-vui-badge--label status))
+         (face (benedict-vui-badge--face status theme)))
+    (vui-text (benedict-vui-badge--propertize label face))))
 
 (defun benedict-vui-badge (&rest props)
   "Create a status badge component node from PROPS."

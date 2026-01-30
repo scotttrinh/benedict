@@ -18,7 +18,7 @@
                  'badge))
               ((symbol-function 'vui-hstack)
                (lambda (&rest _children) 'header)))
-      (vui-component 'benedict-vui-turn-header--render '(:role "user"))
+      (benedict-vui-turn-header--render '(:role "user"))
       (should (eq badge-status 'user)))))
 
 (ert-deftest benedict-vui-turn-header-formats-timestamp ()
@@ -27,7 +27,7 @@
          (expected (format-time-string
                     benedict-vui-turn-header--timestamp-format
                     timestamp)))
-    (should (equal (vui-component 'benedict-vui-turn-header--timestamp-string timestamp)
+    (should (equal (benedict-vui-turn-header--timestamp-string timestamp)
                    expected))))
 
 (ert-deftest benedict-vui-turn-header-handles-missing-timestamp ()
@@ -41,7 +41,7 @@
                (lambda (&rest _args) 'badge))
               ((symbol-function 'vui-hstack)
                (lambda (&rest _children) 'header)))
-      (vui-component 'benedict-vui-turn-header--render '(:role assistant))
+      (benedict-vui-turn-header--render '(:role assistant))
       (should-not timestamp-called))))
 
 (provide 'test/benedict-vui-turn-header-test)

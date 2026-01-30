@@ -42,14 +42,14 @@
       :header (lambda ()
                 (vui-hstack
                  (vui-component 'benedict-vui-badge :status 'context :theme 'benedict-chat-header-time)
-                 (vui-text (vui-component 'benedict-vui-context-indicator--summary slices))))
+                 (vui-text (benedict-vui-context-indicator--summary slices))))
       :content (lambda ()
                  (vui-vstack
                   (vui-list slices
                             (lambda (slice)
                               (let ((id (plist-get slice :id)))
                                 (vui-hstack
-                                 (vui-text (vui-component 'benedict-vui-context-indicator--slice-label slice))
+                                 (vui-text (benedict-vui-context-indicator--slice-label slice))
                                  (vui-text " ")
                                  (when (functionp on-remove)
                                    (vui-button "×"

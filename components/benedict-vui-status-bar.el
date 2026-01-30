@@ -39,10 +39,10 @@
   :render
   (let* ((usage (plist-get props :usage))
          (error (plist-get props :error))
-         (tokens (vui-component 'benedict-vui-status-bar--total-tokens usage))
-         (cost (vui-component 'benedict-vui-status-bar--cost usage))
-         (token-label (vui-component 'benedict-vui-status-bar--format-tokens tokens))
-         (cost-label (vui-component 'benedict-vui-status-bar--format-cost cost)))
+         (tokens (benedict-vui-status-bar--total-tokens usage))
+         (cost (benedict-vui-status-bar--cost usage))
+         (token-label (benedict-vui-status-bar--format-tokens tokens))
+         (cost-label (benedict-vui-status-bar--format-cost cost)))
     (vui-hstack
       :spacing 2
       (when token-label

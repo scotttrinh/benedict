@@ -222,8 +222,7 @@ See `benedict-session' for the in-memory session data structure.")
     (erase-buffer))
   (setq benedict-chat--vui-mount
         (vui-mount
-         (vui-component
-          'benedict-vui-root
+         (vui-component 'benedict-vui-root
           :session benedict-chat--session
           :initial-slices benedict-chat--context-slices
           :initial-input ""

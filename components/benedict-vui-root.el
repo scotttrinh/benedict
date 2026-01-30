@@ -32,8 +32,8 @@
 
 (defun benedict-vui-root--append-streaming (conversation streaming)
   "Return CONVERSATION with STREAMING appended when active."
-  (if (vui-component 'benedict-vui-root--streaming-message streaming)
-      (append conversation (list (vui-component 'benedict-vui-root--streaming-message streaming)))
+  (if (benedict-vui-root--streaming-message streaming)
+      (append conversation (list (benedict-vui-root--streaming-message streaming)))
     conversation))
 
 (defun benedict-vui-root--submit (value on-submit retain-context)
@@ -68,7 +68,7 @@ Clears input and context when RETAIN-CONTEXT is nil."
          (initial-input (plist-get props :initial-input))
          (initial-conversation (and session
                                     (benedict-session-messages-chronological session)))
-         (initial-streaming (vui-component 'benedict-vui-root--session-draft session))
+         (initial-streaming (benedict-vui-root--session-draft session))
          (initial-provider (and session (benedict-session-provider session)))
          (initial-model (and session (benedict-session-model session)))
          (initial-usage (and session (benedict-session-last-usage session))))
@@ -88,9 +88,9 @@ Clears input and context when RETAIN-CONTEXT is nil."
       (when initial-usage
         (vui-set-state :usage initial-usage)))
     (when session
-      (let ((subscription (vui-component 'benedict-vui-root--subscribe-to-session session)))
+      (let ((subscription (benedict-vui-root--subscribe-to-session session)))
         (lambda ()
-          (vui-component 'benedict-vui-root--unsubscribe-from-session subscription)))))
+          (benedict-vui-root--unsubscribe-from-session subscription)))))
   :render
   (let* ((current-conversation (plist-get state :conversation))
          (current-streaming (plist-get state :streaming))
@@ -104,7 +104,7 @@ Clears input and context when RETAIN-CONTEXT is nil."
          (current-slices (or (plist-get props :slices)
                              (plist-get state :slices)))
          (current-history (plist-get state :history))
-         (render-conversation (vui-component 'benedict-vui-root--append-streaming
+         (render-conversation (benedict-vui-root--append-streaming
                                current-conversation current-streaming))
          (retain-context (plist-get props :retain-context))
          (register-actions (plist-get props :register-actions))
@@ -119,7 +119,7 @@ Clears input and context when RETAIN-CONTEXT is nil."
                         (vui-set-state :slices slices))))
          (submit-handler (vui-use-callback (on-submit retain-context)
                            (lambda (value)
-                             (vui-component 'benedict-vui-root--submit
+                             (benedict-vui-root--submit
                               value on-submit retain-context))))
          (slice-remove (vui-use-callback (current-slices on-slices-change)
                          (lambda (slice-id)
@@ -177,7 +177,7 @@ Clears input and context when RETAIN-CONTEXT is nil."
 Returns a function that when called unsubscribes from events."
   (let ((handler (lambda (sess event-type payload)
                   (when (eq sess session)
-                    (vui-component 'benedict-vui-root--handle-session-event event-type payload)))))
+                    (benedict-vui-root--handle-session-event event-type payload)))))
     (add-hook 'benedict-session-event-hook handler)
     (lambda ()
       (remove-hook 'benedict-session-event-hook handler))))

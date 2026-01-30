@@ -25,12 +25,12 @@
       :conversation conversation
       :collapsed-blocks collapsed-blocks)
      (vui-component 'benedict-vui-streaming-indicator
-      :visible (vui-component 'benedict-vui-conversation-view--streaming-active-p streaming)))))
+      :visible (benedict-vui-conversation-view--streaming-active-p streaming)))))
 
 (vui-defcomponent benedict-vui-conversation-view (props)
   "Main conversation area containing TurnList and StreamingIndicator."
   :render
-  (vui-component 'benedict-vui-conversation-view--render props))
+  (benedict-vui-conversation-view--render props))
 
 (defun benedict-vui-conversation-view (&rest props)
   "Create a conversation view component node from PROPS."

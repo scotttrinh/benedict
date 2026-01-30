@@ -44,11 +44,11 @@
    ((null block) nil)
    ((stringp block) (list :type 'text :content block))
    ((vectorp block)
-    (vui-component 'benedict-vui-content-block-list--normalize-block (append block nil)))
+    (benedict-vui-content-block-list--normalize-block (append block nil)))
    ((listp block)
     (let ((plist (if (and (consp (car block))
                           (not (keywordp (caar block))))
-                     (vui-component 'benedict-vui-content-block-list--alist-to-plist block)
+                     (benedict-vui-content-block-list--alist-to-plist block)
                    block)))
       (copy-sequence plist)))
    (t (list :type 'text :content (format "%s" block)))))
@@ -59,7 +59,7 @@
    ((null blocks) nil)
    ((stringp blocks) (list (list :type 'text :content blocks)))
    ((vectorp blocks)
-    (vui-component 'benedict-vui-content-block-list--normalize-blocks (append blocks nil)))
+    (benedict-vui-content-block-list--normalize-blocks (append blocks nil)))
    ((listp blocks)
     (delq nil (mapcar #'benedict-vui-content-block-list--normalize-block blocks)))
    (t (list (list :type 'text :content (format "%s" blocks))))))
@@ -70,7 +70,7 @@
                   (plist-get block :kind)
                   (plist-get block :block-type)
                   (plist-get block :role)))
-         (type (vui-component 'benedict-vui-content-block-list--normalize-type raw)))
+         (type (benedict-vui-content-block-list--normalize-type raw)))
     (cond
      ((eq type 'tool) 'tool-result)
      ((eq type 'assistant) 'text)
@@ -102,7 +102,7 @@
   "Return non-nil when BLOCK at INDEX is collapsed.
 
 COLLAPSED-BLOCKS may be a list or hash table of block IDs."
-  (let ((block-id (vui-component 'benedict-vui-content-block-list--block-id block index)))
+  (let ((block-id (benedict-vui-content-block-list--block-id block index)))
     (cond
      ((hash-table-p collapsed-blocks) (gethash block-id collapsed-blocks))
      ((listp collapsed-blocks) (member block-id collapsed-blocks))
@@ -131,13 +131,13 @@ COLLAPSED-BLOCKS may be a list or hash table of block IDs."
 
 (defun benedict-vui-content-block-list--render-block (block collapsed-blocks index)
   "Return a Vui node for BLOCK at INDEX using COLLAPSED-BLOCKS."
-  (let* ((type (vui-component 'benedict-vui-content-block-list--block-type block))
-         (collapsed (vui-component 'benedict-vui-content-block-list--collapsed-p
+  (let* ((type (benedict-vui-content-block-list--block-type block))
+         (collapsed (benedict-vui-content-block-list--collapsed-p
                      collapsed-blocks block index)))
     (pcase type
       ('thinking
        (vui-component 'benedict-vui-thinking-block
-        :thinking-data (vui-component 'benedict-vui-content-block-list--thinking-content block)
+        :thinking-data (benedict-vui-content-block-list--thinking-content block)
         :collapsed collapsed))
       ('tool-use
        (vui-component 'benedict-vui-tool-use-block
@@ -152,27 +152,27 @@ COLLAPSED-BLOCKS may be a list or hash table of block IDs."
         :collapsed collapsed))
       ('code
        (vui-component 'benedict-vui-code-block
-        :code (vui-component 'benedict-vui-content-block-list--code-content block)
+        :code (benedict-vui-content-block-list--code-content block)
         :language (plist-get block :language)))
       (_
        (vui-component 'benedict-vui-text-block
-        :content (vui-component 'benedict-vui-content-block-list--text-content block))))))
+        :content (benedict-vui-content-block-list--text-content block))))))
 
 (defun benedict-vui-content-block-list--render (props)
   "Render a list of content blocks for PROPS."
-  (let* ((blocks (vui-component 'benedict-vui-content-block-list--normalize-blocks
+  (let* ((blocks (benedict-vui-content-block-list--normalize-blocks
                   (plist-get props :blocks)))
          (collapsed-blocks (plist-get props :collapsed-blocks)))
     (vui-list blocks
               (lambda (block &optional index)
-                (vui-component 'benedict-vui-content-block-list--render-block
+                (benedict-vui-content-block-list--render-block
                  block collapsed-blocks index))
               (lambda (block &optional index)
-                (vui-component 'benedict-vui-content-block-list--block-id block index)))))
+                (benedict-vui-content-block-list--block-id block index)))))
 
 (vui-defcomponent benedict-vui-content-block-list (props)
   :render
-  (vui-component 'benedict-vui-content-block-list--render props))
+  (benedict-vui-content-block-list--render props))
 
 (defun benedict-vui-content-block-list (&rest props)
   "Create a content block list component node from PROPS."

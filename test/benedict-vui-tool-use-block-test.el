@@ -22,7 +22,7 @@
                  text))
               ((symbol-function 'vui-hstack)
                (lambda (&rest _children) 'header)))
-      (vui-component 'benedict-vui-tool-use-block--header '(:name "bash") 'success)
+      (benedict-vui-tool-use-block--header '(:name "bash") 'success)
       (should (eq badge-status 'success))
       (should (cl-some (lambda (text)
                          (and (stringp text)
@@ -31,7 +31,7 @@
 
 (ert-deftest benedict-vui-tool-use-block-formats-arguments-content ()
   "Expanded content includes formatted arguments."
-  (let ((text (vui-component 'benedict-vui-tool-use-block--content-text
+  (let ((text (benedict-vui-tool-use-block--content-text
                '(:arguments (:foo 1 :bar "hi")))))
     (should (string-match-p "Arguments:" text))
     (should (string-match-p ":foo" text))
@@ -40,17 +40,17 @@
 
 (ert-deftest benedict-vui-tool-use-block-normalizes-statuses ()
   "Status normalization handles in-progress, success, and failure states."
-  (should (eq (vui-component 'benedict-vui-tool-use-block--normalize-status 'in-progress) 'running))
-  (should (eq (vui-component 'benedict-vui-tool-use-block--normalize-status 'pending) 'running))
-  (should (eq (vui-component 'benedict-vui-tool-use-block--normalize-status 'success) 'success))
-  (should (eq (vui-component 'benedict-vui-tool-use-block--normalize-status 'failure) 'failure)))
+  (should (eq (benedict-vui-tool-use-block--normalize-status 'in-progress) 'running))
+  (should (eq (benedict-vui-tool-use-block--normalize-status 'pending) 'running))
+  (should (eq (benedict-vui-tool-use-block--normalize-status 'success) 'success))
+  (should (eq (benedict-vui-tool-use-block--normalize-status 'failure) 'failure)))
 
 (ert-deftest benedict-vui-tool-use-block-shows-spinner-when-running ()
   "Spinner is visible for running state only."
-  (should (vui-component 'benedict-vui-tool-use-block--spinner-visible-p 'running))
-  (should (vui-component 'benedict-vui-tool-use-block--spinner-visible-p 'in-progress))
-  (should-not (vui-component 'benedict-vui-tool-use-block--spinner-visible-p 'success))
-  (should-not (vui-component 'benedict-vui-tool-use-block--spinner-visible-p 'failure)))
+  (should (benedict-vui-tool-use-block--spinner-visible-p 'running))
+  (should (benedict-vui-tool-use-block--spinner-visible-p 'in-progress))
+  (should-not (benedict-vui-tool-use-block--spinner-visible-p 'success))
+  (should-not (benedict-vui-tool-use-block--spinner-visible-p 'failure)))
 
 (provide 'test/benedict-vui-tool-use-block-test)
 ;;; benedict-vui-tool-use-block-test.el ends here

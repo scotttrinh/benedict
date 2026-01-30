@@ -10,22 +10,22 @@
 
 (ert-deftest benedict-vui-provider-badge-displays-provider ()
   "Badge displays provider name correctly."
-  (should (equal (vui-component 'benedict-vui-provider-badge--format-provider 'openrouter)
+  (should (equal (benedict-vui-provider-badge--format-provider 'openrouter)
                  "OPE"))
-  (should (equal (vui-component 'benedict-vui-provider-badge--format-provider 'anthropic)
+  (should (equal (benedict-vui-provider-badge--format-provider 'anthropic)
                  "ANT"))
-  (should (equal (vui-component 'benedict-vui-provider-badge--format-provider nil)
+  (should (equal (benedict-vui-provider-badge--format-provider nil)
                  "???")))
 
 (ert-deftest benedict-vui-provider-badge-displays-model ()
   "Badge displays model name correctly."
-  (should (equal (vui-component 'benedict-vui-provider-badge--format-model
+  (should (equal (benedict-vui-provider-badge--format-model
                   "anthropic/claude-3-sonnet-20240229")
                  "claude-3-sonnet-20240229"))
-  (should (equal (vui-component 'benedict-vui-provider-badge--format-model
+  (should (equal (benedict-vui-provider-badge--format-model
                   "openai/gpt-4")
                  "gpt-4"))
-  (should (equal (vui-component 'benedict-vui-provider-badge--format-model nil)
+  (should (equal (benedict-vui-provider-badge--format-model nil)
                  "unknown")))
 
 (provide 'test/benedict-vui-provider-badge-test)

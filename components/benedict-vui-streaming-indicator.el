@@ -40,7 +40,7 @@
           (cancel-timer (car timer-ref))
           (setcar timer-ref nil))))
     (when visible
-      (let* ((current-frame (vui-component 'benedict-vui-streaming-indicator--frame
+      (let* ((current-frame (benedict-vui-streaming-indicator--frame
                              (plist-get state :frame-index)))
              (spinner-text (concat " " current-frame " ")))
         (vui-text (propertize spinner-text 'face 'benedict-chat-header-time))))))

@@ -251,3 +251,22 @@
     - Context capture works
   - Dependencies: All vui components, BenedictRoot wired to session
   - Notes: Keep magit-section requires temporarily for gradual migration. Remove after verification.
+
+  **Current checkpoint (WIP commit 6a312c2):**
+  - Accomplished:
+    - Chat buffer now composes vui components explicitly via `(vui-component 'benedict-vui-...)`.
+    - Magit section renderer removed (`benedict-chat-render.el`, `benedict-chat-sections.el`) and related tests deleted.
+    - Chat navigation refactored to operate on session messages instead of magit sections (`benedict-chat-nav.el`).
+    - Compose flow updated to clear/set context slices via `benedict-chat--set-context-slices`.
+    - BenedictRoot and child components are wired into the render tree.
+  - Follow-up fixes:
+    - Reverted accidental helper rewrites (`vui-component` on `--` helpers) and restored explicit component composition only.
+    - Restored component/test helpers to direct function calls; cleaned stray placeholder replacement in `benedict-chat.el`.
+  - Still to do:
+    - Address failing tests in chat/session integration (void-function, session type errors, routing, history attach).
+    - Verify or replace behavior that depended on magit sections (thinking toggle, tool actions, streaming updates).
+    - Update any doc/autoloads to ensure new render path is active and load order is correct.
+  - Unknowns to explore:
+    - Confirm intended VUI API for component composition vs helper functions (what should/shouldn't use `vui-component`).
+    - Identify any remaining call sites that still assume magit sections (e.g., tool UI, thinking UI, stream handlers).
+    - Clarify how to map message navigation to buffer positions with VUI rendering (search-based vs VUI scroll APIs).

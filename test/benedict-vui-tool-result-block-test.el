@@ -22,7 +22,7 @@
                  text))
               ((symbol-function 'vui-hstack)
                (lambda (&rest _children) 'header)))
-      (vui-component 'benedict-vui-tool-result-block--header
+      (benedict-vui-tool-result-block--header
        '(:ui (:header "Read file — foo.txt"))
        'success)
       (should (eq badge-status 'success))
@@ -33,7 +33,7 @@
 
 (ert-deftest benedict-vui-tool-result-block-body-prefers-ui-body ()
   "Body prefers UI :body text when present."
-  (let ((body (vui-component 'benedict-vui-tool-result-block--body-text
+  (let ((body (benedict-vui-tool-result-block--body-text
                '(:content "Fallback"
                  :ui (:body "From UI")))))
     (should (equal body "From UI"))))
@@ -41,7 +41,7 @@
 (ert-deftest benedict-vui-tool-result-block-truncates-long-body ()
   "Long body text is truncated with marker."
   (let* ((text (make-string 520 ?a))
-         (truncation (vui-component 'benedict-vui-tool-result-block--truncate
+         (truncation (benedict-vui-tool-result-block--truncate
                       text
                       benedict-vui-tool-result-block--truncate-limit)))
     (should (cdr truncation))
@@ -49,7 +49,7 @@
 
 (ert-deftest benedict-vui-tool-result-block-error-styles-body ()
   "Failure status applies error face to body text."
-  (let ((text (vui-component 'benedict-vui-tool-result-block--propertize "Oops" 'failure)))
+  (let ((text (benedict-vui-tool-result-block--propertize "Oops" 'failure)))
     (should (eq (get-text-property 0 'face text) 'benedict-chat-tool-error))))
 
 (ert-deftest benedict-vui-tool-result-block-normalizes-actions ()
@@ -57,13 +57,13 @@
   (let* ((actions (list (list :label "Open" :handler #'ignore)
                         (list :label 12 :handler #'ignore)
                         (list :label "Bad" :handler nil)))
-         (normalized (vui-component 'benedict-vui-tool-result-block--normalize-actions actions)))
+         (normalized (benedict-vui-tool-result-block--normalize-actions actions)))
     (should (= (length normalized) 1))
     (should (equal (plist-get (car normalized) :label) "Open"))))
 
 (ert-deftest benedict-vui-tool-result-block-error-overrides-status ()
   "Error info forces failure status even with success hints."
-  (let ((status (vui-component 'benedict-vui-tool-result-block--result-status
+  (let ((status (benedict-vui-tool-result-block--result-status
                  nil
                  '(:ui (:state success)
                    :metadata (:error (:message "boom"))))))
