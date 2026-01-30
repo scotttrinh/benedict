@@ -230,16 +230,16 @@
    - Dependencies: ChatHeader, ConversationView, InputArea, StatusBar
    - Notes: This is the integration point. Wire to `benedict-session` events.
 
-- [ ] **Wire BenedictRoot to benedict-session events** (refs: 03_ui_ux.md, 02_architecture.md)
-  - Scope: Connect vui state updates to session event system
-  - Files: Modify `benedict-vui-root.el`, `benedict-chat.el`
-  - Tests:
-    - Session message-added updates :conversation state
-    - Session draft-updated updates :streaming state
-    - Session state-changed updates component state
-    - Batched updates via `vui-batch`
-  - Dependencies: BenedictRoot, existing session event system
-  - Notes: Use `vui-use-effect` for session subscription. Return cleanup function.
+- [x] **Wire BenedictRoot to benedict-session events** (refs: 03_ui_ux.md, 02_architecture.md)
+   - Scope: Connect vui state updates to session event system
+   - Files: Modify `benedict-vui-root.el`, `benedict-chat.el`
+   - Tests:
+     - Session message-added updates :conversation state
+     - Session draft-updated updates :streaming state
+     - Session state-changed updates component state
+     - Batched updates via `vui-batch`
+   - Dependencies: BenedictRoot, existing session event system
+   - Notes: Use `vui-use-effect` for session subscription. Return cleanup function.
 
 - [ ] **Use vui.el rendering in chat buffer** (refs: 03_ui_ux.md)
   - Scope: Switch chat buffer to use BenedictRoot instead of magit-section
