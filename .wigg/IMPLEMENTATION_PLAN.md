@@ -122,15 +122,15 @@
   - Dependencies: Turn
   - Notes: Props: `:conversation` (list of messages), `:collapsed-blocks`.
 
-- [ ] **StreamingIndicator vui component** (refs: 03_ui_ux.md section 1.2)
-  - Scope: Visual indicator during active streaming
-  - Files: Create `components/benedict-vui-streaming-indicator.el`, `test/benedict-vui-streaming-indicator-test.el`
-  - Tests:
-    - Visible only when `:visible` prop is true
-    - Shows animated spinner
-    - Cleans up timer on unmount
-  - Dependencies: None
-  - Notes: Use `vui-use-effect` for timer-based animation. Props: `:visible`.
+ - [x] **StreamingIndicator vui component** (refs: 03_ui_ux.md section 1.2)
+   - Scope: Visual indicator during active streaming
+   - Files: Create `components/benedict-vui-streaming-indicator.el`, `test/benedict-vui-streaming-indicator-test.el`
+   - Tests:
+     - Visible only when `:visible` prop is true
+     - Shows animated spinner
+     - Cleans up timer on unmount
+   - Dependencies: None
+   - Notes: Use `vui-use-effect` for timer-based animation. Props: `:visible`.
 
 ### vui.el Migration - Input Components
 
