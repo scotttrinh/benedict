@@ -144,16 +144,16 @@
    - Dependencies: StatusBadge
    - Notes: Props: `:slices`, `:on-remove`.
 
-- [ ] **ComposeField vui component** (refs: 03_ui_ux.md section 1.2)
-  - Scope: Controlled text input for composing messages
-  - Files: Create `components/benedict-vui-compose-field.el`, `test/benedict-vui-compose-field-test.el`
-  - Tests:
-    - Controlled input via `:value` and `:on-change`
-    - Submit on C-c C-c or configured key
-    - History navigation with M-p/M-n
-    - Multiline support
-  - Dependencies: None
-  - Notes: Local state: `:history-index`. Props: `:value`, `:on-change`, `:on-submit`, `:placeholder`.
+ - [x] **ComposeField vui component** (refs: 03_ui_ux.md section 1.2)
+   - Scope: Controlled text input for composing messages
+   - Files: Create `components/benedict-vui-compose-field.el`, `test/benedict-vui-compose-field-test.el`
+   - Tests:
+     - Controlled input via `:value` and `:on-change`
+     - Submit on C-c C-c or configured key
+     - History navigation with M-p/M-n
+     - Multiline support
+   - Dependencies: None
+   - Notes: Local state: `:history-index`. Props: `:value`, `:on-change`, `:on-submit`, `:placeholder`.
 
 - [ ] **InputArea vui component** (refs: 03_ui_ux.md section 1.2)
   - Scope: Compose area with context indicators and input field
