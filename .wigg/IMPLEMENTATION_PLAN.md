@@ -68,7 +68,7 @@
   - Dependencies: CollapsibleBlock, StatusBadge
   - Notes: Props: `:tool-call`, `:status`. Use CollapsibleBlock wrapper.
 
-- [ ] **ToolResultBlock vui component** (refs: 03_ui_ux.md section 1.2)
+- [x] **ToolResultBlock vui component** (refs: 03_ui_ux.md section 1.2)
   - Scope: Render tool execution result with optional actions
   - Files: Create `components/benedict-vui-tool-result-block.el`, `test/benedict-vui-tool-result-block-test.el`
   - Tests:
