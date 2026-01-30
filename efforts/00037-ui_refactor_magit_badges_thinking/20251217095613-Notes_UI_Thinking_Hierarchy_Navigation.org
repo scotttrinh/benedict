@@ -1,9 +1,0 @@
-* Notes: UI thinking hierarchy + navigation expansion
-- Added a stable conversation root section in `benedict-chat-ui-mode` so new sections don’t become ad-hoc roots during incremental streaming inserts.
-- Thinking/tool blocks recorded while UI mode is active now attach to the latest assistant message via a stored `:parent-section` pointer (keeps a predictable message → subsections relationship without relying on magit internal hierarchy).
-- Thinking headers now include a fold indicator (▶/▼) and `benedict-chat-ui--sync-fold-state` refreshes the header after visibility changes, matching tool header refresh behavior.
-- Added navigation commands + bindings:
-  - `benedict-chat-jump-to-last-assistant` (chat/UI: `g a`, global prefix: `C-c C-b a`)
-  - `benedict-chat-next-tool-failure` / `benedict-chat-previous-tool-failure` (chat/UI: `] f` / `[ f`, global prefix: `C-c C-b f` / `C-c C-b F`)
-- Extended thinking tests to cover UI parent association and fold-sync header refresh without calling `magit-section-hide/show`.
-- Test run: `nix run .#test`.
