@@ -2,307 +2,109 @@
 
 ## Priority Tasks
 
-### vui.el Migration - Leaf Components
+### Test Infrastructure
 
-- [x] **TextBlock vui component** (refs: 03_ui_ux.md section 3.2)
-  - Scope: Render plain text content with markdown fontification support
-  - Files: Create `components/benedict-vui-text-block.el`, `test/benedict-vui-text-block-test.el`
-  - Tests:
-    - Renders text content correctly
-    - Applies markdown font-lock to body regions
-    - Handles empty content gracefully
-  - Dependencies: vui.el must be available as dependency
-  - Notes: Use `vui-defcomponent`, accept `:content` prop. No local state needed.
-
-- [x] **CodeBlock vui component** (refs: 03_ui_ux.md section 3.2)
-  - Scope: Render syntax-highlighted code with language detection, copy button
-  - Files: Create `components/benedict-vui-code-block.el`, `test/benedict-vui-code-block-test.el`
-  - Tests:
-    - Renders code with correct face
-    - Syntax highlighting via `vui-use-memo` for language fontification
-    - Copy action sets `:copied-feedback` local state, clears after timeout
-    - Handles unknown languages gracefully
-  - Dependencies: TextBlock (for fallback)
-  - Notes: Use `vui-use-memo` for expensive fontification. Local state: `:copied-feedback`.
-
-- [x] **StatusBadge vui component** (refs: 03_ui_ux.md section 3.2)
-  - Scope: Render role/status badges (USER, ASSISTANT, streaming, error, etc.)
-  - Files: Create `components/benedict-vui-badge.el`, `test/benedict-vui-badge-test.el`
-  - Tests:
-    - Renders correct label for each status type
-    - Applies correct face based on status
-    - Handles unknown status gracefully
+- [x] **Add shared VUI test helpers for real-buffer interaction** (refs: 07_harness_and_skills.md)
+  - Scope: Create a small, reusable helper module for clicking buttons and driving fields via widgets; keep helpers user-level (widget actions), not internal component fns.
+  - Files: `test/benedict-vui-test-utils.el`
+  - Tests: N/A (helpers are exercised by downstream tests)
   - Dependencies: None
-  - Notes: Pure presentational component. Props: `:status`, `:theme`.
+  - Notes: Include helpers like `benedict-vui-test--click-button-at`, `benedict-vui-test--click-button-labeled`, `benedict-vui-test--set-first-field`; require `widget` inside the helper module.
 
-- [x] **CollapsibleBlock vui component** (refs: 03_ui_ux.md section 3.3)
-  - Scope: Generic collapsible container with header and toggle
-  - Files: Create `components/benedict-vui-collapsible.el`, `test/benedict-vui-collapsible-test.el`
-  - Tests:
-    - Renders header always, content only when expanded
-    - Toggle callback fires on click/keypress
-    - Fold indicator shows ▶ (collapsed) or ▼ (expanded)
-    - Supports controlled mode (`:collapsed` prop) and uncontrolled (local state)
+### Leaf Component Behavior Tests (Render + Interaction)
+
+- [ ] **ToolResultBlock: mount + truncation/actions interaction tests** (refs: 03_ui_ux.md, 06_tools.md)
+  - Scope: Convert/extend tests to mount `benedict-vui-tool-result-block` into a real buffer and assert header/body rendering, error styling, truncation toggles, and action buttons.
+  - Files: `test/benedict-vui-tool-result-block-test.el`
+  - Tests: Add ERTs that (1) prefer `:ui :header`/`:ui :body`, (2) render fallback `:content`, (3) show `... [truncated]` + “Show more/less” toggle, (4) render actions and invoke handlers via widget click, (5) apply `benedict-message-key`/`benedict-block-id` text properties.
+  - Dependencies: `test/benedict-vui-test-utils.el`
+  - Notes: Use a harness component for controlled collapse if needed; call `vui-flush-sync` after clicks.
+
+- [ ] **ThinkingBlock: mount + collapse toggle tests with props assertions** (refs: 03_ui_ux.md)
+  - Scope: Add behavior tests for collapsed-by-default, toggle expansion, and rendered thinking content properties.
+  - Files: `test/benedict-vui-thinking-block-test.el`
+  - Tests: Mount with `:collapsed t`, assert content absent; click toggle, `vui-flush-sync`, assert thinking text appears with `benedict-region-kind` = `thinking`, `face` = `benedict-chat-thinking`, and `benedict-message-key`/`benedict-block-id`.
+  - Dependencies: `test/benedict-vui-test-utils.el`
+  - Notes: Cover at least one “streaming chunks / encrypted placeholder” case via rendered output (not only helper fns).
+
+- [ ] **Collapsible: mount + indicator toggle behavior test** (refs: 03_ui_ux.md)
+  - Scope: Ensure `benedict-vui-collapsible` is tested from the user perspective (indicator + content visibility) instead of only helper fns.
+  - Files: `test/benedict-vui-collapsible-test.el`
+  - Tests: Harness renders header/content strings; assert “▶” and hidden content initially; click toggle, `vui-flush-sync`, assert “▼” and content visible.
+  - Dependencies: `test/benedict-vui-test-utils.el`
+  - Notes: Keep existing helper-level tests only if they still add value.
+
+- [ ] **CodeBlock: mount + Copy/Copied! behavior without real timers** (refs: 03_ui_ux.md)
+  - Scope: Add behavior tests that validate what the user sees (label, code, copy feedback) without leaking timers.
+  - Files: `test/benedict-vui-code-block-test.el`
+  - Tests: Mount renders language label + “Copy”; click “Copy”, `vui-flush-sync`, assert “Copied!” appears; optionally assert region props (`benedict-message-key`, `benedict-block-id`) when code is rendered as text.
+  - Dependencies: `test/benedict-vui-test-utils.el`
+  - Notes: Stub `run-at-time`/`cancel-timer` with `cl-letf` to prevent background timers while still asserting immediate UI.
+
+- [ ] **ComposeField: mount + field change/submit integration tests** (refs: 03_ui_ux.md)
+  - Scope: Add widget-driven tests for typing and submit behavior (user-level), not just helper unit tests.
+  - Files: `test/benedict-vui-compose-field-test.el`
+  - Tests: Harness owns `value` state; simulate typing via widget (`widget-field-list`, `widget-value-set`, `widget-apply :notify`), `vui-flush-sync`, assert rendered value/callback; test submit via field submit path or `benedict-vui-compose-field-submit` after mount and assert callback.
+  - Dependencies: `test/benedict-vui-test-utils.el`
+  - Notes: Ensure buffer-local variables set by the component are cleaned up by unmount/teardown.
+
+- [ ] **ContextIndicator: mount + slice label + remove button interaction tests** (refs: 03_ui_ux.md)
+  - Scope: Add real-buffer tests for summary rendering and slice removal click behavior.
+  - Files: `test/benedict-vui-context-indicator-test.el`
+  - Tests: Mount with nil slices => “No context”; mount with slices => summary + labels; click “×” calls `:on-remove` with slice id; `vui-flush-sync` after click.
+  - Dependencies: `test/benedict-vui-test-utils.el`
+  - Notes: Keep existing pure formatting tests for `--summary`/`--slice-label` if still valuable.
+
+- [ ] **StatusBar: mount + token/cost/error render tests** (refs: 03_ui_ux.md)
+  - Scope: Add UI-level assertions for what renders given usage/error inputs.
+  - Files: `test/benedict-vui-status-bar-test.el`
+  - Tests: Mount with usage => “N tokens”; with cost => `$…`; with error => error text + separators; optionally assert face props on rendered segments.
   - Dependencies: None
-  - Notes: Props: `:header` (function), `:content` (function), `:collapsed`, `:on-toggle`.
 
-- [x] **ThinkingBlock vui component** (refs: 03_ui_ux.md section 1.2)
-  - Scope: Render reasoning/thinking content in collapsible block
-  - Files: Create `components/benedict-vui-thinking-block.el`, `test/benedict-vui-thinking-block-test.el`
-  - Tests:
-    - Wraps content in CollapsibleBlock
-    - Shows "Thinking" badge in header
-    - Defaults to collapsed state
-    - Handles streaming thinking deltas
-  - Dependencies: CollapsibleBlock, StatusBadge
-  - Notes: Compose CollapsibleBlock with thinking-specific header. Props: `:thinking-data`, `:collapsed`.
+- [ ] **StreamingIndicator: mount visible state with stubbed timers** (refs: 03_ui_ux.md)
+  - Scope: Add a render smoke test for `:visible t` without leaving running timers.
+  - Files: `test/benedict-vui-streaming-indicator-test.el`
+  - Tests: Mount `:visible t` asserts spinner frame text exists; stub `run-with-timer`/`cancel-timer` to no-op; mount `:visible nil` asserts no spinner text.
+  - Dependencies: None
+  - Notes: Keep deterministic frame unit tests.
 
-- [x] **ToolUseBlock vui component** (refs: 03_ui_ux.md section 1.2)
-  - Scope: Render tool invocation with name, args, and status
-  - Files: Create `components/benedict-vui-tool-use-block.el`, `test/benedict-vui-tool-use-block-test.el`
-  - Tests:
-    - Shows tool name and status in header
-    - Displays formatted arguments when expanded
-    - Handles in-progress, success, and failure states
-    - Shows spinner during in-progress
-  - Dependencies: CollapsibleBlock, StatusBadge
-  - Notes: Props: `:tool-call`, `:status`. Use CollapsibleBlock wrapper.
+### Container / Composition Tests
 
-- [x] **ToolResultBlock vui component** (refs: 03_ui_ux.md section 1.2)
-  - Scope: Render tool execution result with optional actions
-  - Files: Create `components/benedict-vui-tool-result-block.el`, `test/benedict-vui-tool-result-block-test.el`
-  - Tests:
-    - Displays result content (truncated if long)
-    - Shows error state with error styling
-    - Renders action buttons from `:actions` prop
-    - Handles UI hints from tool output
-  - Dependencies: CollapsibleBlock, StatusBadge
-  - Notes: Props: `:result`, `:status`, `:actions`. Truncate content > 500 chars with expand option.
+- [ ] **ContentBlockList: mount mixed blocks + toggle callback wiring** (refs: 03_ui_ux.md, 06_tools.md)
+  - Scope: Verify that a list of mixed blocks renders expected user-visible output and that toggling collapsibles calls `:on-toggle-block` with `(block-id next)`.
+  - Files: `test/benedict-vui-content-block-list-test.el`
+  - Tests: Mount blocks including text/code/thinking/tool-use/tool-result; assert key labels/snippets in buffer; click a collapsible toggle and assert callback args; `vui-flush-sync` after click.
+  - Dependencies: `test/benedict-vui-test-utils.el`; leaf block behavior tests (ToolResultBlock/ThinkingBlock/Collapsible) should land first.
+  - Notes: Keep existing stable-key unit tests (stubbing `vui-list`) if they still catch regressions.
 
-### vui.el Migration - Container Components
+- [ ] **Turn: mount renders header + blocks and preserves role styling** (refs: 03_ui_ux.md)
+  - Scope: Add real render tests proving `benedict-vui-turn` composes header + content blocks and applies role faces to user-visible text.
+  - Files: `test/benedict-vui-turn-test.el`
+  - Tests: Mount a user message and assert “USER” badge and content present; mount assistant and assert “ASSISTANT”; for `:role 'tool` assert tool-result block label/content appears.
+  - Dependencies: Leaf component tests (Badge/TextBlock/ToolResultBlock) should land first.
 
-- [x] **TurnHeader vui component** (refs: 03_ui_ux.md section 1.2)
-  - Scope: Render turn header with role badge and timestamp
-  - Files: Create `components/benedict-vui-turn-header.el`, `test/benedict-vui-turn-header-test.el`
-  - Tests:
-    - Shows correct role badge (user/assistant/system)
-    - Formats timestamp correctly
-    - Handles missing timestamp gracefully
-  - Dependencies: StatusBadge
-  - Notes: Props: `:role`, `:timestamp`, `:metadata`.
+- [ ] **TurnList + ConversationView: mount conversation rendering + streaming indicator behavior** (refs: 03_ui_ux.md, 04_agent_loop.md)
+  - Scope: Add mount-based tests for composing turns and showing streaming indicator when streaming is active.
+  - Files: `test/benedict-vui-turn-list-test.el`, `test/benedict-vui-conversation-view-test.el`
+  - Tests: TurnList renders multiple turns; ConversationView renders TurnList and shows spinner when `:streaming '(:status active ...)`.
+  - Dependencies: `test/benedict-vui-streaming-indicator-test.el`; `test/benedict-vui-turn-test.el`
+  - Notes: Keep the existing scroll effect unit test (stub `vui--register-effect`) as a non-UI behavioral check.
 
-- [x] **ContentBlockList vui component** (refs: 03_ui_ux.md section 1.2)
-  - Scope: Render list of content blocks (text, thinking, tool) for a message
-  - Files: Create `components/benedict-vui-content-block-list.el`, `test/benedict-vui-content-block-list-test.el`
-  - Tests:
-    - Dispatches to correct block type based on content type
-    - Maintains stable keys for list reconciliation
-    - Handles mixed content types in sequence
-  - Dependencies: TextBlock, ThinkingBlock, ToolUseBlock, ToolResultBlock, CodeBlock
-  - Notes: Use `vui-list` with `:key` for stable identity. Props: `:blocks`.
+### Top-Level UI Smoke Tests
 
-- [x] **Turn vui component** (refs: 03_ui_ux.md section 1.2)
-  - Scope: Render complete turn (header + content blocks)
-  - Files: Create `components/benedict-vui-turn.el`, `test/benedict-vui-turn-test.el`
-  - Tests:
-    - Composes TurnHeader and ContentBlockList
-    - Passes correct props to children
-    - Handles user vs assistant turn styling
-  - Dependencies: TurnHeader, ContentBlockList
-  - Notes: Props: `:message` (full message plist), `:collapsed-blocks` (set).
+- [ ] **ChatHeader + InputArea: replace “can be loaded” tests with real render assertions** (refs: 03_ui_ux.md)
+  - Scope: Ensure these tests validate actual rendered buffer output rather than `featurep`/`should t`.
+  - Files: `test/benedict-vui-chat-header-test.el`, `test/benedict-vui-input-area-test.el`
+  - Tests: ChatHeader shows provider/model and title; InputArea shows “No context” and includes a field widget.
+  - Dependencies: `test/benedict-vui-test-utils.el` (optional)
 
-- [x] **TurnList vui component** (refs: 03_ui_ux.md section 1.2)
-  - Scope: Render conversation as list of turns with stable keys
-  - Files: Create `components/benedict-vui-turn-list.el`, `test/benedict-vui-turn-list-test.el`
-  - Tests:
-    - Uses `vui-list` with message ID as key
-    - Correctly groups user/assistant pairs
-    - Handles streaming turn at end
-    - Scrolls to bottom on new content
-  - Dependencies: Turn
-  - Notes: Props: `:conversation` (list of messages), `:collapsed-blocks`.
+- [ ] **Root: mount smoke test for baseline UI composition** (refs: 02_architecture.md, 03_ui_ux.md)
+  - Scope: Validate `benedict-vui-root` renders the main layout (header, conversation view, input area, status bar) for an empty or minimal session.
+  - Files: `test/benedict-vui-root-test.el`
+  - Tests: Mount with `session nil` and assert key visible strings (e.g. title “Chat”, “No context”, placeholder “Ask Benedict...”).
+  - Dependencies: ChatHeader/InputArea updates.
 
- - [x] **StreamingIndicator vui component** (refs: 03_ui_ux.md section 1.2)
-   - Scope: Visual indicator during active streaming
-   - Files: Create `components/benedict-vui-streaming-indicator.el`, `test/benedict-vui-streaming-indicator-test.el`
-   - Tests:
-     - Visible only when `:visible` prop is true
-     - Shows animated spinner
-     - Cleans up timer on unmount
-   - Dependencies: None
-   - Notes: Use `vui-use-effect` for timer-based animation. Props: `:visible`.
+## Completed
 
-### vui.el Migration - Input Components
-
- - [x] **ContextIndicator vui component** (refs: 03_ui_ux.md section 5.2)
-   - Scope: Show attached context slices in compose area
-   - Files: Create `components/benedict-vui-context-indicator.el`, `test/benedict-vui-context-indicator-test.el`
-   - Tests:
-     - Displays count and size of attached slices
-     - Shows slice labels on hover/expand
-     - Remove button clears individual slices
-   - Dependencies: StatusBadge
-   - Notes: Props: `:slices`, `:on-remove`.
-
-  - [x] **ComposeField vui component** (refs: 03_ui_ux.md section 1.2)
-    - Scope: Controlled text input for composing messages
-    - Files: Create `components/benedict-vui-compose-field.el`, `test/benedict-vui-compose-field-test.el`
-    - Tests:
-      - Controlled input via `:value` and `:on-change`
-      - Submit on configured key (via parent keymap)
-      - History navigation with M-p/M-n (via parent keymap)
-      - Multiline support
-    - Dependencies: None
-    - Notes:
-      - Local state: `:history-index` for tracking history position
-      - Props: `:value`, `:on-change`, `:on-submit`, `:placeholder`, `:key` (for vui-field-value)
-      - Pattern: Define `benedict-vui-compose-field-mode-map` variable with keybindings to interactive commands
-      - Component renders only - uses dynamic variables for callbacks/state
-      - Parent buffer (e.g., BenedictRoot or InputArea) sets up keymaps during initialization
-      - All 9 tests pass
-
- - [x] **InputArea vui component** (refs: 03_ui_ux.md section 1.2)
-    - Scope: Compose area with context indicators and input field
-    - Files: Create `components/benedict-vui-input-area.el`, `test/benedict-vui-input-area-test.el`
-    - Tests:
-      - Component can be loaded successfully
-      - Composes ContextIndicator and ComposeField
-      - Passes callbacks correctly
-      - Handles empty state
-    - Dependencies: ContextIndicator, ComposeField
-    - Notes:
-      - Props: `:slices`, `:input-text`, `:on-input-change`, `:on-submit`, `:on-slice-remove`, `:placeholder`, `:size`, `:field-key`
-      - Sets up keymaps using `benedict-vui-compose-field-mode-map` during buffer initialization
-      - Keybindings composed with parent mode map (not set by child components)
-
-### vui.el Migration - Header & Status
-
- - [x] **ProviderBadge vui component** (refs: 03_ui_ux.md section 1.2)
-   - Scope: Clickable provider/model selector in header
-   - Files: Create `components/benedict-vui-provider-badge.el`, `test/benedict-vui-provider-badge-test.el`
-   - Tests:
-     - Displays current provider and model
-     - Click triggers model selection callback
-     - Tooltip shows full model ID
-   - Dependencies: StatusBadge
-   - Notes: Props: `:provider`, `:model`, `:on-click`.
-
- - [x] **ChatHeader vui component** (refs: 03_ui_ux.md section 1.2)
-   - Scope: Header bar with provider, status, and session title
-   - Files: Create `components/benedict-vui-chat-header.el`, `test/benedict-vui-chat-header-test.el`
-   - Tests:
-     - Shows ProviderBadge, StatusIndicator, SessionTitle
-     - Updates on provider/model change
-     - Click handling works
-   - Dependencies: ProviderBadge, StatusBadge
-   - Notes: Props: `:provider`, `:model`, `:status`, `:title`, `:on-provider-click`.
-
- - [x] **StatusBar vui component** (refs: 03_ui_ux.md section 1.2)
-   - Scope: Footer with token count, cost estimate, errors
-   - Files: Create `components/benedict-vui-status-bar.el`, `test/benedict-vui-status-bar-test.el`
-   - Tests:
-     - Displays token count formatted
-     - Shows cost estimate when available
-     - Displays error messages with error face
-     - Handles missing usage data
-   - Dependencies: None
-   - Notes: Props: `:usage`, `:error`.
-
-### vui.el Migration - Root & Integration
-
- - [x] **ConversationView vui component** (refs: 03_ui_ux.md section 1.2)
-   - Scope: Main conversation area containing TurnList and StreamingIndicator
-   - Files: Create `components/benedict-vui-conversation-view.el`, `test/benedict-vui-conversation-view-test.el`
-   - Tests:
-     - Renders TurnList with conversation
-     - Shows StreamingIndicator during streaming
-     - Scroll behavior on new content
-   - Dependencies: TurnList, StreamingIndicator
-   - Notes: Props: `:conversation`, `:streaming`, `:collapsed-blocks`.
-
- - [x] **BenedictRoot vui component** (refs: 03_ui_ux.md section 1.2, 2.1)
-   - Scope: Root component owning all shared application state
-   - Files: Create `components/benedict-vui-root.el`, `test/benedict-vui-root-test.el`
-   - Tests:
-     - State structure matches spec (:conversation, :streaming, :provider, :model, :collapsed-blocks, :error)
-     - State updates propagate to children
-     - Event handlers wire correctly to session
-   - Dependencies: ChatHeader, ConversationView, InputArea, StatusBar
-   - Notes: This is the integration point. Wire to `benedict-session` events.
-
-- [x] **Wire BenedictRoot to benedict-session events** (refs: 03_ui_ux.md, 02_architecture.md)
-   - Scope: Connect vui state updates to session event system
-   - Files: Modify `benedict-vui-root.el`, `benedict-chat.el`
-   - Tests:
-     - Session message-added updates :conversation state
-     - Session draft-updated updates :streaming state
-     - Session state-changed updates component state
-     - Batched updates via `vui-batch`
-   - Dependencies: BenedictRoot, existing session event system
-   - Notes: Use `vui-use-effect` for session subscription. Return cleanup function.
-
-- [x] **Use vui.el rendering in chat buffer** (refs: 03_ui_ux.md)
-  - Scope: Switch chat buffer to use BenedictRoot instead of magit-section
-  - Files: Modify `benedict-chat.el`, remove `benedict-chat-render.el`, `benedict-chat-sections.el`
-  - Tests:
-    - All existing chat integration tests pass
-    - Streaming works correctly
-    - Navigation commands work
-    - Context capture works
-  - Dependencies: All vui components, BenedictRoot wired to session
-  - Notes: VUI render path is active; magit-section renderers removed. Follow-up tasks below address remaining issues.
-
-  **Current checkpoint (WIP commit 6a312c2):**
-  - Accomplished:
-    - Chat buffer now composes vui components explicitly via `(vui-component 'benedict-vui-...)`.
-    - Magit section renderer removed (`benedict-chat-render.el`, `benedict-chat-sections.el`) and related tests deleted.
-    - Chat navigation refactored to operate on session messages instead of magit sections (`benedict-chat-nav.el`).
-    - Compose flow updated to clear/set context slices via `benedict-chat--set-context-slices`.
-    - BenedictRoot and child components are wired into the render tree.
-  - Follow-up fixes:
-    - Reverted accidental helper rewrites (`vui-component` on `--` helpers) and restored explicit component composition only.
-    - Restored component/test helpers to direct function calls; cleaned stray placeholder replacement in `benedict-chat.el`.
-  - Still to do:
-    - Address failing tests in chat/session integration (void-function, session type errors, routing, history attach).
-    - Verify or replace behavior that depended on magit sections (thinking toggle, tool actions, streaming updates).
-    - Update any doc/autoloads to ensure new render path is active and load order is correct.
-  - Unknowns to explore:
-    - Confirm intended VUI API for component composition vs helper functions (what should/shouldn't use `vui-component`).
-    - Identify any remaining call sites that still assume magit sections (e.g., tool UI, thinking UI, stream handlers).
-    - Clarify how to map message navigation to buffer positions with VUI rendering (search-based vs VUI scroll APIs).
-
-### Follow-up Tasks - Post VUI Render Switch
-
-- [x] **Remove leftover magit-section dependencies**
-  - Scope: Strip legacy requires and render helpers that reference deleted magit-section files
-  - Files: `benedict-chat-blocks.el`, `benedict-chat-thinking.el`, `benedict-chat-tool-ui.el`, `benedict-chat.el`
-  - Tests:
-    - Loads without requiring deleted files
-    - No void-function errors from removed helpers
-  - Notes: Decide whether to delete `benedict-chat-blocks.el` or reduce to state helpers.
-
-- [x] **Stabilize chat/session tests under VUI rendering**
-  - Scope: Update tests to align with `vui-component` dispatch and session wiring
-  - Files: `test/benedict-chat-integration-test.el`, `test/benedict-chat-session-test.el`, `test/benedict-chat-logic-test.el`, component tests
-  - Tests:
-    - Fix `wrong-type-argument benedict-session t`
-    - Fix `number-or-marker-p nil` failures in mount/render
-    - Fix mocks that bypass `vui-component`
-  - Notes: Prefer vnode assertions over function mocks for component composition.
-
-- [x] **Restore feature parity for folding, tool UI, and navigation**
-  - Scope: Replace magit-section behaviors with VUI state and interactions
-  - Files: `benedict-vui-root.el`, `benedict-chat-nav.el`, `components/benedict-vui-*-block.el`
-  - Tests:
-    - Folding toggles update `:collapsed-blocks`
-    - Tool actions remain reachable via VUI controls
-    - Navigation uses reliable buffer mapping
-  - Notes: Avoid search-only navigation if VUI offers ids or text properties.
-
-- [ ] **Investigate remaining unknowns from the migration**
-  - Scope: Resolve API expectations and any remaining magit-section assumptions
-  - Files: `benedict-chat.el`, `benedict-chat-nav.el`, `components/` and any remaining legacy helpers
-  - Tests:
-    - Confirm intended VUI component composition pattern
-    - Identify any remaining call sites that assume magit sections
-    - Decide navigation strategy (search vs VUI scroll APIs)
+- [x] **ToolUseBlock: real-buffer render + toggle behavior tests** (refs: 03_ui_ux.md, 06_tools.md)
+  - Files: `test/benedict-vui-tool-use-block-test.el`
