@@ -1,0 +1,290 @@
+#+TITLE: Error Handling
+#+AUTHOR: vui.el Documentation
+#+OPTIONS: toc:2 num:t
+
+vui.el provides robust error handling to prevent crashes and help with debugging. Errors in render functions, lifecycle hooks, and event handlers are all caught and handled gracefully.
+
+* Error Boundaries
+
+Error boundaries catch errors during rendering and display a fallback UI.
+
+** Basic Usage
+
+#+begin_src elisp
+(vui-error-boundary
+ :id "my-boundary"
+ :fallback (lambda (_err)
+             (vui-text "Something went wrong!" :face 'error))
+ :children (vui-component 'possibly-broken))
+#+end_src
+
+If =possibly-broken= throws an error during render, the fallback is shown instead of crashing.
+
+** Properties
+
+| Property    | Description                            |
+|-------------+----------------------------------------|
+| =:id=       | Unique identifier for this boundary    |
+| =:fallback= | Function =(lambda (error) vnode)=      |
+| =:on-error= | Optional callback when error is caught |
+| =:children= | Protected content                      |
+
+** Displaying Error Details
+
+Since =:fallback= receives the error, you can display it:
+
+#+begin_src elisp
+(vui-error-boundary
+ :id "detailed-boundary"
+ :fallback (lambda (err)
+             (vui-vstack
+              (vui-text "Error occurred:" :face 'error)
+              (vui-text (format "%S" err) :face 'shadow)))
+ :children (vui-component 'risky-component))
+#+end_src
+
+** With Error Callback
+
+Use =:on-error= for side effects like logging:
+
+#+begin_src elisp
+(vui-error-boundary
+ :id "logged-boundary"
+ :fallback (lambda (_err)
+             (vui-text "Error! Check logs."))
+ :on-error (lambda (err)
+             (message "Caught error: %S" err)
+             (log-error-to-server err))
+ :children (vui-component 'risky-component))
+#+end_src
+
+** Recovering from Errors
+
+Use =vui-reset-error-boundary= to retry after an error:
+
+#+begin_src elisp
+(vui-defcomponent error-recovery ()
+  :render
+  (vui-error-boundary
+   :id "recoverable"
+   :fallback (lambda (err)
+               (vui-vstack
+                (vui-text (format "Error: %S" err) :face 'error)
+                (vui-button "Try Again"
+                  :on-click (lambda ()
+                              (vui-reset-error-boundary "recoverable")))))
+   :children (vui-component 'may-fail)))
+#+end_src
+
+** Error Boundary Scope
+
+Error boundaries only catch errors in their children:
+
+#+begin_src elisp
+(vui-fragment
+ ;; This error is NOT caught (outside boundary)
+ (vui-component 'unprotected)
+
+ (vui-error-boundary
+  :id "protected"
+  :fallback (lambda (_err) (vui-text "Protected error"))
+  :children
+  ;; This error IS caught
+  (vui-component 'protected)))
+#+end_src
+
+* Lifecycle Error Handling
+
+Errors in =:on-mount=, =:on-update=, and =:on-unmount= are caught automatically.
+
+** Default Behavior
+
+By default, errors are logged via =warn=:
+
+#+begin_src elisp
+(vui-defcomponent bad-mount ()
+  :on-mount
+  (error "Something went wrong!")  ; Caught and logged
+
+  :render
+  (vui-text "This still renders"))
+#+end_src
+
+** Configuring the Handler
+
+Set =vui-lifecycle-error-handler= to customize behavior:
+
+#+begin_src elisp
+;; Option 1: Ignore errors silently
+(setq vui-lifecycle-error-handler 'ignore)
+
+;; Option 2: Signal errors (crash)
+(setq vui-lifecycle-error-handler 'signal)
+
+;; Option 3: Warn (default)
+(setq vui-lifecycle-error-handler 'warn)
+
+;; Option 4: Custom handler
+(setq vui-lifecycle-error-handler
+      (lambda (hook-name err instance)
+        (message "Error in %s: %S"
+                 hook-name err)
+        (notify-monitoring-service err)))
+#+end_src
+
+* Event Handler Error Handling
+
+Errors in event callbacks (=:on-click=, =:on-change=, etc.) are also caught.
+
+** Default Behavior
+
+#+begin_src elisp
+(vui-defcomponent button-that-errors ()
+  :render
+  (vui-button "Click me"
+              :on-click (lambda ()
+                          (error "Oops!"))))  ; Caught and logged
+#+end_src
+
+** Configuring the Handler
+
+Set =vui-event-error-handler=:
+
+#+begin_src elisp
+;; Same options as lifecycle handler
+(setq vui-event-error-handler 'warn)  ; Default
+(setq vui-event-error-handler 'ignore)
+(setq vui-event-error-handler 'signal)
+(setq vui-event-error-handler
+      (lambda (hook-name err instance)
+        (message "Event error in %s: %S" hook-name err)))
+#+end_src
+
+* Accessing Error Information
+
+The most recent error is stored in =vui-last-error=:
+
+#+begin_src elisp
+vui-last-error
+;; => (lifecycle (error "Something broke") "on-mount in my-component")
+;; or
+;; => (event (error "Click failed") "on-click in button-component")
+#+end_src
+
+Structure: =(TYPE ERROR CONTEXT)=
+
+** Using in Debugging
+
+#+begin_src elisp
+(when vui-last-error
+  (let ((type (nth 0 vui-last-error))
+        (err (nth 1 vui-last-error))
+        (context (nth 2 vui-last-error)))
+    (message "Last error [%s]: %s\nContext: %s"
+             type err context)))
+#+end_src
+
+* Best Practices
+
+** 1. Wrap Critical Sections
+
+#+begin_src elisp
+(vui-defcomponent app ()
+  :render
+  (vui-error-boundary
+   :id "app-boundary"
+   :fallback (lambda (err)
+               (vui-vstack
+                (vui-text "The app crashed." :face 'error)
+                (vui-text (format "Error: %S" err) :face 'shadow)
+                (vui-button "Reload"
+                  :on-click (lambda ()
+                              (vui-reset-error-boundary "app-boundary")))))
+   :children (vui-component 'main-content)))
+#+end_src
+
+** 2. Use Multiple Boundaries
+
+Isolate independent features:
+
+#+begin_src elisp
+(vui-defcomponent dashboard ()
+  :render
+  (vui-hstack :spacing 4
+              ;; Sidebar error won't crash main content
+              (vui-error-boundary
+               :id "sidebar"
+               :fallback (lambda (_err)
+                           (vui-text "[Sidebar unavailable]"))
+               :children (vui-component 'sidebar))
+
+              ;; Main content error won't crash sidebar
+              (vui-error-boundary
+               :id "main"
+               :fallback (lambda (_err)
+                           (vui-text "[Content unavailable]"))
+               :children (vui-component 'main-content))))
+#+end_src
+
+** 3. Log Errors for Debugging
+
+#+begin_src elisp
+(setq vui-lifecycle-error-handler
+      (lambda (hook-name err instance)
+        (with-current-buffer (get-buffer-create "*vui-errors*")
+          (goto-char (point-max))
+          (insert (format "[%s] %s: %S\n"
+                          (format-time-string "%H:%M:%S")
+                          hook-name
+                          err)))
+        (warn "%s: %S" hook-name err)))
+#+end_src
+
+** 4. Graceful Degradation
+
+Handle errors explicitly when appropriate:
+
+#+begin_src elisp
+(vui-defcomponent safe-data-display ()
+  :state ((data nil)
+          (error nil))
+
+  :on-mount
+  (fetch-data
+   (vui-async-callback (result)
+     (if (plist-get result :error)
+         (vui-set-state :error (plist-get result :error))
+       (vui-set-state :data (plist-get result :data)))))
+
+  :render
+  (cond
+   (error (vui-text (format "Error: %s" error) :face 'error))
+   ((null data) (vui-text "Loading..."))
+   (t (vui-text (format "Data: %s" data)))))
+#+end_src
+
+* Summary
+
+| Feature                       | Purpose                   |
+|-------------------------------+---------------------------|
+| =vui-error-boundary=          | Catch render errors       |
+| =vui-reset-error-boundary=    | Retry after error         |
+| =vui-lifecycle-error-handler= | Handle lifecycle errors   |
+| =vui-event-error-handler=     | Handle event errors       |
+| =vui-last-error=              | Access last error details |
+
+* Try It Yourself
+
+#+begin_quote
+*Exercise*: Create a =safe-form= component that:
+
+1. Wraps a form in an error boundary
+2. Shows a friendly error message with a "Reset Form" button
+3. Logs errors to =*form-errors*= buffer
+4. Has a button that intentionally throws an error for testing
+#+end_quote
+
+* What's Next?
+
+- [[file:09-performance.org][Performance]] - Optimization techniques
+- [[file:10-dev-tools.org][Developer Tools]] - Debugging and inspection

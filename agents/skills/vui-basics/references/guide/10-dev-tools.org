@@ -1,0 +1,319 @@
+#+TITLE: Developer Tools
+#+AUTHOR: vui.el Documentation
+#+OPTIONS: toc:2 num:t
+
+vui.el includes several tools to help you debug and understand your applications.
+
+* Component Inspector
+
+View the component tree structure with props and state.
+
+** Usage
+
+#+begin_src elisp
+;; Inspect the current root instance
+(vui-inspect)
+
+;; Inspect a specific instance
+(vui-inspect my-instance)
+#+end_src
+
+** Output
+
+The inspector shows a hierarchical view:
+
+#+begin_example
+VUI Component Inspector
+============================================================
+
+Buffer: *my-app*
+
+Component Tree:
+------------------------------------------------------------
+[app] (id: 1)
+  State:
+    :count: 5
+    :filter: "active"
+  Children:
+    [header] (id: 2)
+      Props:
+        :title: "My App"
+    [todo-list] (id: 3)
+      State:
+        :items: ((:id 1 :text "Item 1") ...)
+      Children:
+        [todo-item] (id: 4)
+          Props:
+            :todo: (:id 1 :text "Item 1")
+        [todo-item] (id: 5)
+          Props:
+            :todo: (:id 2 :text "Item 2")
+#+end_example
+
+* State Viewer
+
+Focus specifically on component state:
+
+#+begin_src elisp
+(vui-inspect-state)
+#+end_src
+
+Shows only components that have state:
+
+#+begin_example
+VUI State Viewer
+============================================================
+
+app (id: 1):
+  :count: 5
+  :filter: "active"
+
+todo-list (id: 3):
+  :items: ((:id 1 :text "Item 1") (:id 2 :text "Item 2"))
+#+end_example
+
+* Finding Instances
+
+** By ID
+
+#+begin_src elisp
+(vui-get-instance-by-id 3)
+;; => #s(vui-instance :id 3 :def ... :state ...)
+#+end_src
+
+** By Component Type
+
+#+begin_src elisp
+(vui-get-component-instances 'todo-item)
+;; => (#s(vui-instance ...) #s(vui-instance ...) ...)
+#+end_src
+
+Useful for testing or debugging specific components.
+
+* Render Timing
+
+Profile render performance:
+
+** Enable Timing
+
+#+begin_src elisp
+(setq vui-timing-enabled t)
+#+end_src
+
+** View Report
+
+#+begin_src elisp
+(vui-report-timing)
+#+end_src
+
+Opens a buffer with:
+
+#+begin_example
+VUI Timing Report
+============================================================
+
+Total entries: 42
+
+Totals by Phase:
+  render:  0.0234s
+  commit:  0.0089s
+  mount:   0.0012s
+  update:  0.0156s
+  unmount: 0.0003s
+  TOTAL:   0.0494s
+
+By Component:
+------------------------------------------------------------
+
+app (renders: 5)
+  render:  0.0102s
+  commit:  0.0034s
+  mount:   0.0004s
+  update:  0.0078s
+
+todo-list (renders: 12)
+  render:  0.0089s
+  commit:  0.0045s
+  update:  0.0067s
+#+end_example
+
+** Access Raw Data
+
+#+begin_src elisp
+(vui-get-timing)
+;; => ((:phase render :component todo-list :duration 0.0023 :timestamp ...)
+;;     ...)
+#+end_src
+
+** Clear Data
+
+#+begin_src elisp
+(vui-clear-timing)
+#+end_src
+
+* Debug Logging
+
+Trace render cycles in real-time:
+
+** Enable Debug Mode
+
+#+begin_src elisp
+(setq vui-debug-enabled t)
+#+end_src
+
+** View Debug Log
+
+#+begin_src elisp
+(vui-debug-show)
+#+end_src
+
+Shows the =*vui-debug*= buffer with entries like:
+
+#+begin_example
+[14:23:45.123] render: <app> rendering (first=t)
+[14:23:45.125]   render: <header> rendering (first=t)
+[14:23:45.126]   mount: <header> mounted
+[14:23:45.127]   render: <todo-list> rendering (first=t)
+[14:23:45.130]     render: <todo-item> rendering (first=t)
+[14:23:45.131]     mount: <todo-item> mounted
+[14:23:45.132]   mount: <todo-list> mounted
+[14:23:45.133] mount: <app> mounted
+[14:23:47.456] state-change: <app> state :count = 1
+[14:23:47.458] render: <app> rendering (first=nil)
+[14:23:47.460] update: <app> updated
+#+end_example
+
+** Filter Phases
+
+Only log specific phases:
+
+#+begin_src elisp
+;; Only mount and unmount
+(setq vui-debug-log-phases '(mount unmount))
+
+;; All phases
+(setq vui-debug-log-phases '(render commit mount update unmount state-change))
+#+end_src
+
+** Clear Debug Log
+
+#+begin_src elisp
+(vui-debug-clear)
+#+end_src
+
+* Error Information
+
+Access the last error:
+
+#+begin_src elisp
+vui-last-error
+;; => (lifecycle (error "Something failed") "on-mount in my-component")
+#+end_src
+
+* Debugging Workflow
+
+** 1. Reproduce the Issue
+
+Run your app and trigger the problematic behavior.
+
+** 2. Check the Inspector
+
+#+begin_src elisp
+(vui-inspect)
+#+end_src
+
+Verify component tree structure, props, and state are as expected.
+
+** 3. Check State
+
+#+begin_src elisp
+(vui-inspect-state)
+#+end_src
+
+Look for unexpected state values.
+
+** 4. Enable Debug Logging
+
+#+begin_src elisp
+(setq vui-debug-enabled t)
+(vui-debug-clear)
+#+end_src
+
+Reproduce the issue, then check =*vui-debug*=.
+
+** 5. Profile if Slow
+
+#+begin_src elisp
+(setq vui-timing-enabled t)
+(vui-clear-timing)
+;; Reproduce...
+(vui-report-timing)
+#+end_src
+
+Look for components with excessive render time or count.
+
+** 6. Check Errors
+
+#+begin_src elisp
+vui-last-error
+#+end_src
+
+* Interactive Development
+
+** Hot Reloading Components
+
+Re-define a component and it takes effect on next render:
+
+#+begin_src elisp
+;; Original
+(vui-defcomponent my-comp ()
+  :render (vui-text "Original"))
+
+;; Modify and re-evaluate
+(vui-defcomponent my-comp ()
+  :render (vui-text "Modified"))
+
+;; Trigger re-render to see changes
+(vui-flush-sync)
+#+end_src
+
+** REPL Inspection
+
+#+begin_src elisp
+;; Get root instance
+vui--root-instance
+
+;; Check its state
+(vui-instance-state vui--root-instance)
+
+;; Manually modify state (for testing)
+(setf (vui-instance-state vui--root-instance)
+      (plist-put (vui-instance-state vui--root-instance)
+                 :count 100))
+(vui-flush-sync)
+#+end_src
+
+* Summary
+
+| Tool                | Purpose              | Command                  |
+|---------------------+----------------------+--------------------------|
+| Component Inspector | View tree structure  | =vui-inspect=            |
+| State Viewer        | View component state | =vui-inspect-state=      |
+| Instance Lookup     | Find instances       | =vui-get-instance-by-id= |
+| Timing              | Profile performance  | =vui-report-timing=      |
+| Debug Logging       | Trace render cycles  | =vui-debug-show=         |
+| Error Info          | Last error details   | =vui-last-error=         |
+
+* Configuration Variables
+
+| Variable                  | Purpose                          |
+|---------------------------+----------------------------------|
+| =vui-timing-enabled=      | Enable/disable timing collection |
+| =vui-debug-enabled=       | Enable/disable debug logging     |
+| =vui-debug-log-phases=    | Filter which phases to log       |
+| =vui--timing-max-entries= | Max timing entries to keep       |
+
+* What's Next?
+
+- [[file:../reference/api.org][API Reference]] - Complete function reference
+- [[file:../examples/][Examples]] - Full application examples
