@@ -91,9 +91,19 @@ Skills can apply to:
 - implementation work
 - review work
 
-Skills should integrate with subagents:
-- main agent delegates to a subagent with a skill
-- subagent returns a bounded output (summary + artifacts)
+### 2.4 Dynamic Skills (Self-Extension)
+
+Benedict supports **Dynamic Skills**: tools written by the agent itself during a session.
+
+**The Skill Lifecycle:**
+1.  **Prototype:** Agent identifies a missing capability (e.g., "Read unread emails"). It writes a prototype Elisp function to a scratch buffer.
+2.  **Verify:** Agent runs the code using `exec-elisp` and verifies the output against expectations.
+3.  **Persist:** Agent calls `skill-save` with the tested code.
+    - System saves code to `~/.benedict/skills/<name>.el`.
+    - System generates a `SKILL.md` (or header comments) describing the tool.
+    - System registers the new tool in the current session.
+
+This allows Benedict to accumulate capabilities ("Learn") over time without requiring core codebase updates.
 
 ## 3. Subagents (Context Hygiene)
 
@@ -101,4 +111,3 @@ Subagents are first-class in v0.1:
 - a subagent has a smaller context window and stricter harness budgets
 - subagents should be the default mechanism for "broad search" or "deep dive" tasks
 - the UI must clearly surface subagent work as collapsible blocks, not interleaved noise
-

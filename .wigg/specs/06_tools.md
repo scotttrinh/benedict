@@ -29,7 +29,9 @@ A simplified plist representation of JSON Schema:
   :required (:path))
 ```
 
-## 2. Standard Library (Built-in Tools)
+## 2. Standard Library (The "Small Kernel")
+
+Benedict favors a small, high-leverage kernel of tools. Complex behaviors should be composed or dynamically extended using `exec-elisp`.
 
 ### 2.1 File System
 - **`read-file`**
@@ -45,25 +47,6 @@ A simplified plist representation of JSON Schema:
     - **Behavior:** Overwrites (or creates) file/buffer with *full* content.
     - **Approval:** `confirm`.
 
-### 2.1.1 Context Capture (Compose-First)
-
-These tools support adding context while composing, without requiring the user to switch buffers.
-
-- **`list-buffers`**
-    - **Args:** optional filters (mode, name regex).
-    - **Behavior:** Return buffer names and lightweight metadata (major-mode, file path).
-    - **Effects:** `read`.
-
-- **`context-add-buffer`**
-    - **Args:** `:buffer_name`, optional `:start-line`, `:end-line`, optional `:handle`.
-    - **Behavior:** Add a buffer slice as a context slice to the compose context.
-    - **Effects:** `read`.
-
-- **`context-add-file`**
-    - **Args:** `:path`, optional `:start-line`, `:end-line`, optional `:handle`.
-    - **Behavior:** Add a file slice as a context slice to the compose context.
-    - **Effects:** `read`.
-
 ### 2.2 Navigation & Search
 - **`project-search`**
     - **Args:** `:query` (string - regex/literal).
@@ -76,13 +59,47 @@ These tools support adding context while composing, without requiring the user t
     - **Behavior:** Exact string replacement. Fails if `old_text` matches 0 or >1 times.
     - **Approval:** `confirm`.
 
-### 2.4 Meta
+### 2.4 Web & External (The OpenClaw Gap)
+To function as a personal assistant, Benedict needs to see the world.
+
+- **`web-read`**
+    - **Args:** `:url` (string).
+    - **Behavior:**
+        - Uses `eww` (Emacs Web Wowser) logic to fetch and render the URL in a background buffer.
+        - Returns the rendered text (similar to `eww-readable`).
+        - Follows Emacs' proxy and network settings.
+    - **Effects:** `network`, `read`.
+    - **Approval:** `auto` (for known domains) or `confirm`.
+
+- **`sys-exec`**
+    - **Args:** `:command` (string), `:args` (list of strings).
+    - **Behavior:** Executes a shell command and returns stdout/stderr.
+    - **Constraints:**
+        - Must be a non-interactive command.
+        - Input/Output limited to prevent freezing.
+    - **Effects:** `process`, `exec`.
+    - **Approval:** `confirm`.
+
+### 2.5 Meta & Self-Extension
+The most powerful tool. Allows the agent to use any Emacs package (`magit`, `mu4e`, `org-agenda`) by writing code.
+
 - **`exec-elisp`**
     - **Args:** `:code` (string).
     - **Behavior:** Evals arbitrary Elisp. High power, high risk.
+    - **Usage Pattern:**
+        1. Agent writes code to a `*scratch*` buffer or temp file.
+        2. Agent verifies code with `check-elisp`.
+        3. Agent executes code to perform a complex task (e.g., "Get my next 3 meetings from Org Agenda").
     - **Approval:** `always`.
 
-### 2.5 Elisp Reliability (Repair and Guards)
+- **`skill-save`**
+    - **Args:** `:name` (string), `:code` (string), `:description` (string).
+    - **Behavior:**
+        - Saves a working Elisp function/tool to `~/.benedict/skills/<name>.el`.
+        - Automatically loads and registers it as a new tool for future sessions.
+    - **Effects:** `write`, `exec`.
+
+### 2.6 Elisp Reliability (Repair and Guards)
 
 Agents frequently produce unparsable Elisp. Benedict must provide first-class support for diagnosing and repairing Elisp before attempting to execute or load it.
 
