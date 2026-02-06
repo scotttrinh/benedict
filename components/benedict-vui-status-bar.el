@@ -35,11 +35,9 @@
   (when usage
     (plist-get usage :cost)))
 
-(vui-defcomponent benedict-vui-status-bar (props)
+(vui-defcomponent benedict-vui-status-bar (usage error)
   :render
-  (let* ((usage (plist-get props :usage))
-         (error (plist-get props :error))
-         (tokens (benedict-vui-status-bar--total-tokens usage))
+  (let* ((tokens (benedict-vui-status-bar--total-tokens usage))
          (cost (benedict-vui-status-bar--cost usage))
          (token-label (benedict-vui-status-bar--format-tokens tokens))
          (cost-label (benedict-vui-status-bar--format-cost cost)))
@@ -59,10 +57,6 @@
           :face 'benedict-chat-header-separator)
         (vui-text (format "%s" error)
           :face 'benedict-chat-error)))))
-
-(defun benedict-vui-status-bar (&rest props)
-  "Create a status bar component node from PROPS."
-  (apply #'vui-component 'benedict-vui-status-bar props))
 
 (provide 'benedict-vui-status-bar)
 ;;; benedict-vui-status-bar.el ends here

@@ -29,15 +29,11 @@
             kind
             (if truncated " (truncated)" ""))))
 
-(vui-defcomponent benedict-vui-context-indicator (props state)
+(vui-defcomponent benedict-vui-context-indicator (slices on-remove)
   :state ((expanded nil))
   :render
-  (let ((slices (plist-get props :slices))
-        (on-remove (plist-get props :on-remove))
-        (expanded (plist-get state :expanded))
-        (toggle-handler (vui-use-callback (expanded)
-                          (lambda (_)
-                            (vui-set-state :expanded #'not)))))
+  (let* ((toggle-handler (lambda (&rest _)
+                           (vui-set-state :expanded (not expanded)))))
     (vui-component 'benedict-vui-collapsible
       :header (lambda ()
                 (vui-hstack
@@ -53,12 +49,10 @@
                                  (vui-text " ")
                                  (when (functionp on-remove)
                                    (vui-button "×"
-                                               :on-click (vui-use-callback (id on-remove)
-                                                               (lambda (_)
-                                                                 (funcall on-remove id))))))))
+                                               :on-click (lambda (&rest _)
+                                                           (funcall on-remove id)))))))
                             (lambda (slice) (plist-get slice :id)))))
-      :on-toggle (lambda (collapsed)
-                   (funcall toggle-handler collapsed))
+      :on-toggle toggle-handler
       :collapsed (not expanded))))
 
 (provide 'benedict-vui-context-indicator)

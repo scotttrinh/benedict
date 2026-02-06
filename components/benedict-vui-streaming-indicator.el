@@ -20,28 +20,25 @@
   (elt benedict-vui-streaming-indicator--frames
        (mod index (length benedict-vui-streaming-indicator--frames))))
 
-(vui-defcomponent benedict-vui-streaming-indicator (props state)
+(vui-defcomponent benedict-vui-streaming-indicator (visible)
   :state ((frame-index 0))
   :render
-  (let ((visible (plist-get props :visible))
-        (timer-ref (vui-use-ref nil)))
+  (let ((timer-ref (vui-use-ref nil)))
     (vui-use-effect (visible)
       (when visible
         (setcar timer-ref
                 (run-with-timer benedict-vui-streaming-indicator--interval
                                  benedict-vui-streaming-indicator--interval
-                                 (vui-async-callback ()
+                                 (lambda ()
                                    (vui-set-state :frame-index
-                                     (lambda (idx)
-                                       (mod (1+ idx)
-                                            (length benedict-vui-streaming-indicator--frames))))))))
+                                     (mod (1+ frame-index)
+                                          (length benedict-vui-streaming-indicator--frames)))))))
       (lambda ()
         (when (car timer-ref)
           (cancel-timer (car timer-ref))
           (setcar timer-ref nil))))
     (when visible
-      (let* ((current-frame (benedict-vui-streaming-indicator--frame
-                             (plist-get state :frame-index)))
+      (let* ((current-frame (benedict-vui-streaming-indicator--frame frame-index))
              (spinner-text (concat " " current-frame " ")))
         (vui-text (propertize spinner-text 'face 'benedict-chat-header-time))))))
 

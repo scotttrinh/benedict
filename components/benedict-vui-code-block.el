@@ -100,27 +100,24 @@ Returns the timer created to clear feedback."
     (run-at-time benedict-vui-code-block-copy-feedback-timeout nil
                  (lambda () (funcall on-feedback nil)))))
 
-(vui-defcomponent benedict-vui-code-block (props state)
+(vui-defcomponent benedict-vui-code-block (code language message-key block-id)
   :state ((copied-feedback nil))
   :render
-  (let* ((code (plist-get props :code))
-          (language (plist-get props :language))
-          (message-key (plist-get props :message-key))
-          (block-id (plist-get props :block-id))
-          (normalized-code (benedict-vui-code-block--normalize code))
-          (normalized-language (benedict-vui-code-block--normalize-language language))
-          (timer-ref (vui-use-ref nil))
+  (let* ((normalized-code (benedict-vui-code-block--normalize code))
+         (normalized-language (benedict-vui-code-block--normalize-language language))
+         (timer-ref (vui-use-ref nil))
          (fontified (vui-use-memo (normalized-code normalized-language)
                       (benedict-vui-code-block--fontify normalized-code normalized-language)))
-         (copy-label (if (plist-get state :copied-feedback) "Copied!" "Copy"))
+         (copy-label (if copied-feedback "Copied!" "Copy"))
          (copy-handler (vui-use-callback (normalized-code)
-                         (let ((callback (vui-async-callback (value)
-                                           (vui-set-state :copied-feedback value))))
+                         (lambda (&rest _)
                            (when (car timer-ref)
                              (cancel-timer (car timer-ref))
                              (setcar timer-ref nil))
                            (setcar timer-ref
-                                   (benedict-vui-code-block--copy normalized-code callback))))))
+                                   (benedict-vui-code-block--copy normalized-code
+                                                                  (lambda (val)
+                                                                    (vui-set-state :copied-feedback val))))))))
     (vui-use-effect ()
       (lambda ()
         (when (car timer-ref)
@@ -138,10 +135,6 @@ Returns the timer created to clear feedback."
           :content (benedict-vui-code-block--fallback-content normalized-code normalized-language)
           :message-key message-key
           :block-id block-id)))))
-
-(defun benedict-vui-code-block (&rest props)
-  "Create a code block component node from PROPS."
-  (apply #'vui-component 'benedict-vui-code-block props))
 
 (provide 'benedict-vui-code-block)
 ;;; benedict-vui-code-block.el ends here

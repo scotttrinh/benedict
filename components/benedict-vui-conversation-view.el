@@ -15,28 +15,30 @@
   (and (listp streaming)
        (eq (plist-get streaming :status) 'active)))
 
-(defun benedict-vui-conversation-view--render (props)
-  "Render the conversation view for PROPS."
-  (let ((conversation (plist-get props :conversation))
-        (streaming (plist-get props :streaming))
-        (collapsed-blocks (plist-get props :collapsed-blocks))
-        (on-toggle-block (plist-get props :on-toggle-block)))
-    (vui-vstack
-     (vui-component 'benedict-vui-turn-list
-      :conversation conversation
-      :collapsed-blocks collapsed-blocks
-      :on-toggle-block on-toggle-block)
-     (vui-component 'benedict-vui-streaming-indicator
-      :visible (benedict-vui-conversation-view--streaming-active-p streaming)))))
-
-(vui-defcomponent benedict-vui-conversation-view (props)
+(vui-defcomponent benedict-vui-conversation-view (conversation streaming collapsed-blocks on-toggle-block)
   "Main conversation area containing TurnList and StreamingIndicator."
   :render
-  (benedict-vui-conversation-view--render props))
+  (vui-vstack
+   (vui-component 'benedict-vui-turn-list
+    :conversation conversation
+    :collapsed-blocks collapsed-blocks
+    :on-toggle-block on-toggle-block)
+   (vui-component 'benedict-vui-streaming-indicator
+    :visible (benedict-vui-conversation-view--streaming-active-p streaming))))
 
-(defun benedict-vui-conversation-view (&rest props)
-  "Create a conversation view component node from PROPS."
-  (apply #'vui-component 'benedict-vui-conversation-view props))
+(defalias 'benedict-vui-conversation-view--render
+  (lambda (props)
+    (let ((conversation (plist-get props :conversation))
+          (streaming (plist-get props :streaming))
+          (collapsed-blocks (plist-get props :collapsed-blocks))
+          (on-toggle-block (plist-get props :on-toggle-block)))
+      (vui-vstack
+       (vui-component 'benedict-vui-turn-list
+        :conversation conversation
+        :collapsed-blocks collapsed-blocks
+        :on-toggle-block on-toggle-block)
+       (vui-component 'benedict-vui-streaming-indicator
+        :visible (benedict-vui-conversation-view--streaming-active-p streaming))))))
 
 (provide 'benedict-vui-conversation-view)
 ;;; benedict-vui-conversation-view.el ends here

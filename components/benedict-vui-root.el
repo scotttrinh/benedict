@@ -75,7 +75,7 @@ Clears input and context when RETAIN-CONTEXT is nil."
             (vui-set-state :slices nil))))
       result)))
 
-(vui-defcomponent benedict-vui-root (props state)
+(vui-defcomponent benedict-vui-root (session initial-slices initial-input retain-context register-actions on-slices-change on-provider-click on-submit)
   "Root component owning all shared application state."
   :state ((conversation nil)
           (streaming nil)
@@ -88,10 +88,7 @@ Clears input and context when RETAIN-CONTEXT is nil."
           (slices nil)
           (history nil))
   :on-mount
-  (let* ((session (plist-get props :session))
-         (initial-slices (plist-get props :initial-slices))
-         (initial-input (plist-get props :initial-input))
-         (initial-conversation (and session
+  (let* ((initial-conversation (and session
                                     (benedict-session-messages-chronological session)))
          (initial-streaming (benedict-vui-root--session-draft session))
          (initial-provider (and session (benedict-session-provider session)))
@@ -117,31 +114,18 @@ Clears input and context when RETAIN-CONTEXT is nil."
         (lambda ()
           (benedict-vui-root--unsubscribe-from-session subscription)))))
   :render
-  (let* ((current-conversation (plist-get state :conversation))
-         (current-streaming (plist-get state :streaming))
-         (current-provider (plist-get state :provider))
-         (current-model (plist-get state :model))
-         (current-collapsed-blocks (plist-get state :collapsed-blocks))
-         (current-error (plist-get state :error))
-         (current-usage (or (plist-get props :usage)
-                            (plist-get state :usage)))
-         (current-input (plist-get state :input-text))
-         (current-slices (or (plist-get props :slices)
-                             (plist-get state :slices)))
-         (current-history (plist-get state :history))
+  (let* ((current-usage (or (plist-get --props-- :usage)
+                            usage))
+         (current-slices (or (plist-get --props-- :slices)
+                             slices))
          (render-conversation (benedict-vui-root--append-streaming
-                               current-conversation current-streaming))
-         (retain-context (plist-get props :retain-context))
-         (register-actions (plist-get props :register-actions))
-         (on-slices-change (plist-get props :on-slices-change))
-         (on-provider-click (plist-get props :on-provider-click))
-         (on-submit (plist-get props :on-submit))
+                               conversation streaming))
          (set-input (vui-use-callback ()
                       (lambda (value)
                         (vui-set-state :input-text value))))
          (set-slices (vui-use-callback ()
-                      (lambda (slices)
-                        (vui-set-state :slices slices))))
+                      (lambda (slices-val)
+                        (vui-set-state :slices slices-val))))
          (submit-handler (vui-use-callback (on-submit retain-context)
                             (lambda (value)
                               (benedict-vui-root--submit
@@ -175,30 +159,30 @@ Clears input and context when RETAIN-CONTEXT is nil."
            (funcall register-actions nil))))
     (vui-vstack
      (vui-component 'benedict-vui-chat-header
-       :provider current-provider
-       :model current-model
-       :status (when (plist-get current-streaming :status)
-                 (plist-get current-streaming :status))
+       :provider provider
+       :model model
+       :status (when (plist-get streaming :status)
+                 (plist-get streaming :status))
        :title "Chat"
        :on-provider-click on-provider-click)
       (vui-component 'benedict-vui-conversation-view
        :conversation render-conversation
-       :streaming current-streaming
-       :collapsed-blocks current-collapsed-blocks
+       :streaming streaming
+       :collapsed-blocks collapsed-blocks
        :on-toggle-block toggle-block)
      (vui-component 'benedict-vui-input-area
       :slices current-slices
-      :input-text current-input
+      :input-text input-text
       :on-input-change input-change
       :on-submit submit-handler
       :on-slice-remove slice-remove
-      :history current-history
+      :history history
       :placeholder "Ask Benedict..."
       :size 5
       :field-key 'root-input)
      (vui-component 'benedict-vui-status-bar
       :usage current-usage
-      :error current-error))))
+      :error error))))
 
 ;;; Session event subscription
 
@@ -227,12 +211,12 @@ Returns a function that when called unsubscribes from events."
      (vui-with-async-context
        (let ((message (plist-get payload :message)))
          (when message
-           (vui-set-state :conversation
+           (vui-set-state 'conversation
              (lambda (conv)
                (append conv (list message))))))))
     ('draft-started
      (vui-with-async-context
-       (vui-set-state :streaming
+       (vui-set-state 'streaming
          (lambda ()
            (list :status 'active
                  :content ""
@@ -242,13 +226,13 @@ Returns a function that when called unsubscribes from events."
        (let ((delta (plist-get payload :delta))
              (tool-call (plist-get payload :tool-call)))
          (if delta
-             (vui-set-state :streaming
+             (vui-set-state 'streaming
                (lambda (s)
                  (list :status (plist-get s :status)
                        :content (concat (plist-get s :content) delta)
                        :tool-calls (plist-get s :tool-calls))))
            (when tool-call
-             (vui-set-state :streaming
+             (vui-set-state 'streaming
                (lambda (s)
                  (list :status (plist-get s :status)
                        :content (plist-get s :content)
@@ -256,16 +240,16 @@ Returns a function that when called unsubscribes from events."
                                            (list tool-call))))))))))
     ('draft-finalized
      (vui-with-async-context
-       (vui-set-state :streaming nil)))
+       (vui-set-state 'streaming nil)))
     ('state-changed
      (vui-with-async-context
        (let ((old-state (plist-get payload :old))
              (new-state (plist-get payload :new)))
          (when (eq new-state 'error)
-           (vui-set-state :error (format "Session error: %s -> %s" old-state new-state)))
+           (vui-set-state 'error (format "Session error: %s -> %s" old-state new-state)))
          (when (and (memq old-state '(streaming running))
                     (eq new-state 'idle))
-           (vui-set-state :error nil)))))
+           (vui-set-state 'error nil)))))
     ('request-completed
      (vui-with-async-context
        (let ((success (plist-get payload :success))
@@ -273,18 +257,18 @@ Returns a function that when called unsubscribes from events."
              (result (plist-get payload :result)))
          (when success
            (when-let ((provider (plist-get result :provider)))
-             (vui-set-state :provider provider))
+             (vui-set-state 'provider provider))
            (when-let ((model (plist-get result :model)))
-             (vui-set-state :model model))
+             (vui-set-state 'model model))
            (when-let ((usage (plist-get result :usage)))
-             (vui-set-state :usage usage))
-           (vui-set-state :error nil))
+             (vui-set-state 'usage usage))
+           (vui-set-state 'error nil))
          (when (and (not success) error-payload)
            (let ((error-message (cond
                                ((plist-get error-payload :message)
                                 (plist-get error-payload :message))
                                (t (format "Request failed: %S" error-payload)))))
-             (vui-set-state :error error-message))))))
+             (vui-set-state 'error error-message))))))
     (_ nil)))
 
 (provide 'benedict-vui-root)

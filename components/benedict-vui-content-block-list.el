@@ -182,27 +182,29 @@ MESSAGE-KEY and ON-TOGGLE-BLOCK supply navigation and folding behavior."
         :message-key message-key
         :block-id block-id)))))
 
-(defun benedict-vui-content-block-list--render (props)
-  "Render a list of content blocks for PROPS."
-  (let* ((blocks (benedict-vui-content-block-list--normalize-blocks
-                  (plist-get props :blocks)))
-         (collapsed-blocks (plist-get props :collapsed-blocks))
-         (message-key (benedict-vui-content-block-list--message-key props))
-         (on-toggle-block (plist-get props :on-toggle-block)))
-    (vui-list blocks
+(vui-defcomponent benedict-vui-content-block-list (blocks collapsed-blocks message-key on-toggle-block)
+  :render
+  (let* ((actual-blocks (benedict-vui-content-block-list--normalize-blocks blocks)))
+    (vui-list actual-blocks
               (lambda (block &optional index)
                 (benedict-vui-content-block-list--render-block
                  block collapsed-blocks index message-key on-toggle-block))
               (lambda (block &optional index)
                 (benedict-vui-content-block-list--block-id block index)))))
 
-(vui-defcomponent benedict-vui-content-block-list (props)
-  :render
-  (benedict-vui-content-block-list--render props))
-
-(defun benedict-vui-content-block-list (&rest props)
-  "Create a content block list component node from PROPS."
-  (apply #'vui-component 'benedict-vui-content-block-list props))
+(defalias 'benedict-vui-content-block-list--render
+  (lambda (props)
+    (let ((blocks (plist-get props :blocks))
+          (collapsed-blocks (plist-get props :collapsed-blocks))
+          (message-key (plist-get props :message-key))
+          (on-toggle-block (plist-get props :on-toggle-block)))
+      (let* ((actual-blocks (benedict-vui-content-block-list--normalize-blocks blocks)))
+        (vui-list actual-blocks
+                  (lambda (block &optional index)
+                    (benedict-vui-content-block-list--render-block
+                     block collapsed-blocks index message-key on-toggle-block))
+                  (lambda (block &optional index)
+                    (benedict-vui-content-block-list--block-id block index)))))))
 
 (provide 'benedict-vui-content-block-list)
 ;;; benedict-vui-content-block-list.el ends here

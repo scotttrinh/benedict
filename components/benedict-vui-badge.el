@@ -77,17 +77,11 @@
       (add-face-text-property 0 (length text) face t text))
     text))
 
-(vui-defcomponent benedict-vui-badge (props)
+(vui-defcomponent benedict-vui-badge (status theme)
   :render
-  (let* ((status (plist-get props :status))
-         (theme (plist-get props :theme))
-         (label (benedict-vui-badge--label status))
+  (let* ((label (benedict-vui-badge--label status))
          (face (benedict-vui-badge--face status theme)))
     (vui-text (benedict-vui-badge--propertize label face))))
-
-(defun benedict-vui-badge (&rest props)
-  "Create a status badge component node from PROPS."
-  (apply #'vui-component 'benedict-vui-badge props))
 
 (provide 'benedict-vui-badge)
 ;;; benedict-vui-badge.el ends here

@@ -12,36 +12,27 @@
 (require 'benedict-vui-provider-badge)
 (require 'benedict-vui-badge)
 
-(vui-defcomponent benedict-vui-chat-header (props)
+(vui-defcomponent benedict-vui-chat-header (provider model status title on-provider-click)
   :render
-  (let* ((provider (plist-get props :provider))
-         (model (plist-get props :model))
-         (status (plist-get props :status))
-         (title (plist-get props :title))
-         (on-provider-click (plist-get props :on-provider-click)))
-    (vui-hstack
-      :spacing 1
-      (vui-component 'benedict-vui-provider-badge
-        :provider provider
-        :model model
-        :on-click on-provider-click)
-      (when status
-        (vui-text "·"
-          :face 'benedict-chat-header-separator))
-      (when status
-        (vui-component 'benedict-vui-badge
-          :status status
-          :theme 'benedict-chat-header-time))
-      (when (and title (or provider model))
-        (vui-text "·"
-          :face 'benedict-chat-header-separator))
-      (when title
-        (vui-text title
-          :face 'benedict-chat-header)))))
-
-(defun benedict-vui-chat-header (&rest props)
-  "Create a chat header component node from PROPS."
-  (apply #'vui-component 'benedict-vui-chat-header props))
+  (vui-hstack
+    :spacing 1
+    (vui-component 'benedict-vui-provider-badge
+      :provider provider
+      :model model
+      :on-click on-provider-click)
+    (when status
+      (vui-text "·"
+        :face 'benedict-chat-header-separator))
+    (when status
+      (vui-component 'benedict-vui-badge
+        :status status
+        :theme 'benedict-chat-header-time))
+    (when (and title (or provider model))
+      (vui-text "·"
+        :face 'benedict-chat-header-separator))
+    (when title
+      (vui-text title
+        :face 'benedict-chat-header))))
 
 (provide 'benedict-vui-chat-header)
 ;;; benedict-vui-chat-header.el ends here

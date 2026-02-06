@@ -161,33 +161,34 @@
               (benedict-vui-turn--apply-face-to-block block face))
             blocks)))
 
-(defun benedict-vui-turn--render (props)
-  "Render a full turn from PROPS."
-  (let* ((message (plist-get props :message))
-          (role (benedict-vui-turn--message-role message props))
-          (timestamp (benedict-vui-turn--message-timestamp message props))
-          (metadata (benedict-vui-turn--message-metadata message props))
-          (message-key (benedict-vui-turn--message-key message props))
-          (blocks (benedict-vui-turn--blocks props))
-          (collapsed-blocks (plist-get props :collapsed-blocks))
-          (on-toggle-block (plist-get props :on-toggle-block))
-          (header (vui-component 'benedict-vui-turn-header :role role
-                                            :timestamp timestamp
-                                            :metadata metadata))
-          (content (vui-component 'benedict-vui-content-block-list
-                    :blocks blocks
+(vui-defcomponent benedict-vui-turn (message blocks role timestamp metadata message-key collapsed-blocks on-toggle-block)
+  :render
+  (let* ((actual-role (benedict-vui-turn--normalize-role
+                       (or role (and message (plist-get message :role)))))
+         (actual-timestamp (or timestamp
+                               (and message (or (plist-get message :timestamp)
+                                                (plist-get message :time)))))
+         (actual-metadata (or metadata (and message (plist-get message :metadata))))
+         (actual-message-key (or message-key
+                                 (and message (or (plist-get message :id)
+                                                  (plist-get message :message-id)
+                                                  (plist-get message :turn-id)
+                                                  (plist-get message :uuid)
+                                                  (plist-get message :nav-index)))))
+         (face (benedict-vui-turn--face-for-role actual-role actual-metadata))
+         (actual-blocks (or blocks (benedict-vui-turn--build-blocks message actual-role)))
+         (final-blocks (mapcar (lambda (block)
+                                 (benedict-vui-turn--apply-face-to-block block face))
+                               actual-blocks))
+         (header (vui-component 'benedict-vui-turn-header :role actual-role
+                                            :timestamp actual-timestamp
+                                            :metadata actual-metadata))
+         (content (vui-component 'benedict-vui-content-block-list
+                    :blocks final-blocks
                     :collapsed-blocks collapsed-blocks
-                    :message-key message-key
+                    :message-key actual-message-key
                     :on-toggle-block on-toggle-block)))
     (vui-vstack header content)))
-
-(vui-defcomponent benedict-vui-turn (props)
-  :render
-  (benedict-vui-turn--render props))
-
-(defun benedict-vui-turn (&rest props)
-  "Create a turn component node from PROPS."
-  (apply #'vui-component 'benedict-vui-turn props))
 
 (provide 'benedict-vui-turn)
 ;;; benedict-vui-turn.el ends here

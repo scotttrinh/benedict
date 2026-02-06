@@ -95,18 +95,11 @@ Calls ON-CHANGE with selected history item."
                       benedict-vui-compose-field--on-change)))
       (setq benedict-vui-compose-field--history-index new-index))))
 
-(vui-defcomponent benedict-vui-compose-field (props state)
+(vui-defcomponent benedict-vui-compose-field (value on-change on-submit history placeholder size (field-key :plist-get :key))
   :state ((history-index -1))
   :render
-  (let* ((value (plist-get props :value))
-         (on-change (plist-get props :on-change))
-         (on-submit (plist-get props :on-submit))
-         (history (plist-get props :history))
-         (placeholder (plist-get props :placeholder))
-         (size (plist-get props :size))
-         (field-key (plist-get props :key))
-         (current-history-index (plist-get state :history-index)))
-    (vui-use-effect ((list on-submit on-change history field-key))
+  (progn
+    (vui-use-effect (on-submit on-change history field-key)
       (setq benedict-vui-compose-field--field-key field-key)
       (setq benedict-vui-compose-field--on-submit on-submit)
       (setq benedict-vui-compose-field--on-change on-change)
@@ -116,8 +109,8 @@ Calls ON-CHANGE with selected history item."
         (setq benedict-vui-compose-field--on-submit nil)
         (setq benedict-vui-compose-field--on-change nil)
         (setq benedict-vui-compose-field--history nil)))
-    (vui-use-effect (current-history-index)
-      (setq benedict-vui-compose-field--history-index current-history-index)
+    (vui-use-effect (history-index)
+      (setq benedict-vui-compose-field--history-index history-index)
       (lambda ()
         (setq benedict-vui-compose-field--history-index -1)))
     (vui-field
@@ -126,7 +119,7 @@ Calls ON-CHANGE with selected history item."
      :placeholder placeholder
      :on-change (lambda (new-value)
                   (benedict-vui-compose-field--handle-change new-value on-change)
-                  (when (and history (>= current-history-index 0))
+                  (when (and history (>= history-index 0))
                     (vui-set-state :history-index -1)))
      :on-submit (lambda (new-value)
                   (benedict-vui-compose-field--handle-submit new-value on-submit))

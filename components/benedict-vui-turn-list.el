@@ -137,14 +137,12 @@ Each normalized message includes a :nav-index for navigation properties."
                                messages))))
     (apply #'vui-vstack nodes)))
 
-(defun benedict-vui-turn-list--render (props)
-  "Render the turn list for PROPS."
-  (let* ((messages (benedict-vui-turn-list--normalize-messages
-                    (plist-get props :conversation)))
-          (turns (benedict-vui-turn-list--group-turns messages))
-          (collapsed-blocks (plist-get props :collapsed-blocks))
-          (on-toggle-block (plist-get props :on-toggle-block)))
-     (vui-use-effect ((benedict-vui-turn-list--scroll-deps messages))
+(vui-defcomponent benedict-vui-turn-list (conversation collapsed-blocks on-toggle-block)
+  :render
+  (let* ((normalized-messages (benedict-vui-turn-list--normalize-messages
+                               conversation))
+         (turns (benedict-vui-turn-list--group-turns normalized-messages)))
+     (vui-use-effect ((benedict-vui-turn-list--scroll-deps normalized-messages))
        (benedict-vui-turn-list--scroll-to-bottom)
        nil)
      (vui-list turns
@@ -154,13 +152,22 @@ Each normalized message includes a :nav-index for navigation properties."
                (lambda (turn &optional index)
                  (benedict-vui-turn-list--turn-id turn index)))))
 
-(vui-defcomponent benedict-vui-turn-list (props)
-  :render
-  (benedict-vui-turn-list--render props))
-
-(defun benedict-vui-turn-list (&rest props)
-  "Create a turn list component node from PROPS."
-  (apply #'vui-component 'benedict-vui-turn-list props))
+(defalias 'benedict-vui-turn-list--render
+  (lambda (props)
+    (let* ((messages (benedict-vui-turn-list--normalize-messages
+                      (plist-get props :conversation)))
+            (turns (benedict-vui-turn-list--group-turns messages))
+            (collapsed-blocks (plist-get props :collapsed-blocks))
+            (on-toggle-block (plist-get props :on-toggle-block)))
+       (vui-use-effect ((benedict-vui-turn-list--scroll-deps messages))
+         (benedict-vui-turn-list--scroll-to-bottom)
+         nil)
+       (vui-list turns
+                 (lambda (turn &optional index)
+                   (benedict-vui-turn-list--render-turn
+                    turn collapsed-blocks on-toggle-block))
+                 (lambda (turn &optional index)
+                   (benedict-vui-turn-list--turn-id turn index))))))
 
 (provide 'benedict-vui-turn-list)
 ;;; benedict-vui-turn-list.el ends here

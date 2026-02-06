@@ -25,16 +25,9 @@ MESSAGE-KEY and BLOCK-ID are stored as text properties when provided."
                 'benedict-message-key message-key
                 'benedict-block-id block-id)))
 
-(vui-defcomponent benedict-vui-text-block (props)
+(vui-defcomponent benedict-vui-text-block (content message-key block-id)
   :render
-  (let ((content (plist-get props :content))
-        (message-key (plist-get props :message-key))
-        (block-id (plist-get props :block-id)))
-    (vui-text (benedict-vui-text-block--propertize content message-key block-id))))
-
-(defun benedict-vui-text-block (&rest props)
-  "Create a text block component node from PROPS."
-  (apply #'vui-component 'benedict-vui-text-block props))
+  (vui-text (benedict-vui-text-block--propertize content message-key block-id)))
 
 (provide 'benedict-vui-text-block)
 ;;; benedict-vui-text-block.el ends here

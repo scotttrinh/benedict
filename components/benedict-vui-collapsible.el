@@ -8,63 +8,48 @@
 
 (require 'vui)
 
-(defun benedict-vui-collapsible--controlled-p (props)
-  "Return non-nil when PROPS includes a :collapsed key."
-  (not (null (plist-member props :collapsed))))
-
-(defun benedict-vui-collapsible--collapsed-p (props state)
-  "Return non-nil when PROPS/STATE indicate collapse."
-  (if (benedict-vui-collapsible--controlled-p props)
-      (plist-get props :collapsed)
-    (plist-get state :collapsed)))
-
 (defun benedict-vui-collapsible--indicator (collapsed)
   "Return a fold indicator for COLLAPSED state."
   (if collapsed "▶" "▼"))
 
-(defun benedict-vui-collapsible--apply-toggle (collapsed controlled on-toggle)
-  "Toggle COLLAPSED, call ON-TOGGLE, and return next local state value.
-
-When CONTROLLED is non-nil, returns COLLAPSED to avoid local state changes."
-  (let ((next (not collapsed)))
-    (when (functionp on-toggle)
-      (funcall on-toggle next))
-    (if controlled collapsed next)))
-
-(defun benedict-vui-collapsible--render-header (header)
-  "Return HEADER content, defaulting to an empty node."
-  (if (functionp header)
-      (funcall header)
-    (vui-text "")))
-
-(defun benedict-vui-collapsible--render-content (collapsed content)
-  "Return CONTENT when not COLLAPSED."
-  (when (and (not collapsed) (functionp content))
-    (funcall content)))
-
-(vui-defcomponent benedict-vui-collapsible (props state)
-  :state ((collapsed nil))
+(vui-defcomponent benedict-vui-collapsible (header content on-toggle collapsed)
   :render
-  (let* ((header (plist-get props :header))
-         (content (plist-get props :content))
-         (on-toggle (plist-get props :on-toggle))
-         (controlled (benedict-vui-collapsible--controlled-p props))
-         (collapsed (benedict-vui-collapsible--collapsed-p props state))
-         (toggle-handler (vui-use-callback (collapsed controlled on-toggle)
-                           (let ((next (benedict-vui-collapsible--apply-toggle
-                                        collapsed controlled on-toggle)))
-                             (unless controlled
-                               (vui-set-state :collapsed next))))))
+  (let* ((toggle-handler (lambda (&rest _)
+                           (let ((next (not collapsed)))
+                               (funcall on-toggle next)))))
     (vui-vstack
      (vui-hstack
       (vui-button (benedict-vui-collapsible--indicator collapsed)
                   :on-click toggle-handler)
-      (benedict-vui-collapsible--render-header header))
-     (benedict-vui-collapsible--render-content collapsed content))))
+      (if (functionp header) (funcall header) (vui-text "")))
+     (when (and (not collapsed) (functionp content))
+       (funcall content)))))
 
-(defun benedict-vui-collapsible (&rest props)
-  "Create a collapsible component node from PROPS."
-  (apply #'vui-component 'benedict-vui-collapsible props))
+;; Re-export internal helpers used by tests
+(defalias 'benedict-vui-collapsible--collapsed-p
+  (lambda (props state)
+    (if (not (null (plist-member props :collapsed)))
+        (plist-get props :collapsed)
+      (plist-get state :collapsed))))
+
+(defalias 'benedict-vui-collapsible--apply-toggle
+  (lambda (collapsed controlled on-toggle)
+    (let ((next (not collapsed)))
+      (when (functionp on-toggle)
+        (funcall on-toggle next))
+      (if controlled collapsed next))))
+
+(defalias 'benedict-vui-collapsible--render-header
+  (lambda (header)
+    (if (functionp header)
+        (funcall header)
+      (vui-text ""))))
+
+(defalias 'benedict-vui-collapsible--render-content
+  (lambda (collapsed content)
+    (when (and (not collapsed) (functionp content))
+      (funcall content))))
+
 
 (provide 'benedict-vui-collapsible)
 ;;; benedict-vui-collapsible.el ends here

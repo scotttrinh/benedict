@@ -123,42 +123,18 @@ MESSAGE-KEY and BLOCK-ID annotate the rendered content."
       (plist-get props :collapsed)
     (plist-get state :collapsed)))
 
-(defun benedict-vui-tool-use-block--collapsible-props (props state toggle-handler)
-  "Return collapsible props for PROPS/STATE and TOGGLE-HANDLER."
-  (let* ((tool-call (plist-get props :tool-call))
-          (status (plist-get props :status))
-          (collapsed (benedict-vui-tool-use-block--collapsed-p props state))
-          (message-key (plist-get props :message-key))
-          (block-id (plist-get props :block-id)))
-    (list :collapsed collapsed
-          :on-toggle toggle-handler
-          :header (lambda ()
-                     (benedict-vui-tool-use-block--header tool-call status message-key block-id))
-          :content (lambda ()
-                      (benedict-vui-tool-use-block--content tool-call message-key block-id)))))
-
-(defun benedict-vui-tool-use-block--render (props state)
-  "Return the rendered tool use block for PROPS/STATE."
-  (let* ((controlled (benedict-vui-tool-use-block--controlled-p props))
-         (on-toggle (plist-get props :on-toggle))
-         (toggle-handler (vui-use-callback (controlled on-toggle)
-                           (lambda (next)
-                             (unless controlled
-                               (vui-set-state :collapsed next))
-                             (when (functionp on-toggle)
-                               (funcall on-toggle next)))))
-          (collapsible-props (benedict-vui-tool-use-block--collapsible-props
-                              props state toggle-handler)))
-    (apply #'benedict-vui-collapsible collapsible-props)))
-
-(vui-defcomponent benedict-vui-tool-use-block (props state)
-  :state ((collapsed t))
+(vui-defcomponent benedict-vui-tool-use-block (tool-call status on-toggle message-key block-id collapsed)
   :render
-  (benedict-vui-tool-use-block--render props state))
-
-(defun benedict-vui-tool-use-block (&rest props)
-  "Create a tool use block component node from PROPS."
-  (apply #'vui-component 'benedict-vui-tool-use-block props))
+  (let* ((toggle-handler (lambda (next)
+                           (when (functionp on-toggle)
+                             (funcall on-toggle next)))))
+    (vui-component 'benedict-vui-collapsible
+      :collapsed collapsed
+      :on-toggle toggle-handler
+      :header (lambda ()
+                 (benedict-vui-tool-use-block--header tool-call status message-key block-id))
+      :content (lambda ()
+                  (benedict-vui-tool-use-block--content tool-call message-key block-id)))))
 
 (provide 'benedict-vui-tool-use-block)
 ;;; benedict-vui-tool-use-block.el ends here

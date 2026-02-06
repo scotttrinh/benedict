@@ -200,56 +200,44 @@ CONTENT-NODE and HEADER-NODE are precomputed VUI nodes."
           :header (lambda () header-node)
           :content (lambda () content-node))))
 
-(defun benedict-vui-tool-result-block--render (props state)
-  "Return the rendered tool result block for PROPS/STATE."
-  (let* ((result (plist-get props :result))
-          (controlled (benedict-vui-tool-result-block--controlled-p props))
-          (collapsed (benedict-vui-tool-result-block--collapsed-p props state))
-          (status (benedict-vui-tool-result-block--result-status props result))
-          (body-text (benedict-vui-tool-result-block--body-text result))
-          (actions (benedict-vui-tool-result-block--resolve-actions props result))
-          (message-key (plist-get props :message-key))
-          (block-id (plist-get props :block-id))
-          (expanded (plist-get state :expanded))
-          (truncation (benedict-vui-tool-result-block--truncate
-                       body-text
-                       benedict-vui-tool-result-block--truncate-limit))
-          (truncated (cdr truncation))
-          (display-text (if (and truncated (not expanded))
-                            (car truncation)
-                          body-text))
-          (body-ref (vui-use-ref body-text))
-          (on-toggle (plist-get props :on-toggle))
-          (toggle-collapse (vui-use-callback (controlled on-toggle)
-                             (lambda (next)
-                               (unless controlled
-                                 (vui-set-state :collapsed next))
-                               (when (functionp on-toggle)
-                                 (funcall on-toggle next)))))
-          (toggle-expand (vui-use-callback ()
-                           (vui-set-state :expanded (lambda (value) (not value)))))
-          (header-node (benedict-vui-tool-result-block--header result status))
-          (content-node (benedict-vui-tool-result-block--content-node
-                         display-text truncated expanded toggle-expand actions status message-key block-id))
-          (collapsible-props (benedict-vui-tool-result-block--collapsible-props
-                              props state toggle-collapse content-node header-node)))
+(vui-defcomponent benedict-vui-tool-result-block (result status actions on-toggle message-key block-id collapsed)
+  :state ((collapsed-state t)
+          (expanded nil))
+  :render
+  (let* ((controlled (not (null (plist-member --props-- :collapsed))))
+         (is-collapsed (if controlled collapsed collapsed-state))
+         (actual-status (benedict-vui-tool-result-block--result-status --props-- result))
+         (body-text (benedict-vui-tool-result-block--body-text result))
+         (actual-actions (benedict-vui-tool-result-block--resolve-actions --props-- result))
+         (truncation (benedict-vui-tool-result-block--truncate
+                      body-text
+                      benedict-vui-tool-result-block--truncate-limit))
+         (truncated (cdr truncation))
+         (display-text (if (and truncated (not expanded))
+                           (car truncation)
+                         body-text))
+         (body-ref (vui-use-ref body-text))
+         (toggle-collapse (lambda (next)
+                            (unless controlled
+                              (vui-set-state :collapsed-state next))
+                            (when (functionp on-toggle)
+                              (funcall on-toggle next))))
+         (toggle-expand (lambda (&rest _)
+                          (vui-set-state :expanded (not expanded))))
+         (header-node (benedict-vui-tool-result-block--header result actual-status))
+         (content-node (benedict-vui-tool-result-block--content-node
+                        display-text truncated expanded toggle-expand actual-actions actual-status message-key block-id)))
     (vui-use-effect (body-text)
       (let ((prev (car body-ref)))
         (unless (equal prev body-text)
           (setcar body-ref body-text)
           (vui-set-state :expanded nil)))
       nil)
-    (apply #'benedict-vui-collapsible collapsible-props)))
-
-(vui-defcomponent benedict-vui-tool-result-block (props state)
-  :state ((collapsed t)
-          (expanded nil))
-  :render
-  (benedict-vui-tool-result-block--render props state))
-
-(defun benedict-vui-tool-result-block (&rest props)
-  "Create a tool result block component node from PROPS."
-  (apply #'vui-component 'benedict-vui-tool-result-block props))
+    (vui-component 'benedict-vui-collapsible
+      :collapsed is-collapsed
+      :on-toggle toggle-collapse
+      :header (lambda () header-node)
+      :content (lambda () content-node))))
 
 (provide 'benedict-vui-tool-result-block)
 ;;; benedict-vui-tool-result-block.el ends here
