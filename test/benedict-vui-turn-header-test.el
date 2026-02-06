@@ -26,5 +26,26 @@
   "Missing timestamp does not render a timestamp node."
   (should-not (benedict-vui-turn-header--timestamp-node nil)))
 
+(ert-deftest benedict-vui-turn-header-render-test ()
+  "Turn header renders role badge and timestamp."
+  (with-temp-buffer
+    (let ((buffer-name (buffer-name))
+          (ts (encode-time 0 0 12 1 1 2025))) ;; 12:00:00
+      (vui-mount
+       (vui-component 'benedict-vui-turn-header
+                      :role 'user
+                      :timestamp ts
+                      :metadata nil)
+       buffer-name)
+      
+      ;; Verify role badge (handled by nested component, but output should be visible)
+      (should (string-match-p "USER" (buffer-string)))
+      
+      ;; Verify timestamp
+      (should (string-match-p "12:00:00" (buffer-string)))
+      
+      ;; Verify separator
+      (should (string-match-p "·" (buffer-string))))))
+
 (provide 'test/benedict-vui-turn-header-test)
 ;;; benedict-vui-turn-header-test.el ends here

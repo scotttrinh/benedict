@@ -25,5 +25,26 @@
     (should (equal text "42"))
     (should (eq (get-text-property 0 'benedict-region-kind text) 'body))))
 
+(ert-deftest benedict-vui-text-block-render-test ()
+  "Text block renders content directly to buffer."
+  (with-temp-buffer
+    (let ((buffer-name (buffer-name)))
+      (vui-mount
+       (vui-component 'benedict-vui-text-block
+                      :content "Hello world"
+                      :message-key "msg-1"
+                      :block-id "block-1")
+       buffer-name)
+      
+      ;; Verify content
+      (should (string-match-p "Hello world" (buffer-string)))
+      
+      ;; Verify text properties are applied
+      (goto-char (point-min))
+      (let ((text (buffer-string)))
+        (should (eq (get-text-property 0 'benedict-region-kind text) 'body))
+        (should (equal (get-text-property 0 'benedict-message-key text) "msg-1"))
+        (should (equal (get-text-property 0 'benedict-block-id text) "block-1"))))))
+
 (provide 'test/benedict-vui-text-block-test)
 ;;; benedict-vui-text-block-test.el ends here

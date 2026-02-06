@@ -56,5 +56,26 @@
              'markdown-code-face
              (get-text-property 0 'face text)))))
 
+(ert-deftest benedict-vui-code-block-render-test ()
+  "Code block renders content and language label."
+  (with-temp-buffer
+    (let ((buffer-name (buffer-name)))
+      (vui-mount
+       (vui-component 'benedict-vui-code-block
+                      :code "(+ 1 2)"
+                      :language "emacs-lisp"
+                      :message-key "msg-1"
+                      :block-id "block-1")
+       buffer-name)
+      
+      ;; Verify language label
+      (should (string-match-p "EMACS-LISP" (buffer-string)))
+      
+      ;; Verify code content
+      (should (string-match-p (regexp-quote "(+ 1 2)") (buffer-string)))
+      
+      ;; Verify copy button
+      (should (string-match-p "Copy" (buffer-string))))))
+
 (provide 'test/benedict-vui-code-block-test)
 ;;; benedict-vui-code-block-test.el ends here
