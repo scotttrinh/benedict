@@ -137,17 +137,16 @@ MESSAGE-KEY and BLOCK-ID annotate the rendered content."
              message-key
              block-id)))
 
-(vui-defcomponent benedict-vui-thinking-block (thinking-data on-toggle message-key block-id (collapsed-prop :plist-get :collapsed :plist-member collapsed-p))
+(vui-defcomponent benedict-vui-thinking-block (thinking-data on-toggle message-key block-id collapsed)
   :state ((collapsed t))
   :render
   (let* ((controlled (not (null (plist-member --props-- :collapsed))))
-         (is-collapsed (if controlled collapsed-prop (plist-get --state-- :collapsed)))
-         (toggle-handler (vui-use-callback (controlled on-toggle is-collapsed)
-                           (lambda (next)
-                             (unless controlled
-                               (vui-set-state :collapsed next))
-                             (when (functionp on-toggle)
-                               (funcall on-toggle next))))))
+         (is-collapsed (if controlled collapsed (plist-get --state-- :collapsed)))
+         (toggle-handler (lambda (next)
+                           (unless controlled
+                             (vui-set-state :collapsed next))
+                           (when (functionp on-toggle)
+                             (funcall on-toggle next)))))
     (vui-component 'benedict-vui-collapsible
       :collapsed is-collapsed
       :on-toggle toggle-handler

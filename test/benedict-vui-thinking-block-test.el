@@ -1,38 +1,97 @@
 ;;; benedict-vui-thinking-block-test.el --- Tests for VUI thinking block -*- lexical-binding: t; -*-
 
 ;;; Commentary:
-;; Tests for the VUI thinking block component helpers.
+;; Tests for the VUI thinking block component behavior.
 
 ;;; Code:
 
 (require 'cl-lib)
 (require 'ert)
+(require 'vui)
+(require 'test/benedict-vui-test-utils)
 (require 'benedict-vui-thinking-block)
 
-(ert-deftest benedict-vui-thinking-block-wraps-collapsible ()
-  "Thinking block builds collapsible props with header/content."
-  (let ((props (benedict-vui-thinking-block--collapsible-props
-                '(:thinking-data "hi")
-                '(:collapsed t)
-                #'ignore)))
-    (should (functionp (plist-get props :header)))
-    (should (functionp (plist-get props :content)))))
+(vui-defcomponent benedict-vui-thinking-block-test--harness (thinking-data message-key block-id)
+  :state ((collapsed t))
+  :render
+  (vui-component 'benedict-vui-thinking-block
+                 :thinking-data thinking-data
+                 :collapsed collapsed
+                 :on-toggle (lambda (next)
+                              (vui-set-state :collapsed next))
+                 :message-key message-key
+                 :block-id block-id))
 
-(ert-deftest benedict-vui-thinking-block-propertizes-content ()
-  "Thinking block applies thinking face and region kind."
-  (let ((text (benedict-vui-thinking-block--propertize "why")))
-    (should (eq (get-text-property 0 'benedict-region-kind text) 'thinking))
-    (should (eq (get-text-property 0 'face text) 'benedict-chat-thinking))))
+(ert-deftest benedict-vui-thinking-block-mount-collapsed-by-default ()
+  "Thinking block hides content when mounted collapsed."
+  (with-temp-buffer
+    (let ((buffer-name (buffer-name)))
+      (vui-mount
+       (vui-component 'benedict-vui-thinking-block
+                      :thinking-data "Reasoning text"
+                      :collapsed t
+                      :message-key "msg-1"
+                      :block-id "block-1")
+       buffer-name)
+      (vui-flush-sync)
+      (let ((text (buffer-string)))
+        (should (string-match-p "▶" text))
+        (should-not (string-match-p "Reasoning text" text))))))
 
-(ert-deftest benedict-vui-thinking-block-defaults-collapsed ()
-  "Thinking block defaults to collapsed state."
-  (should (benedict-vui-thinking-block--collapsed-p nil '(:collapsed t))))
+(ert-deftest benedict-vui-thinking-block-mount-toggle-shows-content-with-properties ()
+  "Clicking toggle reveals content and thinking text properties."
+  (with-temp-buffer
+    (let ((buffer-name (buffer-name)))
+      (vui-mount
+       (vui-component 'benedict-vui-thinking-block-test--harness
+                      :thinking-data "Why this answer"
+                      :message-key "msg-1"
+                      :block-id "block-1")
+       buffer-name)
+      (vui-flush-sync)
+      (should-not (string-match-p "Why this answer" (buffer-string)))
+      (benedict-vui-test--click-button-at (point-min))
+      (vui-flush-sync)
+      (let* ((text (buffer-string))
+             (pos (string-match "Why this answer" text)))
+        (should pos)
+        (should (eq (get-text-property pos 'benedict-region-kind text) 'thinking))
+        (should (eq (get-text-property pos 'face text) 'benedict-chat-thinking))
+        (should (equal (get-text-property pos 'benedict-message-key text) "msg-1"))
+        (should (equal (get-text-property pos 'benedict-block-id text) "block-1"))))))
 
-(ert-deftest benedict-vui-thinking-block-handles-streaming-chunks ()
-  "Thinking block concatenates streaming chunks."
-  (let ((text (benedict-vui-thinking-block--content-text
-               (list (list :id "t1" :chunks (list "first" " second"))))))
-    (should (equal text "first second"))))
+(ert-deftest benedict-vui-thinking-block-mount-streaming-chunks ()
+  "Thinking block renders concatenated streaming chunks when expanded."
+  (with-temp-buffer
+    (let ((buffer-name (buffer-name)))
+      (vui-mount
+       (vui-component 'benedict-vui-thinking-block-test--harness
+                      :thinking-data (list (list :id "t1"
+                                                 :chunks (list "first" " second" " chunk")))
+                      :message-key "msg-1"
+                      :block-id "block-1")
+       buffer-name)
+      (vui-flush-sync)
+      (benedict-vui-test--click-button-at (point-min))
+      (vui-flush-sync)
+      (should (string-match-p "first second chunk" (buffer-string))))))
+
+(ert-deftest benedict-vui-thinking-block-mount-encrypted-placeholder ()
+  "Thinking block shows encrypted placeholder for data-only details."
+  (with-temp-buffer
+    (let ((buffer-name (buffer-name)))
+      (vui-mount
+       (vui-component 'benedict-vui-thinking-block-test--harness
+                      :thinking-data (list (list :id "enc-1" :data "ciphertext"))
+                      :message-key "msg-1"
+                      :block-id "block-1")
+       buffer-name)
+      (vui-flush-sync)
+      (benedict-vui-test--click-button-at (point-min))
+      (vui-flush-sync)
+      (let ((text (buffer-string)))
+        (should (string-match-p (regexp-quote "[Encrypted reasoning block]") text))
+        (should (string-match-p "ciphertext" text))))))
 
 (provide 'test/benedict-vui-thinking-block-test)
 ;;; benedict-vui-thinking-block-test.el ends here

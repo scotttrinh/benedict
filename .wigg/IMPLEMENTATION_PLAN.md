@@ -61,7 +61,7 @@
   - Dependencies: `test/benedict-vui-test-utils.el`
   - Notes: Use a harness component for controlled collapse if needed; call `vui-flush-sync` after clicks.
 
-- [ ] **ThinkingBlock: mount + collapse toggle tests with props assertions** (refs: 03_ui_ux.md)
+- [x] **ThinkingBlock: mount + collapse toggle tests with props assertions** (refs: 03_ui_ux.md)
   - Scope: Add behavior tests for collapsed-by-default, toggle expansion, and rendered thinking content properties.
   - Files: `test/benedict-vui-thinking-block-test.el`
   - Tests: Mount with `:collapsed t`, assert content absent; click toggle, `vui-flush-sync`, assert thinking text appears with `benedict-region-kind` = `thinking`, `face` = `benedict-chat-thinking`, and `benedict-message-key`/`benedict-block-id`.

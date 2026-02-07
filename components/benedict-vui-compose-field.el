@@ -95,12 +95,12 @@ Calls ON-CHANGE with selected history item."
                       benedict-vui-compose-field--on-change)))
       (setq benedict-vui-compose-field--history-index new-index))))
 
-(vui-defcomponent benedict-vui-compose-field (value on-change on-submit history placeholder size (field-key :plist-get :key))
+(vui-defcomponent benedict-vui-compose-field (value on-change on-submit history placeholder size key)
   :state ((history-index -1))
   :render
   (progn
-    (vui-use-effect (on-submit on-change history field-key)
-      (setq benedict-vui-compose-field--field-key field-key)
+    (vui-use-effect (on-submit on-change history key)
+      (setq benedict-vui-compose-field--field-key key)
       (setq benedict-vui-compose-field--on-submit on-submit)
       (setq benedict-vui-compose-field--on-change on-change)
       (setq benedict-vui-compose-field--history history)
@@ -121,9 +121,9 @@ Calls ON-CHANGE with selected history item."
                   (benedict-vui-compose-field--handle-change new-value on-change)
                   (when (and history (>= history-index 0))
                     (vui-set-state :history-index -1)))
-     :on-submit (lambda (new-value)
-                  (benedict-vui-compose-field--handle-submit new-value on-submit))
-     :key field-key)))
+      :on-submit (lambda (new-value)
+                   (benedict-vui-compose-field--handle-submit new-value on-submit))
+      :key key)))
 
 (provide 'benedict-vui-compose-field)
 ;;; benedict-vui-compose-field.el ends here
