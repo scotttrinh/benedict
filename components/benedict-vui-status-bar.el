@@ -40,23 +40,29 @@
   (let* ((tokens (benedict-vui-status-bar--total-tokens usage))
          (cost (benedict-vui-status-bar--cost usage))
          (token-label (benedict-vui-status-bar--format-tokens tokens))
-         (cost-label (benedict-vui-status-bar--format-cost cost)))
-    (vui-hstack
-      :spacing 2
+         (cost-label (benedict-vui-status-bar--format-cost cost))
+         (children nil))
+    (when token-label
+      (setq children
+            (append children
+                    (list (vui-text token-label :face 'benedict-chat-header-usage)))))
+    (when cost-label
       (when token-label
-        (vui-text token-label
-          :face 'benedict-chat-header-usage))
-      (when (and token-label cost-label)
-        (vui-text "·"
-          :face 'benedict-chat-header-separator))
-      (when cost-label
-        (vui-text cost-label
-          :face 'benedict-chat-header-usage))
-      (when error
-        (vui-text "·"
-          :face 'benedict-chat-header-separator)
-        (vui-text (format "%s" error)
-          :face 'benedict-chat-error)))))
+        (setq children
+              (append children
+                      (list (vui-text "·" :face 'benedict-chat-header-separator)))))
+      (setq children
+            (append children
+                    (list (vui-text cost-label :face 'benedict-chat-header-usage)))))
+    (when error
+      (when (or token-label cost-label)
+        (setq children
+              (append children
+                      (list (vui-text "·" :face 'benedict-chat-header-separator)))))
+      (setq children
+            (append children
+                    (list (vui-text (format "%s" error) :face 'benedict-chat-error)))))
+    (apply #'vui-hstack (append (list :spacing 2) children))))
 
 (provide 'benedict-vui-status-bar)
 ;;; benedict-vui-status-bar.el ends here

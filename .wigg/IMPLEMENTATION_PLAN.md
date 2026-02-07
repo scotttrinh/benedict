@@ -96,7 +96,7 @@
   - Dependencies: `test/benedict-vui-test-utils.el`
   - Notes: Replaced helper-formatting tests with mounted behavior coverage for empty/sliced summaries, expand/collapse visibility, `×` callback wiring, and handle/kind/truncated label rendering.
 
-- [ ] **StatusBar: mount + token/cost/error render tests** (refs: 03_ui_ux.md)
+- [x] **StatusBar: mount + token/cost/error render tests** (refs: 03_ui_ux.md)
   - Scope: Add UI-level assertions for what renders given usage/error inputs.
   - Files: `test/benedict-vui-status-bar-test.el`
   - Tests: Mount with usage => “N tokens”; with cost => `$…`; with error => error text + separators; optionally assert face props on rendered segments.
