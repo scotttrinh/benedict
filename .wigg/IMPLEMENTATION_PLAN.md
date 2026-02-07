@@ -75,12 +75,12 @@
   - Dependencies: `test/benedict-vui-test-utils.el`
   - Notes: Do not preserve helper-only tests by default; remove them unless they capture behavior not testable via rendering.
 
-- [ ] **CodeBlock: mount + Copy/Copied! behavior without real timers** (refs: 03_ui_ux.md)
+- [x] **CodeBlock: mount + Copy/Copied! behavior without real timers** (refs: 03_ui_ux.md)
   - Scope: Add behavior tests that validate what the user sees (label, code, copy feedback) without leaking timers.
   - Files: `test/benedict-vui-code-block-test.el`
   - Tests: Mount renders language label + “Copy”; click “Copy”, `vui-flush-sync`, assert “Copied!” appears; optionally assert region props (`benedict-message-key`, `benedict-block-id`) when code is rendered as text.
   - Dependencies: `test/benedict-vui-test-utils.el`
-  - Notes: Partial progress exists (render smoke + helper tests). Convert helper tests to mounted behavior and stub `run-at-time`/`cancel-timer` with `cl-letf` to prevent background timers while asserting immediate UI.
+  - Notes: Replaced async timer waiting with deterministic `cl-letf` timer stubbing in tests, kept mounted render/property assertions for language/copy label and `benedict-message-key`/`benedict-block-id` coverage.
 
 - [ ] **ComposeField: mount + field change/submit integration tests** (refs: 03_ui_ux.md)
   - Scope: Add widget-driven tests for typing and submit behavior (user-level), not just helper unit tests.
