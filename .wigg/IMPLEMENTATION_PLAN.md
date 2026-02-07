@@ -82,7 +82,7 @@
   - Dependencies: `test/benedict-vui-test-utils.el`
   - Notes: Replaced async timer waiting with deterministic `cl-letf` timer stubbing in tests, kept mounted render/property assertions for language/copy label and `benedict-message-key`/`benedict-block-id` coverage.
 
-- [ ] **ComposeField: mount + field change/submit integration tests** (refs: 03_ui_ux.md)
+- [x] **ComposeField: mount + field change/submit integration tests** (refs: 03_ui_ux.md)
   - Scope: Add widget-driven tests for typing and submit behavior (user-level), not just helper unit tests.
   - Files: `test/benedict-vui-compose-field-test.el`
   - Tests: Harness owns `value` state; simulate typing via widget (`widget-field-list`, `widget-value-set`, `widget-apply :notify`), `vui-flush-sync`, assert rendered value/callback; test submit via field submit path or `benedict-vui-compose-field-submit` after mount and assert callback.
