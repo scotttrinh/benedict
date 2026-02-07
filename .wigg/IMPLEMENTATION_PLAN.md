@@ -102,7 +102,7 @@
   - Tests: Mount with usage => “N tokens”; with cost => `$…`; with error => error text + separators; optionally assert face props on rendered segments.
   - Dependencies: None
 
-- [ ] **StreamingIndicator: mount visible state with stubbed timers** (refs: 03_ui_ux.md)
+- [x] **StreamingIndicator: mount visible state with stubbed timers** (refs: 03_ui_ux.md)
   - Scope: Add a render smoke test for `:visible t` without leaving running timers.
   - Files: `test/benedict-vui-streaming-indicator-test.el`
   - Tests: Mount `:visible t` asserts spinner frame text exists; stub `run-with-timer`/`cancel-timer` to no-op; mount `:visible nil` asserts no spinner text.
