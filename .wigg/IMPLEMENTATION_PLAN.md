@@ -89,12 +89,12 @@
   - Dependencies: `test/benedict-vui-test-utils.el`
   - Notes: Ensure buffer-local variables set by the component are cleaned up by unmount/teardown.
 
-- [ ] **ContextIndicator: mount + slice label + remove button interaction tests** (refs: 03_ui_ux.md)
+- [x] **ContextIndicator: mount + slice label + remove button interaction tests** (refs: 03_ui_ux.md)
   - Scope: Add real-buffer tests for summary rendering and slice removal click behavior.
   - Files: `test/benedict-vui-context-indicator-test.el`
   - Tests: Mount with nil slices => “No context”; mount with slices => summary + labels; click “×” calls `:on-remove` with slice id; `vui-flush-sync` after click.
   - Dependencies: `test/benedict-vui-test-utils.el`
-  - Notes: Current coverage is formatting-only (`--summary`/`--slice-label`); replace with mounted behavior tests next.
+  - Notes: Replaced helper-formatting tests with mounted behavior coverage for empty/sliced summaries, expand/collapse visibility, `×` callback wiring, and handle/kind/truncated label rendering.
 
 - [ ] **StatusBar: mount + token/cost/error render tests** (refs: 03_ui_ux.md)
   - Scope: Add UI-level assertions for what renders given usage/error inputs.
