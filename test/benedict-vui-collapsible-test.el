@@ -1,70 +1,47 @@
 ;;; benedict-vui-collapsible-test.el --- Tests for VUI collapsible -*- lexical-binding: t; -*-
 
 ;;; Commentary:
-;; Test the VUI collapsible component helpers.
+;; Tests for the VUI collapsible component behavior.
 
 ;;; Code:
 
 (require 'ert)
+(require 'vui)
+(require 'test/benedict-vui-test-utils)
 (require 'benedict-vui-collapsible)
 
-(defvar benedict-vui-collapsible-test--header-calls 0
-  "Call count for header helper.")
+(vui-defcomponent benedict-vui-collapsible-test--harness ()
+  :state ((collapsed t))
+  :render
+  (vui-component 'benedict-vui-collapsible
+                 :collapsed collapsed
+                 :on-toggle (lambda (next)
+                              (vui-set-state :collapsed next))
+                 :header (lambda ()
+                           (vui-text "Section"))
+                 :content (lambda ()
+                            (vui-text "Details visible"))))
 
-(defvar benedict-vui-collapsible-test--content-calls 0
-  "Call count for content helper.")
-
-(defun benedict-vui-collapsible-test--header ()
-  "Return a header marker for render test."
-  (setq benedict-vui-collapsible-test--header-calls
-        (1+ benedict-vui-collapsible-test--header-calls))
-  'header)
-
-(defun benedict-vui-collapsible-test--content ()
-  "Return a content marker for render test."
-  (setq benedict-vui-collapsible-test--content-calls
-        (1+ benedict-vui-collapsible-test--content-calls))
-  'content)
-
-(ert-deftest benedict-vui-collapsible-indicator-values ()
-  "Test fold indicator for collapsed or expanded state."
-  (should (equal (benedict-vui-collapsible--indicator t) "▶"))
-  (should (equal (benedict-vui-collapsible--indicator nil) "▼")))
-
-(ert-deftest benedict-vui-collapsible-controlled-and-uncontrolled ()
-  "Test collapsed state for controlled and local usage."
-  (should (eq (benedict-vui-collapsible--collapsed-p '(:collapsed t) '(:collapsed nil)) t))
-  (should (eq (benedict-vui-collapsible--collapsed-p '(:collapsed nil) '(:collapsed t)) nil))
-  (should (eq (benedict-vui-collapsible--collapsed-p nil '(:collapsed t)) t)))
-
-(ert-deftest benedict-vui-collapsible-header-and-content-rendering ()
-  "Test header rendering and conditional content rendering."
-  (setq benedict-vui-collapsible-test--header-calls 0
-        benedict-vui-collapsible-test--content-calls 0)
-  (should (equal (benedict-vui-collapsible--render-header
-                  #'benedict-vui-collapsible-test--header)
-                 'header))
-  (should (= benedict-vui-collapsible-test--header-calls 1))
-  (should (null (benedict-vui-collapsible--render-content
-                 t #'benedict-vui-collapsible-test--content)))
-  (should (= benedict-vui-collapsible-test--content-calls 0))
-  (should (equal (benedict-vui-collapsible--render-content
-                  nil #'benedict-vui-collapsible-test--content)
-                 'content))
-  (should (= benedict-vui-collapsible-test--content-calls 1)))
-
-(ert-deftest benedict-vui-collapsible-toggle-calls-callback ()
-  "Test toggle callback invocation and controlled state behavior."
-  (let ((callback-value nil))
-    (should (eq (benedict-vui-collapsible--apply-toggle
-                 t nil (lambda (value) (setq callback-value value)))
-                nil))
-    (should (eq callback-value nil))
-    (setq callback-value :unset)
-    (should (eq (benedict-vui-collapsible--apply-toggle
-                 t t (lambda (value) (setq callback-value value)))
-                t))
-    (should (eq callback-value nil))))
+(ert-deftest benedict-vui-collapsible-mount-toggle-indicator-and-content ()
+  "Toggle updates fold indicator and content visibility in mounted buffer."
+  (with-temp-buffer
+    (let ((buffer-name (buffer-name)))
+      (vui-mount
+       (vui-component 'benedict-vui-collapsible-test--harness)
+       buffer-name)
+      (vui-flush-sync)
+      (let ((initial (buffer-string)))
+        (should (string-match-p (regexp-quote "▶") initial))
+        (should (string-match-p "Section" initial))
+        (should-not (string-match-p "Details visible" initial)))
+      (save-excursion
+        (goto-char (point-min))
+        (should (search-forward "▶" nil t))
+        (benedict-vui-test--click-button-at (match-beginning 0)))
+      (vui-flush-sync)
+      (let ((expanded (buffer-string)))
+        (should (string-match-p (regexp-quote "▼") expanded))
+        (should (string-match-p "Details visible" expanded))))))
 
 (provide 'test/benedict-vui-collapsible-test)
 ;;; benedict-vui-collapsible-test.el ends here

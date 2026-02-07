@@ -68,7 +68,7 @@
   - Dependencies: `test/benedict-vui-test-utils.el`
   - Notes: Current file is still helper-centric; replace helper-level tests with rendered-output coverage, including at least one “streaming chunks / encrypted placeholder” case.
 
-- [ ] **Collapsible: mount + indicator toggle behavior test** (refs: 03_ui_ux.md)
+- [x] **Collapsible: mount + indicator toggle behavior test** (refs: 03_ui_ux.md)
   - Scope: Ensure `benedict-vui-collapsible` is tested from the user perspective (indicator + content visibility) instead of only helper fns.
   - Files: `test/benedict-vui-collapsible-test.el`
   - Tests: Harness renders header/content strings; assert “▶” and hidden content initially; click toggle, `vui-flush-sync`, assert “▼” and content visible.

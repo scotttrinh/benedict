@@ -26,30 +26,5 @@
        (funcall content)))))
 
 ;; Re-export internal helpers used by tests
-(defalias 'benedict-vui-collapsible--collapsed-p
-  (lambda (props state)
-    (if (not (null (plist-member props :collapsed)))
-        (plist-get props :collapsed)
-      (plist-get state :collapsed))))
-
-(defalias 'benedict-vui-collapsible--apply-toggle
-  (lambda (collapsed controlled on-toggle)
-    (let ((next (not collapsed)))
-      (when (functionp on-toggle)
-        (funcall on-toggle next))
-      (if controlled collapsed next))))
-
-(defalias 'benedict-vui-collapsible--render-header
-  (lambda (header)
-    (if (functionp header)
-        (funcall header)
-      (vui-text ""))))
-
-(defalias 'benedict-vui-collapsible--render-content
-  (lambda (collapsed content)
-    (when (and (not collapsed) (functionp content))
-      (funcall content))))
-
-
 (provide 'benedict-vui-collapsible)
 ;;; benedict-vui-collapsible.el ends here
