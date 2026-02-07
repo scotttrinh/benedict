@@ -29,9 +29,9 @@
   :render
   (let* ((provider-label (benedict-vui-provider-badge--format-provider provider))
          (model-label (benedict-vui-provider-badge--format-model model)))
+    (ignore on-click)
     (vui-hstack
       :spacing 1
-      :on-click on-click
       (vui-text provider-label
         :face 'benedict-chat-header-provider)
       (vui-text "·"

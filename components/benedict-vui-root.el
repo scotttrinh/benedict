@@ -120,32 +120,32 @@ Clears input and context when RETAIN-CONTEXT is nil."
                              slices))
          (render-conversation (benedict-vui-root--append-streaming
                                conversation streaming))
-         (set-input (vui-use-callback ()
-                      (lambda (value)
+         (set-input (vui-use-memo ()
+                      (vui-async-callback (value)
                         (vui-set-state :input-text value))))
-         (set-slices (vui-use-callback ()
-                      (lambda (slices-val)
-                        (vui-set-state :slices slices-val))))
-         (submit-handler (vui-use-callback (on-submit retain-context)
-                            (lambda (value)
-                              (benedict-vui-root--submit
-                               value on-submit retain-context))))
-         (toggle-block (vui-use-callback ()
-                        (lambda (block-id &optional next)
-                          (vui-set-state :collapsed-blocks
-                            (lambda (current)
-                              (benedict-vui-root--toggle-collapsed-block
-                               current block-id next))))))
-          (slice-remove (vui-use-callback (current-slices on-slices-change)
-                          (lambda (slice-id)
-                            (let ((updated (cl-remove-if
-                                            (lambda (slice)
+         (set-slices (vui-use-memo ()
+                       (vui-async-callback (slices-val)
+                         (vui-set-state :slices slices-val))))
+         (submit-handler (vui-use-memo (on-submit retain-context)
+                           (lambda (value)
+                             (benedict-vui-root--submit
+                              value on-submit retain-context))))
+         (toggle-block (vui-use-memo ()
+                         (vui-async-callback (block-id &optional next)
+                           (vui-set-state :collapsed-blocks
+                             (lambda (current)
+                               (benedict-vui-root--toggle-collapsed-block
+                                current block-id next))))))
+         (slice-remove (vui-use-memo (current-slices on-slices-change)
+                         (lambda (slice-id)
+                           (let ((updated (cl-remove-if
+                                           (lambda (slice)
                                              (equal (plist-get slice :id) slice-id))
                                            current-slices)))
                              (vui-set-state :slices updated)
                              (when on-slices-change
                                (funcall on-slices-change updated))))))
-         (input-change (vui-use-callback ()
+         (input-change (vui-use-memo ()
                          (lambda (value)
                            (vui-set-state :input-text value)))))
      (vui-use-effect (register-actions set-input set-slices toggle-block)
