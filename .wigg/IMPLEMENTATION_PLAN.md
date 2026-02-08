@@ -111,7 +111,7 @@
 
 ### Container / Composition Tests
 
-- [ ] **ContentBlockList: mount mixed blocks + toggle callback wiring** (refs: 03_ui_ux.md, 06_tools.md)
+- [x] **ContentBlockList: mount mixed blocks + toggle callback wiring** (refs: 03_ui_ux.md, 06_tools.md)
   - Scope: Verify that a list of mixed blocks renders expected user-visible output and that toggling collapsibles calls `:on-toggle-block` with `(block-id next)`.
   - Files: `test/benedict-vui-content-block-list-test.el`
   - Tests: Mount blocks including text/code/thinking/tool-use/tool-result; assert key labels/snippets in buffer; click a collapsible toggle and assert callback args; `vui-flush-sync` after click.
