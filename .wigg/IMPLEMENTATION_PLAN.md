@@ -133,7 +133,7 @@
 
 ### Top-Level UI Smoke Tests
 
-- [ ] **ChatHeader + InputArea: replace “can be loaded” tests with real render assertions** (refs: 03_ui_ux.md)
+- [x] **ChatHeader + InputArea: replace “can be loaded” tests with real render assertions** (refs: 03_ui_ux.md)
   - Scope: Ensure these tests validate actual rendered buffer output rather than `featurep`/`should t`.
   - Files: `test/benedict-vui-chat-header-test.el`, `test/benedict-vui-input-area-test.el`
   - Tests: ChatHeader shows provider/model and title; InputArea shows “No context” and includes a field widget.
