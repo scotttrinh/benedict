@@ -124,7 +124,7 @@
   - Tests: Mount a user message and assert “USER” badge and content present; mount assistant and assert “ASSISTANT”; for `:role 'tool` assert tool-result block label/content appears.
   - Dependencies: Leaf component tests (Badge/TextBlock/ToolResultBlock) should land first.
 
-- [ ] **TurnList + ConversationView: mount conversation rendering + streaming indicator behavior** (refs: 03_ui_ux.md, 04_agent_loop.md)
+- [x] **TurnList + ConversationView: mount conversation rendering + streaming indicator behavior** (refs: 03_ui_ux.md, 04_agent_loop.md)
   - Scope: Add mount-based tests for composing turns and showing streaming indicator when streaming is active.
   - Files: `test/benedict-vui-turn-list-test.el`, `test/benedict-vui-conversation-view-test.el`
   - Tests: TurnList renders multiple turns; ConversationView renders TurnList and shows spinner when `:streaming '(:status active ...)`.
