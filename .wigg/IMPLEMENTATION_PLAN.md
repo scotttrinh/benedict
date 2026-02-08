@@ -118,7 +118,7 @@
   - Dependencies: `test/benedict-vui-test-utils.el`; leaf block behavior tests (ToolResultBlock/ThinkingBlock/Collapsible) should land first.
   - Notes: Remove primary reliance on `vui-list` stubbing; focus on mounted user-observable output and interactions.
 
-- [ ] **Turn: mount renders header + blocks and preserves role styling** (refs: 03_ui_ux.md)
+- [x] **Turn: mount renders header + blocks and preserves role styling** (refs: 03_ui_ux.md)
   - Scope: Add real render tests proving `benedict-vui-turn` composes header + content blocks and applies role faces to user-visible text.
   - Files: `test/benedict-vui-turn-test.el`
   - Tests: Mount a user message and assert “USER” badge and content present; mount assistant and assert “ASSISTANT”; for `:role 'tool` assert tool-result block label/content appears.

@@ -1,50 +1,59 @@
 ;;; benedict-vui-turn-test.el --- Tests for VUI turn -*- lexical-binding: t; -*-
 
 ;;; Commentary:
-;; Tests for the VUI turn component helpers.
+;; Tests for VUI turn component mounted behavior.
 
 ;;; Code:
 
-(require 'cl-lib)
 (require 'ert)
+(require 'vui)
 (require 'benedict-vui-turn)
 
-(defun benedict-vui-turn-test--face-member-p (face value)
-  "Return non-nil when VALUE has FACE in its face property."
-  (let ((actual (and (stringp value) (get-text-property 0 'face value))))
-    (cond
-     ((null actual) nil)
-     ((listp actual) (memq face actual))
-     (t (eq actual face)))))
+(ert-deftest benedict-vui-turn-mount-user-renders-badge-and-user-styling ()
+  "Turn mounts user messages with USER badge and user face text."
+  (with-temp-buffer
+    (let ((buffer-name (buffer-name)))
+      (vui-mount
+       (vui-component 'benedict-vui-turn
+                      :message (list :id "msg-user" :role 'user :content "Hello from user"))
+       buffer-name)
+      (vui-flush-sync)
+      (let* ((text (buffer-string))
+             (content-pos (string-match "Hello from user" text)))
+        (should (string-match-p "USER" text))
+        (should content-pos)
+        (should (eq (get-text-property content-pos 'face text) 'benedict-chat-user))))))
 
-(ert-deftest benedict-vui-turn-composes-header-and-blocks ()
-  "Turn resolves role/timestamp from message and props."
-  (let* ((message (list :role 'user :content "Hi" :timestamp 123))
-         (role (benedict-vui-turn--message-role message nil))
-         (timestamp (benedict-vui-turn--message-timestamp message nil)))
-    (should (eq role 'user))
-    (should (equal timestamp 123))))
+(ert-deftest benedict-vui-turn-mount-assistant-renders-badge-and-assistant-styling ()
+  "Turn mounts assistant messages with ASSISTANT badge and assistant face text."
+  (with-temp-buffer
+    (let ((buffer-name (buffer-name)))
+      (vui-mount
+       (vui-component 'benedict-vui-turn
+                      :message (list :id "msg-assistant" :role 'assistant :content "Hello from assistant"))
+       buffer-name)
+      (vui-flush-sync)
+      (let* ((text (buffer-string))
+             (content-pos (string-match "Hello from assistant" text)))
+        (should (string-match-p "ASSISTANT" text))
+        (should content-pos)
+        (should (eq (get-text-property content-pos 'face text) 'benedict-chat-assistant))))))
 
-(ert-deftest benedict-vui-turn-applies-role-face-to-text ()
-  "Turn applies role faces to text block content."
-  (let* ((user-message (list :role 'user :content "Hello"))
-         (assistant-message (list :role 'assistant :content "Hi"))
-         (user-block (car (benedict-vui-turn--blocks (list :message user-message))))
-         (assistant-block (car (benedict-vui-turn--blocks (list :message assistant-message)))))
-    (should (benedict-vui-turn-test--face-member-p
-             'benedict-chat-user
-             (plist-get user-block :content)))
-    (should (benedict-vui-turn-test--face-member-p
-             'benedict-chat-assistant
-             (plist-get assistant-block :content)))))
-
-(ert-deftest benedict-vui-turn-tool-messages-render-results ()
-  "Tool role messages render as tool result blocks."
-  (let* ((message (list :role 'tool :content "ok" :metadata '(:status success)))
-         (blocks (benedict-vui-turn--blocks (list :message message)))
-         (block (car blocks)))
-    (should (eq (plist-get block :type) 'tool-result))
-    (should (equal (plist-get block :result) message))))
+(ert-deftest benedict-vui-turn-mount-tool-role-renders-tool-result-content ()
+  "Turn mounts tool-role messages as tool-result content blocks."
+  (with-temp-buffer
+    (let ((buffer-name (buffer-name)))
+      (vui-mount
+       (vui-component 'benedict-vui-turn
+                      :message (list :id "msg-tool"
+                                     :role 'tool
+                                     :content "ok"
+                                     :metadata '(:status success)))
+       buffer-name)
+      (vui-flush-sync)
+      (let ((text (buffer-string)))
+        (should (string-match-p "Result:" text))
+        (should (string-match-p "ok" text))))))
 
 (provide 'test/benedict-vui-turn-test)
 ;;; benedict-vui-turn-test.el ends here
