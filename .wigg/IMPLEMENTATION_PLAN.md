@@ -139,7 +139,7 @@
   - Tests: ChatHeader shows provider/model and title; InputArea shows “No context” and includes a field widget.
   - Dependencies: `test/benedict-vui-test-utils.el` (optional)
 
-- [ ] **Root: mount smoke test for baseline UI composition** (refs: 02_architecture.md, 03_ui_ux.md)
+- [x] **Root: mount smoke test for baseline UI composition** (refs: 02_architecture.md, 03_ui_ux.md)
   - Scope: Validate `benedict-vui-root` renders the main layout (header, conversation view, input area, status bar) for an empty or minimal session.
   - Files: `test/benedict-vui-root-test.el`
   - Tests: Mount with `session nil` and assert key visible strings (e.g. title “Chat”, “No context”, placeholder “Ask Benedict...”).
