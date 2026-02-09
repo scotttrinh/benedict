@@ -30,7 +30,7 @@ Replace broad mount-smoke confidence with behavior-driven coverage that proves t
 
 - [x] Add a dedicated integration regression test (new file or extension of existing chat integration tests) that mounts the real `benedict-chat` buffer path and reproduces this failure mode explicitly: provider/session events are emitted (visible in `*Messages*`) but chat UI does not update.
 - [x] Ensure the test drives the same production path users hit (chat command + mounted buffer + submit flow), not direct root-only mounting.
-- [ ] Add assertions that fail on the current bug and prove end-user-visible reactivity across request lifecycle (`draft-started`, `draft-updated`, `message-added`, `request-completed`, `state-changed`).
+- [x] Add assertions that fail on the current bug and prove end-user-visible reactivity across request lifecycle (`draft-started`, `draft-updated`, `message-added`, `request-completed`, `state-changed`).
 - [ ] Implement production code changes required to make the new regression test pass (subscription/mount/event wiring), then keep the regression test as a permanent guardrail.
 - [ ] Treat this regression as the next task before all remaining unchecked work in later phases.
 

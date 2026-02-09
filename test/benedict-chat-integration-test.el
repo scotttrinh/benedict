@@ -91,12 +91,38 @@
          (benedict-vui-test--wait-until
           (lambda ()
             (vui-flush-sync)
-            (let ((text (buffer-string)))
-              (and (string-match-p "Reactive" text)
-                   (not (string-match-p "Reactive stream" text))
-                   (string-match-p "\\bACTIVE\\b" text))))
+            (and (memq 'draft-started seen-events)
+                 (let ((text (buffer-string)))
+                   (and (string-match-p "prove reactivity" text)
+                        (string-match-p "\\bACTIVE\\b" text)
+                        (not (string-match-p "Reactive stream" text))))))
+          :timeout 2.0))
+        (should
+         (benedict-vui-test--wait-until
+          (lambda ()
+            (vui-flush-sync)
+            (and (memq 'draft-updated seen-events)
+                 (let ((text (buffer-string)))
+                   (and (string-match-p "Reactive" text)
+                        (not (string-match-p "Reactive stream" text))
+                        (string-match-p "\\bACTIVE\\b" text)))))
+          :timeout 2.0))
+        (should
+         (benedict-vui-test--wait-until
+          (lambda ()
+            (vui-flush-sync)
+            (and (memq 'message-added seen-events)
+                 (string-match-p "Reactive stream" (buffer-string))))
           :timeout 2.0))
         (should (benedict-vui-test--wait-for-request-finished target-session 2.0))
+        (should
+         (benedict-vui-test--wait-until
+          (lambda ()
+            (vui-flush-sync)
+            (and (memq 'request-completed seen-events)
+                 (>= (cl-count 'state-changed seen-events) 2)
+                 (not (string-match-p "\\bACTIVE\\b" (buffer-string)))))
+          :timeout 2.0))
         (vui-flush-sync)
         (let* ((ordered-events (nreverse seen-events))
                (draft-started-idx (cl-position 'draft-started ordered-events))
