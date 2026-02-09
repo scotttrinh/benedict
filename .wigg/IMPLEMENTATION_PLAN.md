@@ -21,7 +21,7 @@ Replace broad mount-smoke confidence with behavior-driven coverage that proves t
 ## Current Coverage Snapshot (Reset Baseline)
 
 - Strong today: `tool-use-block`, `tool-result-block`, `compose-field`, `context-indicator`.
-- Medium today: `turn`, `turn-list`, `conversation-view`, `status-bar`, `chat-header`, `input-area`, `streaming-indicator`, `thinking-block`, `code-block`, `text-block`, `provider-badge`, `badge`, `turn-header`, `collapsible`.
+- Medium today: `turn`, `turn-list`, `conversation-view`, `status-bar`, `chat-header`, `streaming-indicator`, `thinking-block`, `code-block`, `text-block`, `provider-badge`, `badge`, `turn-header`, `collapsible`.
 - Weak today (highest risk): `root`, `content-block-list`, and full root-to-provider streaming/error/tool-call paths.
 
 ## Priority Tasks
@@ -100,7 +100,7 @@ Replace broad mount-smoke confidence with behavior-driven coverage that proves t
 ### Phase 4 - Leaf Component Behavior Expansion
 
 - [x] `test/benedict-vui-chat-header-test.el`: click handler wiring, nil provider/model/title variants, status badge transitions.
-- [ ] `test/benedict-vui-input-area-test.el`: slice remove wiring, placeholder/size propagation, history prop behavior.
+- [x] `test/benedict-vui-input-area-test.el`: obsolete after transcript-only chat/compose split removed `benedict-vui-input-area` and related VUI compose components.
 - [ ] `test/benedict-vui-status-bar-test.el`: separator logic across token/cost/error combinations and nil/partial usage payloads.
 - [ ] `test/benedict-vui-streaming-indicator-test.el`: visible false->true->false transitions, timer cleanup on unmount.
 - [ ] `test/benedict-vui-thinking-block-test.el`: empty payload handling, controlled/uncontrolled collapse behavior, multi-detail/chunk rendering.
