@@ -72,7 +72,7 @@ Replace broad mount-smoke confidence with behavior-driven coverage that proves t
   - provider error path displays error and stops streaming indicator,
   - cancellation mid-stream clears draft/indicator without corrupting transcript,
   - empty assistant response path (no crash, correct fallback text if applicable).
-- [ ] Add one multi-turn scripted run asserting conversation continuity and stable navigation properties across turns.
+- [x] Add one multi-turn scripted run asserting conversation continuity and stable navigation properties across turns.
 
 ### Phase 3 - Composition Layer Hardening
 

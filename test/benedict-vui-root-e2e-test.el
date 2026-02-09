@@ -232,5 +232,116 @@
         (should (eq (benedict-session-state session) 'idle)))
       (funcall done))))
 
+(ert-deftest-async benedict-vui-root-e2e-multi-turn-continuity-keeps-navigation-stable (done)
+  "Multi-turn scripted runs preserve transcript continuity and navigation properties."
+  (benedict-test-with-bindings done
+      ((benedict-provider 'fake)
+       (benedict-provider-fake-latency-seconds 0.01)
+       (benedict-provider-fake-script
+        (list (list :type 'success :content "First answer")
+              (list :type 'success :content "Second answer")
+              (list :type 'success :content "Third answer"))))
+    (with-mounted-vui-root
+      (let ((first-user-id nil)
+            (first-assistant-id nil)
+            (second-user-id nil)
+            (second-assistant-id nil)
+            (third-user-id nil)
+            (third-assistant-id nil))
+        (benedict-vui-root-e2e-test--dispatch session "First question")
+        (should (benedict-vui-test--wait-for-request-finished session 2.0))
+        (vui-flush-sync)
+        (let ((messages (benedict-vui-root-e2e-test--messages session))
+              (text (benedict-vui-root-e2e-test--buffer-text)))
+          (should (= 2 (length messages)))
+          (setq first-user-id (plist-get (nth 0 messages) :id))
+          (setq first-assistant-id (plist-get (nth 1 messages) :id))
+          (should (string-match-p "First question" text))
+          (should (string-match-p "First answer" text))
+          (benedict-vui-test--assert-text-properties-for
+           "First question"
+           :message-key first-user-id
+           :region-kind 'body)
+          (benedict-vui-test--assert-text-properties-for
+           "First answer"
+           :message-key first-assistant-id
+           :region-kind 'body))
+
+        (benedict-vui-root-e2e-test--dispatch session "Second question")
+        (should (benedict-vui-test--wait-for-request-finished session 2.0))
+        (vui-flush-sync)
+        (let ((messages (benedict-vui-root-e2e-test--messages session))
+              (text (benedict-vui-root-e2e-test--buffer-text)))
+          (should (= 4 (length messages)))
+          (setq second-user-id (plist-get (nth 2 messages) :id))
+          (setq second-assistant-id (plist-get (nth 3 messages) :id))
+          (should (equal (plist-get (nth 0 messages) :id) first-user-id))
+          (should (equal (plist-get (nth 1 messages) :id) first-assistant-id))
+          (should (string-match-p "First question" text))
+          (should (string-match-p "First answer" text))
+          (should (string-match-p "Second question" text))
+          (should (string-match-p "Second answer" text))
+          (benedict-vui-test--assert-text-properties-for
+           "First question"
+           :message-key first-user-id
+           :region-kind 'body)
+          (benedict-vui-test--assert-text-properties-for
+           "First answer"
+           :message-key first-assistant-id
+           :region-kind 'body)
+          (benedict-vui-test--assert-text-properties-for
+           "Second question"
+           :message-key second-user-id
+           :region-kind 'body)
+          (benedict-vui-test--assert-text-properties-for
+           "Second answer"
+           :message-key second-assistant-id
+           :region-kind 'body))
+
+        (benedict-vui-root-e2e-test--dispatch session "Third question")
+        (should (benedict-vui-test--wait-for-request-finished session 2.0))
+        (vui-flush-sync)
+        (let ((messages (benedict-vui-root-e2e-test--messages session))
+              (text (benedict-vui-root-e2e-test--buffer-text)))
+          (should (= 6 (length messages)))
+          (setq third-user-id (plist-get (nth 4 messages) :id))
+          (setq third-assistant-id (plist-get (nth 5 messages) :id))
+          (should (equal (plist-get (nth 0 messages) :id) first-user-id))
+          (should (equal (plist-get (nth 1 messages) :id) first-assistant-id))
+          (should (equal (plist-get (nth 2 messages) :id) second-user-id))
+          (should (equal (plist-get (nth 3 messages) :id) second-assistant-id))
+          (should (string-match-p "First question" text))
+          (should (string-match-p "First answer" text))
+          (should (string-match-p "Second question" text))
+          (should (string-match-p "Second answer" text))
+          (should (string-match-p "Third question" text))
+          (should (string-match-p "Third answer" text))
+          (benedict-vui-test--assert-text-properties-for
+           "First question"
+           :message-key first-user-id
+           :region-kind 'body)
+          (benedict-vui-test--assert-text-properties-for
+           "First answer"
+           :message-key first-assistant-id
+           :region-kind 'body)
+          (benedict-vui-test--assert-text-properties-for
+           "Second question"
+           :message-key second-user-id
+           :region-kind 'body)
+          (benedict-vui-test--assert-text-properties-for
+           "Second answer"
+           :message-key second-assistant-id
+           :region-kind 'body)
+          (benedict-vui-test--assert-text-properties-for
+           "Third question"
+           :message-key third-user-id
+           :region-kind 'body)
+          (benedict-vui-test--assert-text-properties-for
+           "Third answer"
+           :message-key third-assistant-id
+           :region-kind 'body)
+          (should (eq (benedict-session-state session) 'idle)))
+        (funcall done)))))
+
 (provide 'test/benedict-vui-root-e2e-test)
 ;;; benedict-vui-root-e2e-test.el ends here
