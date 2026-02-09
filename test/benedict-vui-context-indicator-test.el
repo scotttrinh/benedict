@@ -27,30 +27,22 @@
 
 (ert-deftest benedict-vui-context-indicator-mount-empty-shows-no-context ()
   "Mounted context indicator shows no-context summary with empty slices."
-  (with-temp-buffer
-    (let ((buffer-name (buffer-name)))
-      (vui-mount
-       (vui-component 'benedict-vui-context-indicator-test--harness
-                      :slices nil
-                      :on-remove nil)
-       buffer-name)
-      (vui-flush-sync)
-      (let ((text (buffer-string)))
-        (should (string-match-p "CONTEXT" text))
-        (should (string-match-p "No context" text))))))
+  (with-mounted-vui-component
+      (vui-component 'benedict-vui-context-indicator-test--harness
+                     :slices nil
+                     :on-remove nil)
+    (let ((text (buffer-string)))
+      (should (string-match-p "CONTEXT" text))
+      (should (string-match-p "No context" text)))))
 
 (ert-deftest benedict-vui-context-indicator-mount-slices-collapsed-by-default ()
   "Mounted context indicator shows summary and collapsed indicator initially."
-  (with-temp-buffer
-    (let* ((buffer-name (buffer-name))
-           (slices (list (benedict-vui-context-indicator-test--slice 1)
-                         (benedict-vui-context-indicator-test--slice 2 :content "world"))))
-      (vui-mount
-       (vui-component 'benedict-vui-context-indicator-test--harness
-                      :slices slices
-                      :on-remove nil)
-       buffer-name)
-      (vui-flush-sync)
+  (let ((slices (list (benedict-vui-context-indicator-test--slice 1)
+                      (benedict-vui-context-indicator-test--slice 2 :content "world"))))
+    (with-mounted-vui-component
+        (vui-component 'benedict-vui-context-indicator-test--harness
+                       :slices slices
+                       :on-remove nil)
       (let ((text (buffer-string)))
         (should (string-match-p (regexp-quote "▶") text))
         (should (string-match-p "2 slices" text))
@@ -58,15 +50,11 @@
 
 (ert-deftest benedict-vui-context-indicator-mount-toggle-shows-slice-labels ()
   "Clicking toggle reveals slice labels in mounted context indicator."
-  (with-temp-buffer
-    (let* ((buffer-name (buffer-name))
-           (slices (list (benedict-vui-context-indicator-test--slice 1))))
-      (vui-mount
-       (vui-component 'benedict-vui-context-indicator-test--harness
-                      :slices slices
-                      :on-remove nil)
-       buffer-name)
-      (vui-flush-sync)
+  (let ((slices (list (benedict-vui-context-indicator-test--slice 1))))
+    (with-mounted-vui-component
+        (vui-component 'benedict-vui-context-indicator-test--harness
+                       :slices slices
+                       :on-remove nil)
       (should-not (string-match-p "test.el" (buffer-string)))
       (benedict-vui-test--click-button-at (point-min))
       (vui-flush-sync)
@@ -77,16 +65,12 @@
 
 (ert-deftest benedict-vui-context-indicator-mount-remove-calls-on-remove ()
   "Clicking remove invokes callback with slice id."
-  (with-temp-buffer
-    (let* ((buffer-name (buffer-name))
-           (removed-id nil)
-           (slices (list (benedict-vui-context-indicator-test--slice 42))))
-      (vui-mount
-       (vui-component 'benedict-vui-context-indicator-test--harness
-                      :slices slices
-                      :on-remove (lambda (id) (setq removed-id id)))
-       buffer-name)
-      (vui-flush-sync)
+  (let* ((removed-id nil)
+         (slices (list (benedict-vui-context-indicator-test--slice 42))))
+    (with-mounted-vui-component
+        (vui-component 'benedict-vui-context-indicator-test--harness
+                       :slices slices
+                       :on-remove (lambda (id) (setq removed-id id)))
       (benedict-vui-test--click-button-at (point-min))
       (vui-flush-sync)
       (benedict-vui-test--click-button-labeled "×")
@@ -95,21 +79,17 @@
 
 (ert-deftest benedict-vui-context-indicator-mount-shows-handle-kind-and-truncated ()
   "Expanded view includes handle, kind, and truncated marker in slice label."
-  (with-temp-buffer
-    (let* ((buffer-name (buffer-name))
-           (slices (list (benedict-vui-context-indicator-test--slice
-                          9
-                          :kind 'region
-                          :label "snippet"
-                          :content "hello world, this is long"
-                          :handle "foo"
-                          :max-bytes 5))))
-      (vui-mount
-       (vui-component 'benedict-vui-context-indicator-test--harness
-                      :slices slices
-                      :on-remove nil)
-       buffer-name)
-      (vui-flush-sync)
+  (let ((slices (list (benedict-vui-context-indicator-test--slice
+                       9
+                       :kind 'region
+                       :label "snippet"
+                       :content "hello world, this is long"
+                       :handle "foo"
+                       :max-bytes 5))))
+    (with-mounted-vui-component
+        (vui-component 'benedict-vui-context-indicator-test--harness
+                       :slices slices
+                       :on-remove nil)
       (benedict-vui-test--click-button-at (point-min))
       (vui-flush-sync)
       (let ((text (buffer-string)))

@@ -7,6 +7,22 @@
 
 (require 'cl-lib)
 (require 'widget)
+(require 'vui)
+
+(defmacro with-mounted-vui-component (component &rest body)
+  "Mount COMPONENT in a temp buffer, run BODY, then unmount.
+
+Flushes VUI before BODY and after teardown so tests observe settled state."
+  (declare (indent 1) (debug t))
+  `(with-temp-buffer
+     (let ((mount (vui-mount ,component (buffer-name))))
+       (unwind-protect
+           (progn
+             (vui-flush-sync)
+             ,@body)
+         (when (and mount (fboundp 'vui-unmount))
+           (ignore-errors (vui-unmount mount)))
+         (vui-flush-sync)))))
 
 (defun benedict-vui-test--click-button-at (pos)
   "Invoke the button widget at POS."

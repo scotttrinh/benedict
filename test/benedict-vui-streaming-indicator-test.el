@@ -8,6 +8,7 @@
 (require 'ert)
 (require 'cl-lib)
 (require 'vui)
+(require 'test/benedict-vui-test-utils)
 (require 'benedict-vui-streaming-indicator)
 
 (ert-deftest benedict-vui-streaming-indicator-frames-exist ()
@@ -37,34 +38,22 @@
                  (setq run-args args)
                  fake-timer))
               ((symbol-function 'cancel-timer)
-               (lambda (&rest _))))
-      (with-temp-buffer
-        (let ((buffer-name (buffer-name)))
-          (vui-mount
-           (vui-component 'benedict-vui-streaming-indicator :visible t)
-           buffer-name)
-          (vui-flush-sync)
-          (let ((text (buffer-string)))
-            (should (string-match-p (regexp-quote (car benedict-vui-streaming-indicator--frames))
-                                    text)))
-          (should run-args)
-          (vui-mount
-           (vui-component 'benedict-vui-streaming-indicator :visible nil)
-           buffer-name)
-          (vui-flush-sync))))))
+                (lambda (&rest _))))
+      (with-mounted-vui-component
+          (vui-component 'benedict-vui-streaming-indicator :visible t)
+        (let ((text (buffer-string)))
+          (should (string-match-p (regexp-quote (car benedict-vui-streaming-indicator--frames))
+                                  text)))
+        (should run-args)))))
 
 (ert-deftest benedict-vui-streaming-indicator-mount-hidden-renders-no-spinner ()
   "Mounted hidden indicator does not render spinner text."
-  (with-temp-buffer
-    (let ((buffer-name (buffer-name)))
-      (vui-mount
-       (vui-component 'benedict-vui-streaming-indicator :visible nil)
-       buffer-name)
-      (vui-flush-sync)
-      (let ((text (buffer-string)))
-        (should-not (string-match-p
-                     (regexp-quote (car benedict-vui-streaming-indicator--frames))
-                     text))))))
+  (with-mounted-vui-component
+      (vui-component 'benedict-vui-streaming-indicator :visible nil)
+    (let ((text (buffer-string)))
+      (should-not (string-match-p
+                   (regexp-quote (car benedict-vui-streaming-indicator--frames))
+                   text)))))
 
 (provide 'test/benedict-vui-streaming-indicator-test)
 ;;; benedict-vui-streaming-indicator-test.el ends here

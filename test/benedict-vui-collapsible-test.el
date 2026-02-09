@@ -24,24 +24,20 @@
 
 (ert-deftest benedict-vui-collapsible-mount-toggle-indicator-and-content ()
   "Toggle updates fold indicator and content visibility in mounted buffer."
-  (with-temp-buffer
-    (let ((buffer-name (buffer-name)))
-      (vui-mount
-       (vui-component 'benedict-vui-collapsible-test--harness)
-       buffer-name)
-      (vui-flush-sync)
-      (let ((initial (buffer-string)))
-        (should (string-match-p (regexp-quote "▶") initial))
-        (should (string-match-p "Section" initial))
-        (should-not (string-match-p "Details visible" initial)))
-      (save-excursion
-        (goto-char (point-min))
-        (should (search-forward "▶" nil t))
-        (benedict-vui-test--click-button-at (match-beginning 0)))
-      (vui-flush-sync)
-      (let ((expanded (buffer-string)))
-        (should (string-match-p (regexp-quote "▼") expanded))
-        (should (string-match-p "Details visible" expanded))))))
+  (with-mounted-vui-component
+      (vui-component 'benedict-vui-collapsible-test--harness)
+    (let ((initial (buffer-string)))
+      (should (string-match-p (regexp-quote "▶") initial))
+      (should (string-match-p "Section" initial))
+      (should-not (string-match-p "Details visible" initial)))
+    (save-excursion
+      (goto-char (point-min))
+      (should (search-forward "▶" nil t))
+      (benedict-vui-test--click-button-at (match-beginning 0)))
+    (vui-flush-sync)
+    (let ((expanded (buffer-string)))
+      (should (string-match-p (regexp-quote "▼") expanded))
+      (should (string-match-p "Details visible" expanded)))))
 
 (provide 'test/benedict-vui-collapsible-test)
 ;;; benedict-vui-collapsible-test.el ends here

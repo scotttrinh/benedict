@@ -98,30 +98,22 @@
 
 (ert-deftest benedict-vui-compose-field-mount-change-updates-value ()
   "Typing in the mounted field updates the controlled value."
-  (with-temp-buffer
-    (let ((buffer-name (buffer-name)))
-      (vui-mount
-       (vui-component 'benedict-vui-compose-field-test--harness
-                      :history '("first" "second" "third")
-                      :on-submit-callback #'ignore)
-       buffer-name)
-      (vui-flush-sync)
-      (benedict-vui-test--set-first-field "hello from field")
-      (vui-flush-sync)
-      (should (string-match-p "Value: hello from field" (buffer-string))))))
+  (with-mounted-vui-component
+      (vui-component 'benedict-vui-compose-field-test--harness
+                     :history '("first" "second" "third")
+                     :on-submit-callback #'ignore)
+    (benedict-vui-test--set-first-field "hello from field")
+    (vui-flush-sync)
+    (should (string-match-p "Value: hello from field" (buffer-string)))))
 
 (ert-deftest benedict-vui-compose-field-mount-submit-calls-callback ()
   "Submit command calls callback with the current field value."
-  (with-temp-buffer
-    (let ((buffer-name (buffer-name))
-          (submitted nil))
-      (vui-mount
-       (vui-component 'benedict-vui-compose-field-test--harness
-                      :history '("first" "second" "third")
-                      :on-submit-callback (lambda (value)
-                                            (setq submitted value)))
-       buffer-name)
-      (vui-flush-sync)
+  (let ((submitted nil))
+    (with-mounted-vui-component
+        (vui-component 'benedict-vui-compose-field-test--harness
+                       :history '("first" "second" "third")
+                       :on-submit-callback (lambda (value)
+                                             (setq submitted value)))
       (benedict-vui-test--set-first-field "ship it")
       (vui-flush-sync)
       (call-interactively #'benedict-vui-compose-field-submit)

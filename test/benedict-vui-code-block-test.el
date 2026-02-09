@@ -8,6 +8,7 @@
 (require 'ert)
 (require 'cl-lib)
 (require 'vui)
+(require 'test/benedict-vui-test-utils)
 (require 'benedict-vui-code-block)
 
 (defun benedict-vui-code-block-test--face-member-p (face value)
@@ -46,24 +47,15 @@
 
 (ert-deftest benedict-vui-code-block-render-test ()
   "Code block renders content and language label."
-  (with-temp-buffer
-    (let ((buffer-name (buffer-name)))
-      (vui-mount
-       (vui-component 'benedict-vui-code-block
-                      :code "(+ 1 2)"
-                      :language "emacs-lisp"
-                      :message-key "msg-1"
-                      :block-id "block-1")
-       buffer-name)
-      
-      ;; Verify language label
-      (should (string-match-p "EMACS-LISP" (buffer-string)))
-      
-      ;; Verify code content
-      (should (string-match-p (regexp-quote "(+ 1 2)") (buffer-string)))
-      
-       ;; Verify copy button
-       (should (string-match-p "Copy" (buffer-string))))))
+  (with-mounted-vui-component
+      (vui-component 'benedict-vui-code-block
+                     :code "(+ 1 2)"
+                     :language "emacs-lisp"
+                     :message-key "msg-1"
+                     :block-id "block-1")
+    (should (string-match-p "EMACS-LISP" (buffer-string)))
+    (should (string-match-p (regexp-quote "(+ 1 2)") (buffer-string)))
+    (should (string-match-p "Copy" (buffer-string)))))
 
 (ert-deftest benedict-vui-code-block-copy-feedback-clears-with-stubbed-timer ()
   "Copy helper toggles feedback and clears through captured timer callback."
@@ -85,21 +77,17 @@
 
 (ert-deftest benedict-vui-code-block-render-applies-message-properties ()
   "Rendered code carries message and block text properties."
-  (with-temp-buffer
-    (let ((buffer-name (buffer-name)))
-      (vui-mount
-       (vui-component 'benedict-vui-code-block
-                      :code "(+ 1 2)"
-                      :language "emacs-lisp"
-                      :message-key "msg-1"
-                      :block-id "block-1")
-       buffer-name)
-      (vui-flush-sync)
-      (let* ((text (buffer-string))
-             (pos (string-match (regexp-quote "(+ 1 2)") text)))
-        (should pos)
-        (should (equal (get-text-property pos 'benedict-message-key text) "msg-1"))
-        (should (equal (get-text-property pos 'benedict-block-id text) "block-1"))))))
+  (with-mounted-vui-component
+      (vui-component 'benedict-vui-code-block
+                     :code "(+ 1 2)"
+                     :language "emacs-lisp"
+                     :message-key "msg-1"
+                     :block-id "block-1")
+    (let* ((text (buffer-string))
+           (pos (string-match (regexp-quote "(+ 1 2)") text)))
+      (should pos)
+      (should (equal (get-text-property pos 'benedict-message-key text) "msg-1"))
+      (should (equal (get-text-property pos 'benedict-block-id text) "block-1")))))
 
 (provide 'test/benedict-vui-code-block-test)
 ;;; benedict-vui-code-block-test.el ends here

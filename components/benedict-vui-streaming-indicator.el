@@ -23,16 +23,18 @@
 (vui-defcomponent benedict-vui-streaming-indicator (visible)
   :state ((frame-index 0))
   :render
-  (let ((timer-ref (vui-use-ref nil)))
+  (let ((timer-ref (vui-use-ref nil))
+        (tick (vui-use-memo (frame-index)
+                (vui-async-callback ()
+                  (vui-set-state :frame-index
+                    (mod (1+ frame-index)
+                         (length benedict-vui-streaming-indicator--frames)))))))
     (vui-use-effect (visible)
       (when visible
         (setcar timer-ref
                 (run-with-timer benedict-vui-streaming-indicator--interval
                                  benedict-vui-streaming-indicator--interval
-                                 (lambda ()
-                                   (vui-set-state :frame-index
-                                     (mod (1+ frame-index)
-                                          (length benedict-vui-streaming-indicator--frames)))))))
+                                 tick)))
       (lambda ()
         (when (car timer-ref)
           (cancel-timer (car timer-ref))

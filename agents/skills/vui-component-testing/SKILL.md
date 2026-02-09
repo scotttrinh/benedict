@@ -13,7 +13,7 @@ Concise guidance for writing VUI component tests that render into real buffers a
 - You need to simulate user actions like clicking buttons or changing fields.
 
 ## Core pattern
-1) Mount the component into a temp buffer with `vui-mount`.
+1) Mount the component in a managed helper (`with-mounted-vui-component`).
 2) Assert buffer contents and text properties.
 3) For interactions, trigger button actions via widget and flush renders.
 
@@ -22,8 +22,22 @@ Concise guidance for writing VUI component tests that render into real buffers a
 (require 'ert)
 (require 'widget)
 (require 'vui)
+(require 'test/benedict-vui-test-utils)
 (require 'your-component)
 ```
+
+## Helper: mount safely
+Prefer a shared helper that guarantees teardown, even on assertion failures.
+
+```elisp
+(with-mounted-vui-component
+    (vui-component 'your-component :content "Hello")
+  (should (string-match-p "Hello" (buffer-string))))
+```
+
+Why this matters:
+- Prevents leaked mounts and late timer callbacks after the test exits.
+- Keeps `vui-set-state` inside valid component lifecycle.
 
 ## Helper: click a VUI button
 ```elisp
@@ -40,38 +54,29 @@ Concise guidance for writing VUI component tests that render into real buffers a
 ```elisp
 (ert-deftest your-component-render-text ()
   "Renders content into the buffer."
-  (with-temp-buffer
-    (let ((buffer-name (buffer-name)))
-      (vui-mount
-       (vui-component 'your-component :content "Hello")
-       buffer-name)
-      (should (string-match-p "Hello" (buffer-string))))))
+  (with-mounted-vui-component
+      (vui-component 'your-component :content "Hello")
+    (should (string-match-p "Hello" (buffer-string)))))
 ```
 
 ### Verify text properties
 ```elisp
 (ert-deftest your-component-renders-properties ()
   "Applies message metadata as text properties."
-  (with-temp-buffer
-    (let ((buffer-name (buffer-name)))
-      (vui-mount
-       (vui-component 'your-component :message-key "msg-1" :block-id "block-1")
-       buffer-name)
-      (let ((text (buffer-string)))
-        (should (equal (get-text-property 0 'benedict-message-key text) "msg-1"))
-        (should (equal (get-text-property 0 'benedict-block-id text) "block-1"))))))
+  (with-mounted-vui-component
+      (vui-component 'your-component :message-key "msg-1" :block-id "block-1")
+    (let ((text (buffer-string)))
+      (should (equal (get-text-property 0 'benedict-message-key text) "msg-1"))
+      (should (equal (get-text-property 0 'benedict-block-id text) "block-1")))))
 ```
 
 ### Verify badges or labels
 ```elisp
 (ert-deftest your-component-renders-status-label ()
   "Renders the expected status label in the buffer."
-  (with-temp-buffer
-    (let ((buffer-name (buffer-name)))
-      (vui-mount
-       (vui-component 'your-component :status 'running)
-       buffer-name)
-      (should (string-match-p "RUNNING" (buffer-string))))))
+  (with-mounted-vui-component
+      (vui-component 'your-component :status 'running)
+    (should (string-match-p "RUNNING" (buffer-string)))))
 ```
 
 ## Interaction tests (state-driven)
@@ -89,13 +94,12 @@ Create a tiny harness component that owns state and passes it down.
 
 (ert-deftest your-component-toggle-test ()
   "Clicking the toggle reveals hidden content."
-  (with-temp-buffer
-    (let ((buffer-name (buffer-name)))
-      (vui-mount (vui-component 'your-test--harness) buffer-name)
-      (should-not (string-match-p "Details" (buffer-string)))
-      (your-test--click-button-at (point-min))
-      (vui-flush-sync)
-      (should (string-match-p "Details" (buffer-string))))))
+  (with-mounted-vui-component
+      (vui-component 'your-test--harness)
+    (should-not (string-match-p "Details" (buffer-string)))
+    (your-test--click-button-at (point-min))
+    (vui-flush-sync)
+    (should (string-match-p "Details" (buffer-string)))))
 ```
 
 ### Button click updates state
@@ -109,13 +113,12 @@ Create a tiny harness component that owns state and passes it down.
 
 (ert-deftest your-component-counter-click-test ()
   "Clicking increments the counter."
-  (with-temp-buffer
-    (let ((buffer-name (buffer-name)))
-      (vui-mount (vui-component 'your-test--counter) buffer-name)
-      (should (string-match-p "Count: 0" (buffer-string)))
-      (your-test--click-button-at (point-min))
-      (vui-flush-sync)
-      (should (string-match-p "Count: 1" (buffer-string))))))
+  (with-mounted-vui-component
+      (vui-component 'your-test--counter)
+    (should (string-match-p "Count: 0" (buffer-string)))
+    (your-test--click-button-at (point-min))
+    (vui-flush-sync)
+    (should (string-match-p "Count: 1" (buffer-string)))))
 ```
 
 ### Field change flow
@@ -129,15 +132,19 @@ Create a tiny harness component that owns state and passes it down.
 
 (ert-deftest your-component-field-change-test ()
   "Typing updates state and renders the new value."
-  (with-temp-buffer
-    (let ((buffer-name (buffer-name)))
-      (vui-mount (vui-component 'your-test--field) buffer-name)
-      (let ((widget (car widget-field-list)))
-        (widget-value-set widget "changed")
-        (widget-apply widget :notify widget))
-      (vui-flush-sync)
-      (should (string-match-p "changed" (buffer-string))))))
+  (with-mounted-vui-component
+      (vui-component 'your-test--field)
+    (let ((widget (car widget-field-list)))
+      (widget-value-set widget "changed")
+      (widget-apply widget :notify widget))
+    (vui-flush-sync)
+    (should (string-match-p "changed" (buffer-string)))))
 ```
+
+## Async safety (timers/process callbacks)
+- Never call `vui-set-state` from raw timers or process callbacks.
+- In components, wrap async handlers with `vui-async-callback` (preferred) or `vui-with-async-context`.
+- In tests, stub `run-at-time`/`run-with-timer` unless the timer behavior itself is under test.
 
 ## Rendering delay notes
 - VUI defers re-rendering by default (`vui-render-delay`), so after clicks or field updates call `vui-flush-sync` before assertions.

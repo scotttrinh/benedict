@@ -57,109 +57,85 @@
 
 (ert-deftest benedict-vui-tool-result-block-mount-prefers-ui-body-and-header ()
   "Mount renders UI header/body hints when provided."
-  (with-temp-buffer
-    (let ((buffer-name (buffer-name)))
-      (vui-mount
-       (vui-component 'benedict-vui-tool-result-block
-                      :collapsed nil
-                      :result '(:content "Fallback"
-                                :ui (:header "Read file — foo.txt"
-                                             :body "From UI")))
-       buffer-name)
-      (vui-flush-sync)
-      (let ((text (buffer-string)))
-        (should (string-match-p "Read file — foo.txt" text))
-        (should (string-match-p "From UI" text))))))
+  (with-mounted-vui-component
+      (vui-component 'benedict-vui-tool-result-block
+                     :collapsed nil
+                     :result '(:content "Fallback"
+                               :ui (:header "Read file — foo.txt"
+                                            :body "From UI")))
+    (let ((text (buffer-string)))
+      (should (string-match-p "Read file — foo.txt" text))
+      (should (string-match-p "From UI" text)))))
 
 (ert-deftest benedict-vui-tool-result-block-mount-falls-back-to-content ()
   "Mount renders :content when no UI body is provided."
-  (with-temp-buffer
-    (let ((buffer-name (buffer-name)))
-      (vui-mount
-       (vui-component 'benedict-vui-tool-result-block
-                      :collapsed nil
-                      :result '(:content "Fallback content"))
-       buffer-name)
-      (vui-flush-sync)
-      (should (string-match-p "Fallback content" (buffer-string))))))
+  (with-mounted-vui-component
+      (vui-component 'benedict-vui-tool-result-block
+                     :collapsed nil
+                     :result '(:content "Fallback content"))
+    (should (string-match-p "Fallback content" (buffer-string)))))
 
 (ert-deftest benedict-vui-tool-result-block-mount-applies-message-properties ()
   "Mount applies message and block ids to body text."
-  (with-temp-buffer
-    (let ((buffer-name (buffer-name)))
-      (vui-mount
-       (vui-component 'benedict-vui-tool-result-block
-                      :collapsed nil
-                      :message-key "msg-1"
-                      :block-id "block-1"
-                      :result '(:content "Payload"))
-       buffer-name)
-      (vui-flush-sync)
-      (let* ((text (buffer-string))
-             (pos (string-match "Payload" text)))
-        (should pos)
-        (should (equal (get-text-property pos 'benedict-message-key text) "msg-1"))
-        (should (equal (get-text-property pos 'benedict-block-id text) "block-1"))))))
+  (with-mounted-vui-component
+      (vui-component 'benedict-vui-tool-result-block
+                     :collapsed nil
+                     :message-key "msg-1"
+                     :block-id "block-1"
+                     :result '(:content "Payload"))
+    (let* ((text (buffer-string))
+           (pos (string-match "Payload" text)))
+      (should pos)
+      (should (equal (get-text-property pos 'benedict-message-key text) "msg-1"))
+      (should (equal (get-text-property pos 'benedict-block-id text) "block-1")))))
 
 (ert-deftest benedict-vui-tool-result-block-mount-error-styles-body ()
   "Mount applies error face for failure status."
-  (with-temp-buffer
-    (let ((buffer-name (buffer-name)))
-      (vui-mount
-       (vui-component 'benedict-vui-tool-result-block
-                      :collapsed nil
-                      :status 'failure
-                      :result '(:content "Oops"))
-       buffer-name)
-      (vui-flush-sync)
-      (let* ((text (buffer-string))
-             (pos (string-match "Oops" text)))
-        (should pos)
-        (should (eq (get-text-property pos 'face text) 'benedict-chat-tool-error))))))
+  (with-mounted-vui-component
+      (vui-component 'benedict-vui-tool-result-block
+                     :collapsed nil
+                     :status 'failure
+                     :result '(:content "Oops"))
+    (let* ((text (buffer-string))
+           (pos (string-match "Oops" text)))
+      (should pos)
+      (should (eq (get-text-property pos 'face text) 'benedict-chat-tool-error)))))
 
 (ert-deftest benedict-vui-tool-result-block-mount-truncation-toggle ()
   "Mount shows truncation and toggles full body."
   (let ((long-text (concat (make-string 500 ?a) "TAIL")))
-    (with-temp-buffer
-      (let ((buffer-name (buffer-name)))
-        (vui-mount
-         (vui-component 'benedict-vui-tool-result-block
-                        :collapsed nil
-                        :result (list :content long-text))
-         buffer-name)
-        (vui-flush-sync)
-        (let ((text (buffer-string)))
-          (should (string-match-p "... \\[truncated\\]" text))
-          (should (string-match-p "Show more" text))
-          (should-not (string-match-p "TAIL" text)))
-        (benedict-vui-test--click-button-labeled "Show more")
-        (vui-flush-sync)
-        (let ((text (buffer-string)))
-          (should (string-match-p "Show less" text))
-          (should (string-match-p "TAIL" text))
-          (should-not (string-match-p "... \\[truncated\\]" text)))
-        (benedict-vui-test--click-button-labeled "Show less")
-        (vui-flush-sync)
-        (let ((text (buffer-string)))
-          (should (string-match-p "Show more" text))
-          (should (string-match-p "... \\[truncated\\]" text)))))))
+    (with-mounted-vui-component
+        (vui-component 'benedict-vui-tool-result-block
+                       :collapsed nil
+                       :result (list :content long-text))
+      (let ((text (buffer-string)))
+        (should (string-match-p "... \\[truncated\\]" text))
+        (should (string-match-p "Show more" text))
+        (should-not (string-match-p "TAIL" text)))
+      (benedict-vui-test--click-button-labeled "Show more")
+      (vui-flush-sync)
+      (let ((text (buffer-string)))
+        (should (string-match-p "Show less" text))
+        (should (string-match-p "TAIL" text))
+        (should-not (string-match-p "... \\[truncated\\]" text)))
+      (benedict-vui-test--click-button-labeled "Show less")
+      (vui-flush-sync)
+      (let ((text (buffer-string)))
+        (should (string-match-p "Show more" text))
+        (should (string-match-p "... \\[truncated\\]" text))))))
 
 (ert-deftest benedict-vui-tool-result-block-mount-actions-click ()
   "Mount renders actions and invokes handlers on click."
   (let ((clicked nil))
-    (with-temp-buffer
-      (let ((buffer-name (buffer-name)))
-        (vui-mount
-         (vui-component 'benedict-vui-tool-result-block
-                        :collapsed nil
-                        :actions (list (list :label "Open" :handler (lambda () (setq clicked t))))
-                        :result '(:content "Done"))
-         buffer-name)
-        (vui-flush-sync)
-        (should (string-match-p "Open" (buffer-string)))
-        (benedict-vui-test--click-button-labeled "Open")
-        (vui-flush-sync)
-        (should clicked)))))
+    (with-mounted-vui-component
+        (vui-component 'benedict-vui-tool-result-block
+                       :collapsed nil
+                       :actions (list (list :label "Open" :handler (lambda () (setq clicked t))))
+                       :result '(:content "Done"))
+      (should (string-match-p "Open" (buffer-string)))
+      (benedict-vui-test--click-button-labeled "Open")
+      (vui-flush-sync)
+      (should clicked))))
 
 (provide 'test/benedict-vui-tool-result-block-test)
 ;;; benedict-vui-tool-result-block-test.el ends here

@@ -6,6 +6,7 @@
 ;;; Code:
 
 (require 'ert)
+(require 'test/benedict-vui-test-utils)
 (require 'benedict-vui-badge)
 
 (defun benedict-vui-badge-test--face-member-p (face value)
@@ -48,19 +49,14 @@
 
 (ert-deftest benedict-vui-badge-render-test ()
   "Badge renders directly to buffer."
-  (with-temp-buffer
-    (let ((buffer-name (buffer-name)))
-      (vui-mount
-       (vui-component 'benedict-vui-badge :status 'user :theme nil)
-       buffer-name)
-      ;; Verify content
-      (should (string-match-p "USER" (buffer-string)))
-      ;; Verify face property is preserved in buffer
-      (goto-char (point-min))
-      (let* ((text (buffer-string))
-             (face (get-text-property 0 'face text)))
-        (should (benedict-vui-badge-test--face-member-p
-                 'benedict-chat-user face))))))
+  (with-mounted-vui-component
+      (vui-component 'benedict-vui-badge :status 'user :theme nil)
+    (should (string-match-p "USER" (buffer-string)))
+    (goto-char (point-min))
+    (let* ((text (buffer-string))
+           (face (get-text-property 0 'face text)))
+      (should (benedict-vui-badge-test--face-member-p
+               'benedict-chat-user face)))))
 
 (provide 'test/benedict-vui-badge-test)
 ;;; benedict-vui-badge-test.el ends here

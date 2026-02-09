@@ -109,15 +109,17 @@ Returns the timer created to clear feedback."
          (fontified (vui-use-memo (normalized-code normalized-language)
                       (benedict-vui-code-block--fontify normalized-code normalized-language)))
          (copy-label (if copied-feedback "Copied!" "Copy"))
+         (set-feedback (vui-use-memo ()
+                         (vui-async-callback (val)
+                           (vui-set-state :copied-feedback val))))
          (copy-handler (vui-use-callback (normalized-code)
-                         (lambda (&rest _)
-                           (when (car timer-ref)
-                             (cancel-timer (car timer-ref))
-                             (setcar timer-ref nil))
-                           (setcar timer-ref
-                                   (benedict-vui-code-block--copy normalized-code
-                                                                  (lambda (val)
-                                                                    (vui-set-state :copied-feedback val))))))))
+                          (lambda (&rest _)
+                            (when (car timer-ref)
+                              (cancel-timer (car timer-ref))
+                              (setcar timer-ref nil))
+                            (setcar timer-ref
+                                    (benedict-vui-code-block--copy normalized-code
+                                                                   set-feedback))))))
     (vui-use-effect ()
       (lambda ()
         (when (car timer-ref)

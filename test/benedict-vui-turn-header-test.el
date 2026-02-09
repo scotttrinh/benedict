@@ -7,6 +7,7 @@
 
 (require 'cl-lib)
 (require 'ert)
+(require 'test/benedict-vui-test-utils)
 (require 'benedict-vui-turn-header)
 
 (ert-deftest benedict-vui-turn-header-uses-role-badge ()
@@ -28,23 +29,14 @@
 
 (ert-deftest benedict-vui-turn-header-render-test ()
   "Turn header renders role badge and timestamp."
-  (with-temp-buffer
-    (let ((buffer-name (buffer-name))
-          (ts (encode-time 0 0 12 1 1 2025))) ;; 12:00:00
-      (vui-mount
-       (vui-component 'benedict-vui-turn-header
-                      :role 'user
-                      :timestamp ts
-                      :metadata nil)
-       buffer-name)
-      
-      ;; Verify role badge (handled by nested component, but output should be visible)
+  (let ((ts (encode-time 0 0 12 1 1 2025)))
+    (with-mounted-vui-component
+        (vui-component 'benedict-vui-turn-header
+                       :role 'user
+                       :timestamp ts
+                       :metadata nil)
       (should (string-match-p "USER" (buffer-string)))
-      
-      ;; Verify timestamp
       (should (string-match-p "12:00:00" (buffer-string)))
-      
-      ;; Verify separator
       (should (string-match-p "·" (buffer-string))))))
 
 (provide 'test/benedict-vui-turn-header-test)
