@@ -6,6 +6,7 @@
 ;;; Code:
 
 (require 'ert)
+(require 'cl-lib)
 (require 'vui)
 (require 'benedict-session)
 (require 'test/benedict-vui-test-utils)
@@ -128,6 +129,74 @@
      :success nil
      :error '(:message "Network timeout"))
     (should (string-match-p "Network timeout" (buffer-string)))))
+
+(ert-deftest benedict-vui-root-submit-clears-input-and-appends-history ()
+  "Successful submit clears compose input and appends prompt history."
+  (let (updates)
+    (cl-letf (((symbol-function 'vui-set-state)
+               (lambda (key value)
+                 (push (cons key value) updates))))
+      (should (benedict-vui-root--submit "prompt"
+                                         (lambda (_) t)
+                                         nil)))
+    (let ((history-update (alist-get :history updates))
+          (input-update (alist-get :input-text updates))
+          (slices-update (alist-get :slices updates)))
+      (should (functionp history-update))
+      (should (equal (funcall history-update '("older"))
+                     '("older" "prompt")))
+      (should (equal input-update ""))
+      (should (null slices-update)))))
+
+(ert-deftest benedict-vui-root-submit-retain-context-nil-clears-slices ()
+  "Successful submit clears slices when `retain-context' is nil."
+  (let (updates)
+    (cl-letf (((symbol-function 'vui-set-state)
+               (lambda (key value)
+                 (push (cons key value) updates))))
+      (should (benedict-vui-root--submit "prompt"
+                                         (lambda (_) t)
+                                         nil)))
+    (should (assq :slices updates))))
+
+(ert-deftest benedict-vui-root-submit-retain-context-t-keeps-slices ()
+  "Successful submit keeps slices when `retain-context' is non-nil."
+  (let (updates)
+    (cl-letf (((symbol-function 'vui-set-state)
+               (lambda (key value)
+                 (push (cons key value) updates))))
+      (should (benedict-vui-root--submit "prompt"
+                                         (lambda (_) t)
+                                         t)))
+    (should-not (assq :slices updates))))
+
+(ert-deftest benedict-vui-root-toggle-collapsed-block-list-representation ()
+  "Toggling collapsed blocks behaves correctly for list state."
+  (let ((collapsed nil))
+    (setq collapsed (benedict-vui-root--toggle-collapsed-block collapsed "block-a"))
+    (should (equal collapsed '("block-a")))
+    (setq collapsed (benedict-vui-root--toggle-collapsed-block collapsed "block-b"))
+    (should (equal collapsed '("block-b" "block-a")))
+    (setq collapsed (benedict-vui-root--toggle-collapsed-block collapsed "block-a"))
+    (should (equal collapsed '("block-b")))
+    (setq collapsed (benedict-vui-root--toggle-collapsed-block collapsed "block-b" t))
+    (should (equal collapsed '("block-b")))
+    (should (equal (benedict-vui-root--toggle-collapsed-block collapsed nil)
+                   collapsed))))
+
+(ert-deftest benedict-vui-root-toggle-collapsed-block-hash-table-representation ()
+  "Toggling collapsed blocks behaves correctly for hash-table state."
+  (let ((collapsed (make-hash-table :test #'equal)))
+    (setq collapsed (benedict-vui-root--toggle-collapsed-block collapsed "block-a"))
+    (should (gethash "block-a" collapsed))
+    (setq collapsed (benedict-vui-root--toggle-collapsed-block collapsed "block-b"))
+    (should (gethash "block-b" collapsed))
+    (setq collapsed (benedict-vui-root--toggle-collapsed-block collapsed "block-a"))
+    (should-not (gethash "block-a" collapsed))
+    (setq collapsed (benedict-vui-root--toggle-collapsed-block collapsed "block-b" t))
+    (should (gethash "block-b" collapsed))
+    (let ((same collapsed))
+      (should (eq (benedict-vui-root--toggle-collapsed-block same nil) same)))))
 
 (provide 'test/benedict-vui-root-test)
 ;;; benedict-vui-root-test.el ends here

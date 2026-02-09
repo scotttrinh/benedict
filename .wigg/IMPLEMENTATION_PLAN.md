@@ -40,7 +40,7 @@ Replace broad mount-smoke confidence with behavior-driven coverage that proves t
   - `request-completed` success updates provider/model/usage and clears error,
   - `request-completed` failure renders error,
   - `state-changed` error/idle transitions clear or set error messaging correctly.
-- [ ] Add tests for root local behavior:
+- [x] Add tests for root local behavior:
   - submit clears input and appends history,
   - retain-context true/false behavior for slices,
   - collapsed block toggling for list and hash-table representations.
