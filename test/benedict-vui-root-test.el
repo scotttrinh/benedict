@@ -7,6 +7,7 @@
 
 (require 'ert)
 (require 'vui)
+(require 'benedict-session)
 (require 'test/benedict-vui-test-utils)
 (require 'benedict-vui-root)
 
@@ -26,6 +27,25 @@
       (should (string-match-p "Chat" text))
       (should (string-match-p "No context" text))
       (should widget-field-list))))
+
+(ert-deftest benedict-vui-root-session-events-update-conversation ()
+  "Mounted root reacts to session message events."
+  (let ((session (benedict-session-create :title "test")))
+    (with-mounted-vui-component
+        (vui-component 'benedict-vui-root
+                       :session session
+                       :initial-slices nil
+                       :initial-input nil
+                       :retain-context nil
+                       :register-actions nil
+                       :on-slices-change nil
+                       :on-provider-click nil
+                       :on-submit #'ignore)
+      (should-not (string-match-p "Hello from session" (buffer-string)))
+      (benedict-session-add-message session
+                                    '(:role user :content "Hello from session"))
+      (vui-flush-sync)
+      (should (string-match-p "Hello from session" (buffer-string))))))
 
 (provide 'test/benedict-vui-root-test)
 ;;; benedict-vui-root-test.el ends here
