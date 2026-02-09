@@ -61,5 +61,80 @@
       (vui-flush-sync)
       (should (equal toggle-args '("thinking-1" nil))))))
 
+(ert-deftest benedict-vui-content-block-list-empty-blocks-render-empty-output ()
+  "Empty block lists render no visible text."
+  (with-mounted-vui-component
+      (vui-component 'benedict-vui-content-block-list
+                     :blocks nil
+                     :message-key "msg-empty")
+    (should (string-empty-p (buffer-string)))))
+
+(ert-deftest benedict-vui-content-block-list-unknown-type-falls-back-to-text-block ()
+  "Unknown block types render via text-block fallback with navigation properties."
+  (with-mounted-vui-component
+      (vui-component 'benedict-vui-content-block-list
+                     :blocks (list (list :id "unknown-1"
+                                         :type 'mystery
+                                         :body "Fallback body"))
+                     :message-key "msg-fallback")
+    (should (string-match-p "Fallback body" (buffer-string)))
+    (benedict-vui-test--assert-text-properties-for
+     "Fallback body"
+     :region-kind 'body
+     :message-key "msg-fallback"
+     :block-id "unknown-1")))
+
+(ert-deftest benedict-vui-content-block-list-toggle-propagates-through-tool-use-block ()
+  "Tool-use collapse toggles propagate as (block-id next) callback arguments."
+  (let (toggle-args)
+    (with-mounted-vui-component
+        (vui-component 'benedict-vui-content-block-list
+                       :blocks (list
+                                (list :id "tool-use-1"
+                                      :type 'tool-use
+                                      :tool-call '(:name "bash" :arguments "echo hi")))
+                       :collapsed-blocks nil
+                       :on-toggle-block (lambda (block-id next)
+                                          (setq toggle-args (list block-id next))))
+      (should (string-match-p "▼" (buffer-string)))
+      (benedict-vui-test--click-button-at (point-min))
+      (vui-flush-sync)
+      (should (equal toggle-args '("tool-use-1" t))))))
+
+(ert-deftest benedict-vui-content-block-list-propagates-message-and-block-properties ()
+  "Rendered block bodies carry message/block navigation properties by block type."
+  (with-mounted-vui-component
+      (vui-component 'benedict-vui-content-block-list
+                     :blocks (list
+                              (list :id "text-1" :type 'text :content "Text body")
+                              (list :id "code-1" :type 'code :code "(+ 1 2)" :language "elisp")
+                              (list :id "thinking-1" :type 'thinking :thinking-data "Thinking body")
+                              (list :id "tool-use-1" :type 'tool-use
+                                    :tool-call '(:name "bash" :arguments "echo hi"))
+                              (list :id "tool-result-1" :type 'tool-result
+                                    :result '(:name "bash" :content "Result body")))
+                     :collapsed-blocks nil
+                     :message-key "msg-props")
+    (benedict-vui-test--assert-text-properties-for
+     "Text body"
+     :region-kind 'body
+     :message-key "msg-props"
+     :block-id "text-1")
+    (benedict-vui-test--assert-text-properties-for
+     "(+ 1 2)"
+     :region-kind 'body
+     :message-key "msg-props"
+     :block-id "code-1")
+    (benedict-vui-test--assert-text-properties-for
+     "Arguments:"
+     :region-kind 'tool-ui
+     :message-key "msg-props"
+     :block-id "tool-use-1")
+    (benedict-vui-test--assert-text-properties-for
+     "Result body"
+     :region-kind 'tool-ui
+     :message-key "msg-props"
+     :block-id "tool-result-1")))
+
 (provide 'test/benedict-vui-content-block-list-test)
 ;;; benedict-vui-content-block-list-test.el ends here

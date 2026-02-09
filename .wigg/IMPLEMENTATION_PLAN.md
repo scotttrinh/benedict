@@ -76,7 +76,7 @@ Replace broad mount-smoke confidence with behavior-driven coverage that proves t
 
 ### Phase 3 - Composition Layer Hardening
 
-- [ ] `test/benedict-vui-content-block-list-test.el`:
+- [x] `test/benedict-vui-content-block-list-test.el`:
   - mixed block types in one message,
   - unknown block fallback behavior,
   - empty block list behavior,
