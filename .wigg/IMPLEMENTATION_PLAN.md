@@ -82,7 +82,7 @@ Replace broad mount-smoke confidence with behavior-driven coverage that proves t
   - empty block list behavior,
   - `:on-toggle-block` callback arguments and propagation,
   - block/message property propagation.
-- [ ] `test/benedict-vui-turn-test.el`:
+- [x] `test/benedict-vui-turn-test.el`:
   - role-specific rendering and faces,
   - assistant/tool message composition,
   - metadata/error styling,
