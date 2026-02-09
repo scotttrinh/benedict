@@ -62,6 +62,7 @@
                     :chunks '("Reactive " "stream")
                     :content "Reactive stream"))))
     (let ((chat-buffer nil)
+          (compose-buffer nil)
           (target-session nil)
           (seen-events nil)
           (event-handler nil))
@@ -70,6 +71,7 @@
         (setq chat-buffer (get-buffer benedict-chat-buffer-name)))
       (should (buffer-live-p chat-buffer))
       (with-current-buffer chat-buffer
+        (should benedict-chat--vui-mount)
         (setq target-session benedict-chat--session)
         (setq event-handler
               (lambda (session event-type _payload)
@@ -77,7 +79,14 @@
                   (push event-type seen-events)
                   (message "Reactive regression saw event: %s" event-type))))
         (add-hook 'benedict-session-event-hook event-handler)
-        (benedict-chat-send-prompt "prove reactivity")
+        (benedict-chat-compose-open)
+        (setq compose-buffer (with-current-buffer chat-buffer
+                               benedict-chat--compose-buffer))
+        (should (buffer-live-p compose-buffer))
+        (with-current-buffer compose-buffer
+          (goto-char (point-max))
+          (insert "prove reactivity")
+          (benedict-chat-compose-send))
         (should
          (benedict-vui-test--wait-until
           (lambda ()
