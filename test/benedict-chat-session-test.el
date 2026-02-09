@@ -8,6 +8,7 @@
 (require 'ert)
 (require 'ert-async)
 (require 'propcheck)
+(require 'vui)
 
 (let* ((root (file-name-directory (or load-file-name buffer-file-name)))
        (repo (expand-file-name ".." root)))
@@ -17,6 +18,7 @@
 (require 'benedict-session)
 (require 'benedict-provider-fake)
 (require 'benedict-test-helpers)
+(require 'test/benedict-vui-test-utils)
 
 ;;; Buffer-Session Binding Tests
 
@@ -422,7 +424,187 @@
         (should (string= "Connection lost"
                          (plist-get (benedict-session-last-error session) :message)))
         ;; Draft should be cleared
-        (should-not (benedict-session-draft session))))))
+         (should-not (benedict-session-draft session))))))
+
+;;; Phase 5 - Chat/Session UI Guardrails
+
+(ert-deftest-async benedict-chat-session-test-ui-attach-during-active-stream (done)
+  "Mounted chat buffer stays reactive when attached during active streaming."
+  (benedict-test-with-bindings done
+      ((benedict-session--registry (make-hash-table :test 'equal))
+       (benedict-provider 'fake)
+       (benedict-provider-fake-latency-seconds 0.01)
+       (benedict-provider-fake-streaming-chunk-delay 0.06)
+       (benedict-provider-fake-script
+        (list (list :type 'success
+                    :chunks '("Part1 " "Part2 " "Part3")
+                    :content "Part1 Part2 Part3"))))
+    (let ((session nil))
+      (with-temp-buffer
+        (benedict-chat-mode)
+        (benedict-chat--init-buffer)
+        (setq session benedict-chat--session)
+        (benedict-chat--send-text "attach stream"))
+      (let ((buf (benedict-chat--buffer-for-session session)))
+        (with-current-buffer buf
+          (should
+           (benedict-vui-test--wait-until
+            (lambda ()
+              (vui-flush-sync)
+              (let ((text (buffer-string)))
+                (and (string-match-p "attach stream" text)
+                     (string-match-p "Part1" text)
+                     (string-match-p "\\bACTIVE\\b" text)
+                     (not (string-match-p "Part3" text)))))
+            :timeout 2.0))
+          (should (benedict-vui-test--wait-for-request-finished session 2.0))
+          (vui-flush-sync)
+          (let* ((text (buffer-string))
+                 (messages (benedict-session-messages-chronological session))
+                 (assistant-msg (nth 1 messages)))
+            (should (string-match-p "Part1 Part2 Part3" text))
+            (should-not (string-match-p "\\bACTIVE\\b" text))
+            (should (eq (plist-get assistant-msg :role) 'assistant))
+            (benedict-vui-test--assert-text-properties-for
+             "Part1 Part2 Part3"
+             :message-key (plist-get assistant-msg :id)
+             :region-kind 'body)))
+        (kill-buffer buf)
+        (funcall done)))))
+
+(ert-deftest-async benedict-chat-session-test-ui-headless-continue-then-reattach (done)
+  "Headless continuation renders correctly when reattaching a mounted buffer."
+  (benedict-test-with-bindings done
+      ((benedict-session--registry (make-hash-table :test 'equal))
+       (benedict-provider 'fake)
+       (benedict-provider-fake-script
+        (list (list :type 'success
+                    :content "headless complete"
+                    :tool-calls (list (list :id "call-headless"
+                                            :name 'read_file
+                                            :arguments '(:path "README.md")))
+                    :delay 0.05))))
+    (let ((session nil))
+      (with-temp-buffer
+        (benedict-chat-mode)
+        (benedict-chat--init-buffer)
+        (setq benedict-session-tool-invoke-fn
+              (lambda (_tool-id _arguments)
+                "headless tool output"))
+        (setq session benedict-chat--session)
+        (benedict-chat--send-text "keep running"))
+      (should (benedict-vui-test--wait-for-request-finished session 2.0))
+      (let ((buf (benedict-chat--buffer-for-session session)))
+        (with-current-buffer buf
+          (vui-flush-sync)
+          (let ((text (buffer-string)))
+            (should (string-match-p "keep running" text))
+            (should (string-match-p "headless complete" text))
+            (should (string-match-p "Tool: read_file" text))
+            (should (string-match-p "Result: read_file" text))
+            (should (string-match-p "headless tool output" text))
+            (should-not (string-match-p "\\bACTIVE\\b" text))))
+        (kill-buffer buf)
+        (funcall done)))))
+
+(ert-deftest-async benedict-chat-session-test-ui-tool-call-and-result-visible (done)
+  "Mounted chat buffer renders tool use and tool result blocks."
+  (benedict-test-with-bindings done
+      ((benedict-session--registry (make-hash-table :test 'equal))
+       (benedict-provider 'fake)
+       (benedict-provider-fake-script
+        (list (list :type 'success
+                    :content "Tool response"
+                    :tool-calls (list (list :id "call-1"
+                                            :name 'bash
+                                            :arguments '(:command "echo hi")))))))
+    (let ((buf (generate-new-buffer "*benedict-chat-tools-ui*")))
+      (with-current-buffer buf
+        (benedict-chat-mode)
+        (benedict-chat--init-buffer)
+        (setq benedict-session-tool-invoke-fn
+              (lambda (_tool-id _arguments)
+                "tool output"))
+        (let ((session benedict-chat--session))
+          (benedict-chat--send-text "run tool")
+          (should
+           (benedict-vui-test--wait-until
+            (lambda ()
+              (vui-flush-sync)
+              (string-match-p "Tool: bash" (buffer-string)))
+            :timeout 2.0))
+          (should (benedict-vui-test--wait-for-request-finished session 2.0))
+          (vui-flush-sync)
+          (let ((text (buffer-string)))
+            (should (string-match-p "Tool: bash" text))
+            (should (string-match-p "RUNNING" text))
+            (should (string-match-p "Result: bash" text))
+            (should (string-match-p "SUCCESS" text))
+            (should (string-match-p "tool output" text))))
+        (kill-buffer buf)
+        (funcall done)))))
+
+(ert-deftest-async benedict-chat-session-test-ui-request-failure-then-recovery (done)
+  "Mounted chat buffer surfaces request failure and clears it after recovery."
+  (benedict-test-with-bindings done
+      ((benedict-session--registry (make-hash-table :test 'equal))
+       (benedict-provider 'fake)
+       (benedict-provider-fake-script
+        (list (list :type 'error :message "Rate limited")
+              (list :type 'success :content "Recovered answer" :delay 0.01))))
+    (let ((buf (generate-new-buffer "*benedict-chat-recovery-ui*")))
+      (with-current-buffer buf
+        (benedict-chat-mode)
+        (benedict-chat--init-buffer)
+        (let ((session benedict-chat--session))
+          (benedict-chat--send-text "please fail")
+          (should (benedict-vui-test--wait-for-request-finished session 2.0))
+          (vui-flush-sync)
+          (let ((text (buffer-string)))
+            (should (eq (benedict-session-state session) 'error))
+            (should (string-match-p "Rate limited" text)))
+          (benedict-chat--send-text "recover now")
+          (should (benedict-vui-test--wait-for-request-finished session 2.0))
+          (vui-flush-sync)
+          (let ((text (buffer-string)))
+            (should (eq (benedict-session-state session) 'idle))
+            (should (string-match-p "Recovered answer" text))
+            (should-not (string-match-p "Rate limited" text)))))
+      (kill-buffer buf)
+      (funcall done))))
+
+(ert-deftest-async benedict-chat-session-test-ui-post-request-metadata-mutation-visible (done)
+  "Post-finalization metadata updates remain visible in mounted chat UI."
+  (benedict-test-with-bindings done
+      ((benedict-session--registry (make-hash-table :test 'equal))
+       (benedict-provider 'fake)
+       (benedict-provider-fake-script
+        (list (list :type 'success
+                    :content "metadata done"
+                    :model "anthropic/claude-fake"
+                    :usage '(:total 123 :cost 0.0042)
+                    :delay 0.01))))
+    (let ((buf (generate-new-buffer "*benedict-chat-metadata-ui*")))
+      (with-current-buffer buf
+        (benedict-chat-mode)
+        (benedict-chat--init-buffer)
+        (let ((session benedict-chat--session))
+          (benedict-chat--send-text "metadata please")
+          (should (benedict-vui-test--wait-for-request-finished session 2.0))
+          (vui-flush-sync)
+          (let* ((text (buffer-string))
+                 (assistant-msg (cl-find-if (lambda (message)
+                                              (eq (plist-get message :role) 'assistant))
+                                            (benedict-session-messages session)))
+                 (metadata (and assistant-msg (plist-get assistant-msg :metadata))))
+            (should assistant-msg)
+            (should (equal "anthropic/claude-fake" (plist-get metadata :model)))
+            (should (plist-get metadata :usage))
+            (should (string-match-p "claude-fake" text))
+            (should (string-match-p "123 tokens" text))
+            (should (string-match-p "\\$0.0042" text)))))
+      (kill-buffer buf)
+      (funcall done))))
 
 (provide 'benedict-chat-session-test)
 ;;; benedict-chat-session-test.el ends here

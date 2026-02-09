@@ -111,14 +111,14 @@ Replace broad mount-smoke confidence with behavior-driven coverage that proves t
     - [x] `test/benedict-vui-turn-header-test.el` and `test/benedict-vui-badge-test.el`: metadata/status fallback and face mapping edge cases.
     - [x] `test/benedict-vui-collapsible-test.el`: nil callback safety and function-valued header/content behavior.
 
-### Phase 5 - Chat/Session Integration Guardrails for VUI
+### Task 5 - Chat/Session Integration Guardrails for VUI
 
-- [ ] Extend `test/benedict-chat-session-test.el` and/or `test/benedict-chat-integration-test.el` with UI-facing assertions that mounted chat buffers reflect live session changes during:
+- [x] Extend `test/benedict-chat-session-test.el` and/or `test/benedict-chat-integration-test.el` with UI-facing assertions that mounted chat buffers reflect live session changes during:
   - attach during active stream,
   - headless continuation then reattach,
   - tool-call execution and result insertion,
   - request failure and recovery on next submit.
-- [ ] Add regression test for post-request metadata mutation path so UI updates remain observable after assistant message finalization.
+- [x] Add regression test for post-request metadata mutation path so UI updates remain observable after assistant message finalization.
 
 ## Test Execution Gates
 
