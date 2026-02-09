@@ -27,7 +27,7 @@ Replace broad mount-smoke confidence with behavior-driven coverage that proves t
   - driving submit/input consistently,
   - waiting/flush patterns for fake streaming steps,
   - asserting common text properties (`benedict-message-key`, `benedict-block-id`, `benedict-region-kind`).
-- [ ] Add helper coverage tests only where behavior cannot be naturally exercised downstream.
+- [x] Add helper coverage tests only where behavior cannot be naturally exercised downstream.
 
 ### Phase 1 - Root Session Event Contract Tests
 
