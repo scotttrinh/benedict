@@ -12,6 +12,12 @@ Replace broad mount-smoke confidence with behavior-driven coverage that proves t
 - Keep async deterministic (fake provider scripts, explicit `vui-flush-sync`, timer stubs where needed).
 - Validate both steady-state rendering and state transitions (start/update/finalize/error/cancel).
 
+## Known Reality Check (Important)
+
+- The current VUI chat buffer implementation is known to be broken in real interactive use, even when many tests pass.
+- Future tasks must treat this as a bug-hunting effort, not a test-green effort: do not encode current broken behavior into new assertions just to make tests pass.
+- Prefer assertions that reflect expected user behavior from the specs and real mounted-buffer interaction, and investigate failing E2E tests as likely product defects first.
+
 ## Current Coverage Snapshot (Reset Baseline)
 
 - Strong today: `tool-use-block`, `tool-result-block`, `compose-field`, `context-indicator`.
