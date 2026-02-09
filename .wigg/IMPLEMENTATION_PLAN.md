@@ -31,7 +31,7 @@ Replace broad mount-smoke confidence with behavior-driven coverage that proves t
 
 ### Phase 1 - Root Session Event Contract Tests
 
-- [ ] Extend `test/benedict-vui-root-test.el` to cover every event handled by `benedict-vui-root--handle-session-event`:
+- [x] Extend `test/benedict-vui-root-test.el` to cover every event handled by `benedict-vui-root--handle-session-event`:
   - `message-added` appends conversation,
   - `draft-started` creates active streaming payload,
   - `draft-updated` appends deltas,
