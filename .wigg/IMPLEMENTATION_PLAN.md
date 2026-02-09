@@ -47,7 +47,7 @@ Replace broad mount-smoke confidence with behavior-driven coverage that proves t
 
 ### Phase 2 - End-to-End Root -> Fake Provider Matrix
 
-- [ ] Add `test/benedict-vui-root-e2e-test.el` for full mounted-root flows driven by `benedict-provider-fake` scripts.
+- [x] Add `test/benedict-vui-root-e2e-test.el` for full mounted-root flows driven by `benedict-provider-fake` scripts.
 - [ ] Cover these scenarios with explicit assertions on visible UI output and session state:
   - simple success (user + assistant message lifecycle),
   - streaming text chunks (incremental draft then final message),
