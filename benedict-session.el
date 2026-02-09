@@ -253,6 +253,7 @@ Return the created message."
     (let ((msg (list :role 'assistant
                      :content (plist-get draft :content)
                      :tool-calls (plist-get draft :tool-calls)
+                     :thinking (plist-get draft :thinking)
                      :metadata metadata)))
       (setf (benedict-session-draft session) nil)
       (benedict-session-set-state session 'idle)
@@ -343,17 +344,28 @@ Finalize draft and accumulate telemetry.  This is an internal callback for dispa
           (setf (benedict-session-last-usage session) usage)
           (benedict-session-accumulate-usage session usage duration)))
       ;; Finalize or create message
+      (when-let ((thinking (plist-get result :thinking)))
+        (when-let ((draft (benedict-session-draft session)))
+          (setf (benedict-session-draft session)
+                (plist-put draft :thinking thinking))))
+      (when tool-calls
+        (when-let ((draft (benedict-session-draft session)))
+          (setf (benedict-session-draft session)
+                (plist-put draft :tool-calls
+                           (append (plist-get draft :tool-calls)
+                                   tool-calls)))))
       (if (and (benedict-session-draft session)
                (> (length (plist-get (benedict-session-draft session) :content)) 0))
           (benedict-session-finalize-draft session metadata)
         (when (benedict-session-draft session)
-          (setf (benedict-session-draft session) nil)
+          (benedict-session-discard-draft session)
           (benedict-session-set-state session 'idle))
         (benedict-session-add-message
          session
          (list :role 'assistant
                :content content
                :tool-calls tool-calls
+               :thinking (plist-get result :thinking)
                :metadata metadata)))
       ;; Emit completion event
       (benedict-session--emit session 'request-completed

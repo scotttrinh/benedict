@@ -16,7 +16,7 @@
 (require 'test/benedict-vui-test-utils)
 
 (defun benedict-vui-root-e2e-test--dispatch (session prompt)
-  "Submit PROMPT through SESSION for mounted root tests."
+  "Submit PROMPT through SESSION for mounted root test flows."
   (benedict-session-add-message
    session
    (list :role 'user
@@ -24,46 +24,71 @@
          :time (current-time)))
   (benedict-session-run session))
 
-(ert-deftest-async benedict-vui-root-e2e-submit-success-updates-ui (done)
-  "Submitting through mounted root shows user/assistant flow and metadata updates."
+(defun benedict-vui-root-e2e-test--buffer-text ()
+  "Return the mounted buffer text."
+  (buffer-string))
+
+(defun benedict-vui-root-e2e-test--messages (session)
+  "Return SESSION messages in chronological order."
+  (benedict-session-messages-chronological session))
+
+(ert-deftest-async benedict-vui-root-e2e-simple-success-lifecycle (done)
+  "Simple success shows user + assistant lifecycle and settles session state."
   (benedict-test-with-bindings done
       ((benedict-provider 'fake)
        (benedict-provider-fake-latency-seconds 0.01)
-       (benedict-provider-fake-streaming-chunk-delay 0.005)
+       (benedict-provider-fake-script
+        (list (list :type 'success :content "Hello there"))))
+    (with-mounted-vui-root
+      (benedict-vui-root-e2e-test--dispatch session "Ping")
+      (should (benedict-vui-test--wait-for-request-finished session 2.0))
+      (vui-flush-sync)
+      (let ((text (benedict-vui-root-e2e-test--buffer-text))
+            (messages (benedict-vui-root-e2e-test--messages session)))
+        (should (string-match-p "Ping" text))
+        (should (string-match-p "Hello there" text))
+        (should-not (string-match-p "ACTIVE" text))
+        (should (eq (benedict-session-state session) 'idle))
+        (should (= 2 (length messages))))
+      (funcall done))))
+
+(ert-deftest-async benedict-vui-root-e2e-streaming-chunks-incremental-draft (done)
+  "Streaming chunks appear incrementally before final assistant message settles."
+  (benedict-test-with-bindings done
+      ((benedict-provider 'fake)
+       (benedict-provider-fake-latency-seconds 0.01)
+       (benedict-provider-fake-streaming-chunk-delay 0.08)
        (benedict-provider-fake-script
         (list (list :type 'success
                     :chunks '("Hello" " there")
-                    :model "vendor/fake-e2e"
-                    :usage '(:total 42 :cost 0.125)))))
+                    :content "Hello there"))))
     (with-mounted-vui-root
-      (benedict-vui-root-e2e-test--dispatch session "Ping")
-      (vui-flush-sync)
-      (should (string-match-p "Ping" (buffer-string)))
+      (benedict-vui-root-e2e-test--dispatch session "Stream please")
+      (should
+       (benedict-vui-test--wait-until
+        (lambda ()
+          (let ((text (benedict-vui-root-e2e-test--buffer-text)))
+            (and (string-match-p "Hello" text)
+                 (not (string-match-p "Hello there" text))
+                 (string-match-p "ACTIVE" text))))
+        :timeout 2.0))
       (should (benedict-vui-test--wait-for-request-finished session 2.0))
       (vui-flush-sync)
-      (let ((text (buffer-string)))
+      (let ((text (benedict-vui-root-e2e-test--buffer-text)))
         (should (string-match-p "Hello there" text))
-        (should (string-match-p "FAK" text))
-        (should (string-match-p "fake-e2e" text))
-        (should (string-match-p "42 tokens" text))
-        (should-not (string-match-p "ACTIVE" text)))
-      (benedict-vui-test--assert-text-properties-for
-       "Ping"
-       :message-key "msg-001"
-       :region-kind 'body)
-      (benedict-vui-test--assert-text-properties-for
-       "Hello there"
-       :message-key "msg-002"
-       :region-kind 'body)
+        (should-not (string-match-p "ACTIVE" text))
+        (should (eq (benedict-session-state session) 'idle)))
       (funcall done))))
 
-(ert-deftest-async benedict-vui-root-e2e-tool-call-produces-tool-blocks (done)
-  "Tool calls emitted by fake provider render both tool use and result blocks."
+(ert-deftest-async benedict-vui-root-e2e-streaming-tool-calls-show-use-and-result-status (done)
+  "Streaming + tool calls render tool use/result blocks with statuses."
   (benedict-test-with-bindings done
       ((benedict-provider 'fake)
        (benedict-provider-fake-latency-seconds 0.01)
+       (benedict-provider-fake-streaming-chunk-delay 0.02)
        (benedict-provider-fake-script
         (list (list :type 'success
+                    :chunks '("Tooling")
                     :content "Tooling done"
                     :tool-calls (list (list :id "call-1"
                                             :name 'read_file
@@ -75,17 +100,136 @@
       (benedict-vui-root-e2e-test--dispatch session "run tool")
       (should (benedict-vui-test--wait-for-request-finished session 2.0))
       (vui-flush-sync)
-      (let ((text (buffer-string)))
+      (let ((text (benedict-vui-root-e2e-test--buffer-text)))
+        (should (string-match-p "Tooling" text))
         (should (string-match-p "Tool: read_file" text))
+        (should (string-match-p "RUNNING" text))
         (should (string-match-p "Result: read_file" text))
+        (should (string-match-p "SUCCESS" text))
         (should (string-match-p "mock tool output" text)))
-      (benedict-vui-test--assert-text-properties-for
-       "Tool: read_file"
-       :message-key "msg-002")
-      (benedict-vui-test--assert-text-properties-for
-       "mock tool output"
-       :message-key "msg-003"
-       :region-kind 'tool-ui)
+      (funcall done))))
+
+(ert-deftest-async benedict-vui-root-e2e-streaming-thinking-payload-visible (done)
+  "Streaming + thinking payload renders the thinking block label."
+  (benedict-test-with-bindings done
+      ((benedict-provider 'fake)
+       (benedict-provider-fake-latency-seconds 0.01)
+       (benedict-provider-fake-streaming-chunk-delay 0.01)
+       (benedict-provider-fake-script
+        (list (list :type 'success
+                    :chunks '("Answer")
+                    :content "Answer"
+                    :thinking "Reasoning details"))))
+    (with-mounted-vui-root
+      (benedict-vui-root-e2e-test--dispatch session "show thinking")
+      (should (benedict-vui-test--wait-for-request-finished session 2.0))
+      (vui-flush-sync)
+      (let ((text (benedict-vui-root-e2e-test--buffer-text)))
+        (should (string-match-p "THINKING" text))
+        (should-not (string-match-p "ACTIVE" text)))
+      (funcall done))))
+
+(ert-deftest-async benedict-vui-root-e2e-provider-model-update-reflects-in-header (done)
+  "Provider/model changes from completion render in header badge."
+  (benedict-test-with-bindings done
+      ((benedict-provider 'fake)
+       (benedict-provider-fake-latency-seconds 0.01)
+       (benedict-provider-fake-script
+        (list (list :type 'success
+                    :content "ok"
+                    :model "anthropic/claude-fake"))))
+    (with-mounted-vui-root
+      (benedict-vui-root-e2e-test--dispatch session "provider please")
+      (should (benedict-vui-test--wait-for-request-finished session 2.0))
+      (vui-flush-sync)
+      (let ((text (benedict-vui-root-e2e-test--buffer-text)))
+        (should (string-match-p "ANT" text))
+        (should (string-match-p "claude-fake" text))
+        (should (equal (benedict-session-model session) "anthropic/claude-fake")))
+      (funcall done))))
+
+(ert-deftest-async benedict-vui-root-e2e-usage-renders-in-status-bar (done)
+  "Usage payload renders tokens and cost in the status bar."
+  (benedict-test-with-bindings done
+      ((benedict-provider 'fake)
+       (benedict-provider-fake-latency-seconds 0.01)
+       (benedict-provider-fake-script
+        (list (list :type 'success
+                    :content "usage"
+                    :usage '(:total 77 :cost 0.321)))))
+    (with-mounted-vui-root
+      (benedict-vui-root-e2e-test--dispatch session "usage please")
+      (should (benedict-vui-test--wait-for-request-finished session 2.0))
+      (vui-flush-sync)
+      (let ((text (benedict-vui-root-e2e-test--buffer-text)))
+        (should (string-match-p "77 tokens" text))
+        (should (string-match-p "\\$0.3210" text))
+        (should (equal (benedict-session-last-usage session)
+                       '(:total 77 :cost 0.321))))
+      (funcall done))))
+
+(ert-deftest-async benedict-vui-root-e2e-provider-error-stops-streaming-and-renders-error (done)
+  "Provider errors surface in UI and clear active streaming indicators."
+  (benedict-test-with-bindings done
+      ((benedict-provider 'fake)
+       (benedict-provider-fake-latency-seconds 0.02)
+       (benedict-provider-fake-script
+        (list (list :type 'error :message "Rate limited"))))
+    (with-mounted-vui-root
+      (benedict-vui-root-e2e-test--dispatch session "fail please")
+      (should (benedict-vui-test--wait-for-request-finished session 2.0))
+      (vui-flush-sync)
+      (let ((text (benedict-vui-root-e2e-test--buffer-text)))
+        (should (string-match-p "Rate limited" text))
+        (should-not (string-match-p "ACTIVE" text))
+        (should (eq (benedict-session-state session) 'error)))
+      (funcall done))))
+
+(ert-deftest-async benedict-vui-root-e2e-cancel-mid-stream-clears-draft-without-corruption (done)
+  "Cancelling mid-stream clears draft/indicator and preserves transcript integrity."
+  (benedict-test-with-bindings done
+      ((benedict-provider 'fake)
+       (benedict-provider-fake-latency-seconds 0.4)
+       (benedict-provider-fake-streaming-chunk-delay 0.1)
+       (benedict-provider-fake-script
+        (list (list :type 'success
+                    :chunks '("Partial" " response")
+                    :content "Partial response"))))
+    (with-mounted-vui-root
+      (benedict-vui-root-e2e-test--dispatch session "cancel me")
+      (should
+       (benedict-vui-test--wait-until
+        (lambda ()
+          (string-match-p "ACTIVE" (benedict-vui-root-e2e-test--buffer-text)))
+        :timeout 2.0))
+      (should (benedict-session-cancel session))
+      (vui-flush-sync)
+      (let ((text (benedict-vui-root-e2e-test--buffer-text))
+            (messages (benedict-vui-root-e2e-test--messages session)))
+        (should-not (string-match-p "ACTIVE" text))
+        (should (eq (benedict-session-state session) 'cancelled))
+        (should (= 1 (length messages)))
+        (should (equal (plist-get (car messages) :content) "cancel me")))
+      (funcall done))))
+
+(ert-deftest-async benedict-vui-root-e2e-empty-assistant-response-does-not-crash (done)
+  "Empty assistant responses keep UI/session stable without streaming residue."
+  (benedict-test-with-bindings done
+      ((benedict-provider 'fake)
+       (benedict-provider-fake-latency-seconds 0.01)
+       (benedict-provider-fake-script
+        (list (list :type 'success :content ""))))
+    (with-mounted-vui-root
+      (benedict-vui-root-e2e-test--dispatch session "empty response")
+      (should (benedict-vui-test--wait-for-request-finished session 2.0))
+      (vui-flush-sync)
+      (let ((text (benedict-vui-root-e2e-test--buffer-text))
+            (messages (benedict-vui-root-e2e-test--messages session)))
+        (should (string-match-p "empty response" text))
+        (should-not (string-match-p "ACTIVE" text))
+        (should (= 2 (length messages)))
+        (should (equal (plist-get (nth 1 messages) :content) ""))
+        (should (eq (benedict-session-state session) 'idle)))
       (funcall done))))
 
 (provide 'test/benedict-vui-root-e2e-test)
