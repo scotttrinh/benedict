@@ -92,7 +92,7 @@ Replace broad mount-smoke confidence with behavior-driven coverage that proves t
   - streaming synthetic message handling,
   - navigation properties across multiple turns,
   - empty conversation behavior.
-- [ ] `test/benedict-vui-conversation-view-test.el`:
+- [x] `test/benedict-vui-conversation-view-test.el`:
   - streaming indicator visibility transitions,
   - malformed/nil streaming payload safety,
   - integration with turn-list output for multi-turn conversations.
