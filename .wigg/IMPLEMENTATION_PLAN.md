@@ -101,14 +101,15 @@ Replace broad mount-smoke confidence with behavior-driven coverage that proves t
 
 - [x] `test/benedict-vui-chat-header-test.el`: click handler wiring, nil provider/model/title variants, status badge transitions.
 - [x] `test/benedict-vui-input-area-test.el`: obsolete after transcript-only chat/compose split removed `benedict-vui-input-area` and related VUI compose components.
-- [ ] `test/benedict-vui-status-bar-test.el`: separator logic across token/cost/error combinations and nil/partial usage payloads.
-- [ ] `test/benedict-vui-streaming-indicator-test.el`: visible false->true->false transitions, timer cleanup on unmount.
-- [ ] `test/benedict-vui-thinking-block-test.el`: empty payload handling, controlled/uncontrolled collapse behavior, multi-detail/chunk rendering.
-- [ ] `test/benedict-vui-code-block-test.el`: copy result assertions (including kill-ring effect), unknown language fallback, large content display safety.
-- [ ] `test/benedict-vui-text-block-test.el`: whitespace/empty/long content behavior and property coverage.
-- [ ] `test/benedict-vui-provider-badge-test.el`: click handler wiring and model formatting edge cases.
-- [ ] `test/benedict-vui-turn-header-test.el` and `test/benedict-vui-badge-test.el`: metadata/status fallback and face mapping edge cases.
-- [ ] `test/benedict-vui-collapsible-test.el`: nil callback safety and function-valued header/content behavior.
+- [ ] Finish the other tests:
+    - [x] `test/benedict-vui-status-bar-test.el`: separator logic across token/cost/error combinations and nil/partial usage payloads.
+    - `test/benedict-vui-streaming-indicator-test.el`: visible false->true->false transitions, timer cleanup on unmount.
+    - `test/benedict-vui-thinking-block-test.el`: empty payload handling, controlled/uncontrolled collapse behavior, multi-detail/chunk rendering.
+    - `test/benedict-vui-code-block-test.el`: copy result assertions (including kill-ring effect), unknown language fallback, large content display safety.
+    - `test/benedict-vui-text-block-test.el`: whitespace/empty/long content behavior and property coverage.
+    - `test/benedict-vui-provider-badge-test.el`: click handler wiring and model formatting edge cases.
+    - `test/benedict-vui-turn-header-test.el` and `test/benedict-vui-badge-test.el`: metadata/status fallback and face mapping edge cases.
+    - `test/benedict-vui-collapsible-test.el`: nil callback safety and function-valued header/content behavior.
 
 ### Phase 5 - Chat/Session Integration Guardrails for VUI
 

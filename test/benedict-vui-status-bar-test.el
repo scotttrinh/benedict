@@ -91,5 +91,72 @@
       (should (string-match-p "Partial failure" text))
       (should (= (length (split-string text (regexp-quote "·") t)) 3)))))
 
+(ert-deftest benedict-vui-status-bar-mount-renders-empty-with-no-usage-or-error ()
+  "Mounted status bar renders empty output when no usage or error exists."
+  (with-mounted-vui-component
+      (vui-component 'benedict-vui-status-bar
+                     :usage nil
+                     :error nil)
+    (should (string= "" (buffer-string)))))
+
+(ert-deftest benedict-vui-status-bar-mount-renders-error-without-separator-when-usage-empty ()
+  "Mounted status bar renders error without separator when usage has no labels."
+  (with-mounted-vui-component
+      (vui-component 'benedict-vui-status-bar
+                     :usage '(:prompt 70)
+                     :error "Prompt-only usage")
+    (let ((text (buffer-string))
+          (error-face (benedict-vui-status-bar-test--face-at-string-match "Prompt-only usage")))
+      (should-not (string-match-p "tokens" text))
+      (should-not (string-match-p (regexp-quote "$") text))
+      (should-not (string-match-p (regexp-quote "·") text))
+      (should (string-match-p "Prompt-only usage" text))
+      (should (benedict-vui-status-bar-test--face-has-p
+               'benedict-chat-error error-face)))))
+
+(ert-deftest benedict-vui-status-bar-mount-renders-tokens-without-separator-when-cost-zero ()
+  "Mounted status bar omits cost and separators when cost is zero."
+  (with-mounted-vui-component
+      (vui-component 'benedict-vui-status-bar
+                     :usage '(:total 88 :cost 0)
+                     :error nil)
+    (let ((text (buffer-string)))
+      (should (string-match-p "88 tokens" text))
+      (should-not (string-match-p (regexp-quote "$0.0000") text))
+      (should-not (string-match-p (regexp-quote "·") text)))))
+
+(ert-deftest benedict-vui-status-bar-mount-renders-cost-and-error-with-single-separator ()
+  "Mounted status bar renders cost+error with one separator when tokens absent."
+  (with-mounted-vui-component
+      (vui-component 'benedict-vui-status-bar
+                     :usage '(:cost 2.3)
+                     :error "Rate limited")
+    (let ((text (buffer-string))
+          (separator-face (benedict-vui-status-bar-test--face-at-string-match (regexp-quote "·")))
+          (usage-face (benedict-vui-status-bar-test--face-at-string-match (regexp-quote "$2.3000")))
+          (error-face (benedict-vui-status-bar-test--face-at-string-match "Rate limited")))
+      (should-not (string-match-p "tokens" text))
+      (should (string-match-p (regexp-quote "$2.3000") text))
+      (should (string-match-p "Rate limited" text))
+      (should (= (length (split-string text (regexp-quote "·") t)) 2))
+      (should (benedict-vui-status-bar-test--face-has-p
+               'benedict-chat-header-separator separator-face))
+      (should (benedict-vui-status-bar-test--face-has-p
+               'benedict-chat-header-usage usage-face))
+      (should (benedict-vui-status-bar-test--face-has-p
+               'benedict-chat-error error-face)))))
+
+(ert-deftest benedict-vui-status-bar-mount-renders-error-only-without-separator ()
+  "Mounted status bar renders error-only output without separators."
+  (with-mounted-vui-component
+      (vui-component 'benedict-vui-status-bar
+                     :usage nil
+                     :error "Only error")
+    (let ((text (buffer-string)))
+      (should-not (string-match-p "tokens" text))
+      (should-not (string-match-p (regexp-quote "$") text))
+      (should-not (string-match-p (regexp-quote "·") text))
+      (should (string-match-p "Only error" text)))))
+
 (provide 'test/benedict-vui-status-bar-test)
 ;;; benedict-vui-status-bar-test.el ends here
