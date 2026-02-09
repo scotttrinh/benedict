@@ -7,6 +7,7 @@
 
 (require 'cl-lib)
 (require 'ert)
+(require 'subr-x)
 (require 'vui)
 (require 'test/benedict-vui-test-utils)
 (require 'benedict-vui-turn-list)
@@ -20,50 +21,99 @@
             start (match-end 0)))
     count))
 
-(ert-deftest benedict-vui-turn-list-mount-renders-multiple-turns ()
-  "Mounted turn list renders multiple user/assistant turns."
+(ert-deftest benedict-vui-turn-list-mount-groups-and-orders-turns ()
+  "Mounted turn list preserves grouped turn ordering in output."
   (with-mounted-vui-component
       (vui-component 'benedict-vui-turn-list
-                     :conversation (list (list :id "u1" :role 'user :content "Question one")
+                     :conversation (list (list :role 'assistant :content "Lead assistant")
+                                         (list :id "u1" :role 'user :content "Question one")
                                          (list :id "a1" :role 'assistant :content "Answer one")
+                                         (list :role 'assistant :content "Answer one followup")
                                          (list :id "u2" :role 'user :content "Question two")
                                          (list :id "a2" :role 'assistant :content "Answer two"))
                      :collapsed-blocks nil
                      :on-toggle-block #'ignore)
-    (let ((text (buffer-string)))
-      (should (string-match-p "Question one" text))
-      (should (string-match-p "Answer one" text))
-      (should (string-match-p "Question two" text))
-      (should (string-match-p "Answer two" text))
+    (let* ((text (buffer-string))
+           (lead-pos (string-match "Lead assistant" text))
+           (q1-pos (string-match "Question one" text))
+           (a1-pos (string-match "Answer one" text))
+           (a1-followup-pos (string-match "Answer one followup" text))
+           (q2-pos (string-match "Question two" text))
+           (a2-pos (string-match "Answer two" text)))
+      (should lead-pos)
+      (should q1-pos)
+      (should a1-pos)
+      (should a1-followup-pos)
+      (should q2-pos)
+      (should a2-pos)
+      (should (< lead-pos q1-pos))
+      (should (< q1-pos a1-pos))
+      (should (< a1-pos a1-followup-pos))
+      (should (< a1-followup-pos q2-pos))
+      (should (< q2-pos a2-pos))
       (should (= (benedict-vui-turn-list-test--count-matches text "USER") 2))
-      (should (= (benedict-vui-turn-list-test--count-matches text "ASSISTANT") 2)))))
+      (should (>= (benedict-vui-turn-list-test--count-matches text "ASSISTANT") 4)))))
 
-(ert-deftest benedict-vui-turn-list-mount-renders-streaming-message-without-id ()
-  "Mounted turn list renders assistant streaming text without message ids."
+(ert-deftest benedict-vui-turn-list-mount-streaming-prefers-display-content-and-synthetic-key ()
+  "Mounted streaming message uses display content and nav-index fallback key."
   (with-mounted-vui-component
       (vui-component 'benedict-vui-turn-list
                      :conversation (list (list :role 'assistant
-                                               :content "Streaming partial"
+                                               :content "Hidden raw content"
+                                               :display-content "Streaming partial"
                                                :streaming t))
                      :collapsed-blocks nil
                      :on-toggle-block #'ignore)
-    (let ((text (buffer-string)))
-      (should (string-match-p "ASSISTANT" text))
-      (should (string-match-p "Streaming partial" text)))))
-
-(ert-deftest benedict-vui-turn-list-mount-applies-navigation-properties ()
-  "Mounted turn list propagates message keys to rendered block text."
-  (with-mounted-vui-component
-      (vui-component 'benedict-vui-turn-list
-                     :conversation (list (list :role 'assistant
-                                               :content "No id content"))
-                     :collapsed-blocks nil
-                     :on-toggle-block #'ignore)
     (let* ((text (buffer-string))
-           (pos (string-match "No id content" text)))
+           (pos (string-match "Streaming partial" text)))
+      (should (string-match-p "ASSISTANT" text))
+      (should (string-match-p "Streaming partial" text))
+      (should-not (string-match-p "Hidden raw content" text))
       (should pos)
       (should (eq (get-text-property pos 'benedict-region-kind text) 'body))
       (should (equal (get-text-property pos 'benedict-message-key text) 0)))))
+
+(ert-deftest benedict-vui-turn-list-mount-applies-navigation-properties-across-turns ()
+  "Mounted turn list propagates message keys across id and nav-index cases."
+  (with-mounted-vui-component
+      (vui-component 'benedict-vui-turn-list
+                     :conversation (list (list :id "u1" :role 'user :content "Question with id")
+                                         (list :role 'assistant :content "Answer without id")
+                                         (list :role 'user :content "Question without id")
+                                         (list :id "a2" :role 'assistant :content "Answer with id"))
+                     :collapsed-blocks nil
+                     :on-toggle-block #'ignore)
+    (benedict-vui-test--assert-text-properties-for
+     "Question with id"
+     :region-kind 'body
+     :message-key "u1")
+    (benedict-vui-test--assert-text-properties-for
+     "Answer without id"
+     :region-kind 'body
+     :message-key 1)
+    (benedict-vui-test--assert-text-properties-for
+     "Question without id"
+     :region-kind 'body
+     :message-key 2)
+    (benedict-vui-test--assert-text-properties-for
+     "Answer with id"
+     :region-kind 'body
+     :message-key "a2")))
+
+(ert-deftest benedict-vui-turn-list-mount-empty-conversation-renders-nothing ()
+  "Mounted turn list renders nothing for nil and empty conversation values."
+  (with-mounted-vui-component
+      (vui-component 'benedict-vui-turn-list
+                     :conversation nil
+                     :collapsed-blocks nil
+                     :on-toggle-block #'ignore)
+    (should (string-empty-p (string-trim (buffer-string)))))
+  (with-mounted-vui-component
+      (vui-component 'benedict-vui-turn-list
+                     :conversation (list nil)
+                     :collapsed-blocks nil
+                     :on-toggle-block #'ignore)
+    (should (string-empty-p (string-trim (buffer-string))))))
 
 (provide 'test/benedict-vui-turn-list-test)
 ;;; benedict-vui-turn-list-test.el ends here

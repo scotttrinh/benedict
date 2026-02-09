@@ -87,7 +87,7 @@ Replace broad mount-smoke confidence with behavior-driven coverage that proves t
   - assistant/tool message composition,
   - metadata/error styling,
   - timestamp/header behavior with and without metadata.
-- [ ] `test/benedict-vui-turn-list-test.el`:
+- [x] `test/benedict-vui-turn-list-test.el`:
   - grouping/ordering correctness,
   - streaming synthetic message handling,
   - navigation properties across multiple turns,
