@@ -29,11 +29,16 @@
   :render
   (let* ((provider-label (benedict-vui-provider-badge--format-provider provider))
          (model-label (benedict-vui-provider-badge--format-model model)))
-    (ignore on-click)
     (vui-hstack
       :spacing 1
-      (vui-text provider-label
-        :face 'benedict-chat-header-provider)
+      (if (functionp on-click)
+          (vui-button provider-label
+            :on-click (lambda (&rest _)
+                        (funcall on-click))
+            :face 'benedict-chat-header-provider
+            :no-decoration t)
+        (vui-text provider-label
+          :face 'benedict-chat-header-provider))
       (vui-text "·"
         :face 'benedict-chat-header-separator)
       (vui-text model-label

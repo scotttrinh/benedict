@@ -24,6 +24,10 @@
       (memq face face-prop)
     (eq face face-prop)))
 
+(defun benedict-vui-chat-header-test--separator-count (text)
+  "Return number of separator glyphs in TEXT."
+  (1- (length (split-string text (regexp-quote "·") nil))))
+
 (ert-deftest benedict-vui-chat-header-mount-renders-provider-model-and-title ()
   "Mounted chat header renders provider/model/title with expected faces."
   (with-mounted-vui-component
@@ -66,6 +70,73 @@
                'benedict-chat-tool-running status-face))
       (should (benedict-vui-chat-header-test--face-has-p
                'benedict-chat-header-separator separator-face)))))
+
+(ert-deftest benedict-vui-chat-header-mount-nil-provider-model-variants ()
+  "Mounted chat header renders provider/model fallback labels for nil values."
+  (with-mounted-vui-component
+      (vui-component 'benedict-vui-chat-header
+                     :provider nil
+                     :model nil
+                     :status nil
+                     :title "Chat"
+                     :on-provider-click nil)
+    (let ((text (buffer-string)))
+      (should (string-match-p "\?\?\?" text))
+      (should (string-match-p "unknown" text))
+      (should (string-match-p "Chat" text))
+      (should (= 1 (benedict-vui-chat-header-test--separator-count text))))))
+
+(ert-deftest benedict-vui-chat-header-mount-nil-status-and-title-variants ()
+  "Mounted chat header omits optional status/title regions when nil."
+  (with-mounted-vui-component
+      (vui-component 'benedict-vui-chat-header
+                     :provider 'openrouter
+                     :model "openai/gpt-5"
+                     :status nil
+                     :title nil
+                     :on-provider-click nil)
+    (let ((text (buffer-string)))
+      (should (string-match-p "OPE" text))
+      (should (string-match-p "gpt-5" text))
+      (should-not (string-match-p "RUNNING" text))
+      (should-not (string-match-p "Session" text))
+      (should (= 1 (benedict-vui-chat-header-test--separator-count text))))))
+
+(ert-deftest benedict-vui-chat-header-mount-status-badge-transitions ()
+  "Mounted chat header renders each status transition label and face."
+  (let ((cases '((running "RUNNING" benedict-chat-tool-running)
+                 (error "ERROR" benedict-chat-header-error)
+                 (success "SUCCESS" benedict-chat-tool-success)
+                 (failure "FAILURE" benedict-chat-tool-error)
+                 (streaming "STREAMING" benedict-chat-header-time))))
+    (dolist (case cases)
+      (pcase-let ((`(,status ,label ,face) case))
+        (with-mounted-vui-component
+            (vui-component 'benedict-vui-chat-header
+                           :provider 'openai
+                           :model "gpt-5"
+                           :status status
+                           :title "Session"
+                           :on-provider-click nil)
+          (let ((text (buffer-string))
+                (status-face (benedict-vui-chat-header-test--face-at-string-match label)))
+            (should (string-match-p label text))
+            (should (benedict-vui-chat-header-test--face-has-p face status-face))))))))
+
+(ert-deftest benedict-vui-chat-header-mount-provider-click-handler-wired ()
+  "Mounted chat header calls `on-provider-click' when provider badge clicked."
+  (let ((clicks 0))
+    (with-mounted-vui-component
+        (vui-component 'benedict-vui-chat-header
+                       :provider 'openrouter
+                       :model "openai/gpt-5"
+                       :status nil
+                       :title nil
+                       :on-provider-click (lambda ()
+                                            (setq clicks (1+ clicks))))
+      (benedict-vui-test--click-button-labeled "OPE")
+      (vui-flush-sync)
+      (should (= 1 clicks)))))
 
 (provide 'test/benedict-vui-chat-header-test)
 ;;; benedict-vui-chat-header-test.el ends here

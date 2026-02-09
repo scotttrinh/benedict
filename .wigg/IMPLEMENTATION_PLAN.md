@@ -99,7 +99,7 @@ Replace broad mount-smoke confidence with behavior-driven coverage that proves t
 
 ### Phase 4 - Leaf Component Behavior Expansion
 
-- [ ] `test/benedict-vui-chat-header-test.el`: click handler wiring, nil provider/model/title variants, status badge transitions.
+- [x] `test/benedict-vui-chat-header-test.el`: click handler wiring, nil provider/model/title variants, status badge transitions.
 - [ ] `test/benedict-vui-input-area-test.el`: slice remove wiring, placeholder/size propagation, history prop behavior.
 - [ ] `test/benedict-vui-status-bar-test.el`: separator logic across token/cost/error combinations and nil/partial usage payloads.
 - [ ] `test/benedict-vui-streaming-indicator-test.el`: visible false->true->false transitions, timer cleanup on unmount.
