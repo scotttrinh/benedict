@@ -22,7 +22,6 @@
 (require 'benedict-flywire)
 (require 'benedict-session)
 (require 'benedict-vui-root)
-(require 'benedict-vui-compose-field)
 (require 'benedict-chat-profiles)
 (require 'benedict-chat-status)
 (require 'benedict-chat-compose)
@@ -179,9 +178,8 @@ See `benedict-session' for the in-memory session data structure.")
     (apply fn args)))
 
 (defun benedict-chat--set-context-slices (slices)
-  "Set chat context SLICES and update VUI state when possible."
-  (setq benedict-chat--context-slices slices)
-  (benedict-chat--vui-call :set-slices slices))
+  "Set chat context SLICES."
+  (setq benedict-chat--context-slices slices))
 
 (defun benedict-chat--mount-ui ()
   "Mount the VUI root component for the current buffer."
@@ -194,15 +192,10 @@ See `benedict-session' for the in-memory session data structure.")
   (setq benedict-chat--vui-mount
         (vui-mount
          (vui-component 'benedict-vui-root
-          :session benedict-chat--session
-          :initial-slices benedict-chat--context-slices
-          :initial-input ""
-          :retain-context benedict-chat-context-retain-after-send
-          :register-actions #'benedict-chat--vui-register-actions
-          :on-slices-change #'benedict-chat--set-context-slices
-          :on-provider-click #'benedict-chat-choose-model
-          :on-submit #'benedict-chat--send-text)
-         (buffer-name))))
+           :session benedict-chat--session
+           :register-actions #'benedict-chat--vui-register-actions
+           :on-provider-click #'benedict-chat-choose-model)
+          (buffer-name))))
 
 ;; -------------------------------------------------------------------
 ;; Flywire Session Management
@@ -458,6 +451,7 @@ When SKIP-CONTEXT is non-nil, do not append context slices."
 
 (defvar benedict-chat--base-mode-map
   (let ((m (make-sparse-keymap)))
+    (define-key m (kbd "C-c C-c") #'benedict-chat-compose-open)
     (define-key m (kbd "C-c C-s") #'benedict-chat-send-prompt)
     (define-key m (kbd "g l") #'benedict-chat-nav-jump-to-latest)
     (define-key m (kbd "g a") #'benedict-chat-nav-jump-to-last-assistant)
@@ -479,8 +473,7 @@ When SKIP-CONTEXT is non-nil, do not append context slices."
 
 (defvar benedict-chat-mode-map
   (make-composed-keymap
-   (list benedict-vui-compose-field-mode-map
-         benedict-chat--base-mode-map)
+   (list benedict-chat--base-mode-map)
    vui-mode-map)
   "Keymap for `benedict-chat-mode'.")
 
@@ -755,7 +748,7 @@ When multiple sessions exist, prompt for which one to open."
         (when-let ((session (cdr (assoc selected session-strings :test #'equal))))
           (let ((buf (benedict-chat--buffer-for-session session)))
             (pop-to-buffer buf))))))
-  (message "Type C-c C-s to send a prompt; g r retries; w copies last response.")))
+  (message "Type C-c C-c to compose, C-c C-s to prompt, g r retries, w copies last response.")))
 
 (provide 'benedict-chat)
 ;;; benedict-chat.el ends here

@@ -6,6 +6,7 @@
 ;;; Code:
 
 (require 'cl-lib)
+(require 'subr-x)
 (require 'benedict-context)
 (require 'benedict-chat-profiles)
 (require 'benedict-chat-status)
@@ -42,6 +43,11 @@ The chat buffer name is substituted into the single %s placeholder."
 (defcustom benedict-chat-context-retain-after-send nil
   "When non-nil, keep pending context slices after sending from compose."
   :type 'boolean
+  :group 'benedict)
+
+(defcustom benedict-chat-compose-window-height 0.33
+  "Fractional height for compose windows shown below chat buffers."
+  :type 'float
   :group 'benedict)
 
 (defconst benedict-chat-compose--separator "----\n"
@@ -277,13 +283,35 @@ Return a plist with :slice and :replacing entries; :slice carries the final hand
           (benedict-chat-compose--render-header))))
     benedict-chat--compose-buffer))
 
+(defun benedict-chat-compose--display-buffer (buffer)
+  "Display compose BUFFER in a window below the selected one."
+  (pop-to-buffer
+   buffer
+   '((display-buffer-reuse-window display-buffer-in-direction)
+     (direction . below)
+     (window-height . benedict-chat-compose-window-height))))
+
+(defun benedict-chat-compose--close-windows (compose-buffer chat-buffer)
+  "Close windows showing COMPOSE-BUFFER and focus CHAT-BUFFER."
+  (dolist (window (get-buffer-window-list compose-buffer nil t))
+    (when (window-live-p window)
+      (with-selected-window window
+        (if (one-window-p t)
+            (when (buffer-live-p chat-buffer)
+              (switch-to-buffer chat-buffer))
+          (delete-window window)))))
+  (when (buffer-live-p chat-buffer)
+    (if-let ((chat-window (get-buffer-window chat-buffer t)))
+        (select-window chat-window)
+      (pop-to-buffer chat-buffer))))
+
 (defun benedict-chat-compose-open ()
   "Open or focus the compose buffer for the current chat."
   (interactive)
   (let* ((chat (benedict-chat--ensure-chat-buffer))
          (compose (with-current-buffer chat
-                    (benedict-chat-compose--ensure-buffer))))
-    (pop-to-buffer compose)
+                     (benedict-chat-compose--ensure-buffer))))
+    (benedict-chat-compose--display-buffer compose)
     (goto-char (point-max))
     (message "Compose buffer ready. C-c C-c to send; C-c C-k to cancel.")))
 
@@ -322,21 +350,18 @@ Return a plist with :slice and :replacing entries; :slice carries the final hand
       (user-error "Prompt is empty"))
     (let* ((chat benedict-chat-compose--chat-buffer)
            (stable-chat (with-current-buffer chat
-                          (or benedict-chat--buffer chat)))
+                           (or benedict-chat--buffer chat)))
            (slices (with-current-buffer stable-chat
-                     benedict-chat--context-slices))
+                      benedict-chat--context-slices))
            (body-handles (benedict-chat-compose--extract-handle-links prompt))
            (text (benedict-chat-compose--assemble-message-text prompt slices)))
       (benedict-chat-compose--warn-unknown-handles body-handles slices)
+      (benedict-chat-compose--close-windows compose stable-chat)
       (with-current-buffer stable-chat
         (benedict-chat--send-text text stable-chat t)
         (unless benedict-chat-context-retain-after-send
           (benedict-chat--set-context-slices nil))
         (benedict-chat-compose--clear-state))
-      (when (buffer-live-p stable-chat)
-        (pop-to-buffer stable-chat))
-      (when (buffer-live-p compose)
-        (kill-buffer compose))
       (message "Benedict: sent prompt with context"))))
 
 (defun benedict-chat-compose-cancel ()
@@ -344,15 +369,13 @@ Return a plist with :slice and :replacing entries; :slice carries the final hand
   (interactive)
   (unless (derived-mode-p 'benedict-chat-compose-mode)
     (user-error "Not in a Benedict compose buffer"))
-  (let ((chat benedict-chat-compose--chat-buffer))
+  (let ((chat benedict-chat-compose--chat-buffer)
+        (compose (current-buffer)))
     (when (buffer-live-p chat)
+      (benedict-chat-compose--close-windows compose chat)
       (with-current-buffer chat
         (benedict-chat--set-context-slices nil)
         (benedict-chat-compose--clear-state))))
-  (when (buffer-live-p benedict-chat-compose--chat-buffer)
-    (pop-to-buffer benedict-chat-compose--chat-buffer))
-  (when (buffer-live-p (current-buffer))
-    (kill-buffer (current-buffer)))
   (message "Benedict: canceled compose buffer"))
 
 (defun benedict-chat-compose--deliver-context-slices (slices)
@@ -383,7 +406,7 @@ Return a plist with :slice and :replacing entries; :slice carries the final hand
           (let ((handle (plist-get (plist-get entry :slice) :handle)))
             (when (and handle (not (plist-get entry :replacing)))
               (benedict-chat-compose--insert-handle-link handle))))))
-    (pop-to-buffer compose)))
+    (benedict-chat-compose--display-buffer compose)))
 
 (provide 'benedict-chat-compose)
 ;;; benedict-chat-compose.el ends here

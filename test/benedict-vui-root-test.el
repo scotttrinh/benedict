@@ -26,17 +26,12 @@
   (with-mounted-vui-component
       (vui-component 'benedict-vui-root
                      :session nil
-                     :initial-slices nil
-                     :initial-input nil
-                     :retain-context nil
                      :register-actions nil
-                     :on-slices-change nil
-                     :on-provider-click nil
-                     :on-submit #'ignore)
+                     :on-provider-click nil)
     (let ((text (buffer-string)))
       (should (string-match-p "Chat" text))
-      (should (string-match-p "No context" text))
-      (should widget-field-list))))
+      (should-not (string-match-p "No context" text))
+      (should-not widget-field-list))))
 
 (ert-deftest benedict-vui-root-session-events-update-conversation ()
   "Mounted root reacts to session message events."
@@ -129,46 +124,6 @@
      :success nil
      :error '(:message "Network timeout"))
     (should (string-match-p "Network timeout" (buffer-string)))))
-
-(ert-deftest benedict-vui-root-submit-clears-input-and-appends-history ()
-  "Successful submit clears compose input and appends prompt history."
-  (let (updates)
-    (cl-letf (((symbol-function 'vui-set-state)
-               (lambda (key value)
-                 (push (cons key value) updates))))
-      (should (benedict-vui-root--submit "prompt"
-                                         (lambda (_) t)
-                                         nil)))
-    (let ((history-update (alist-get :history updates))
-          (input-update (alist-get :input-text updates))
-          (slices-update (alist-get :slices updates)))
-      (should (functionp history-update))
-      (should (equal (funcall history-update '("older"))
-                     '("older" "prompt")))
-      (should (equal input-update ""))
-      (should (null slices-update)))))
-
-(ert-deftest benedict-vui-root-submit-retain-context-nil-clears-slices ()
-  "Successful submit clears slices when `retain-context' is nil."
-  (let (updates)
-    (cl-letf (((symbol-function 'vui-set-state)
-               (lambda (key value)
-                 (push (cons key value) updates))))
-      (should (benedict-vui-root--submit "prompt"
-                                         (lambda (_) t)
-                                         nil)))
-    (should (assq :slices updates))))
-
-(ert-deftest benedict-vui-root-submit-retain-context-t-keeps-slices ()
-  "Successful submit keeps slices when `retain-context' is non-nil."
-  (let (updates)
-    (cl-letf (((symbol-function 'vui-set-state)
-               (lambda (key value)
-                 (push (cons key value) updates))))
-      (should (benedict-vui-root--submit "prompt"
-                                         (lambda (_) t)
-                                         t)))
-    (should-not (assq :slices updates))))
 
 (ert-deftest benedict-vui-root-toggle-collapsed-block-list-representation ()
   "Toggling collapsed blocks behaves correctly for list state."

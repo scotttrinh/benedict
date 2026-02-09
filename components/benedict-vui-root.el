@@ -11,7 +11,6 @@
 (require 'benedict-session)
 (require 'benedict-vui-chat-header)
 (require 'benedict-vui-conversation-view)
-(require 'benedict-vui-input-area)
 (require 'benedict-vui-status-bar)
 
 (defun benedict-vui-root--session-draft (session)
@@ -61,21 +60,7 @@ toggle based on current membership.  COLLAPSED-BLOCKS may be a list or hash tabl
           (if present current (cons block-id current))
         (cl-remove block-id current :test #'equal))))))
 
-(defun benedict-vui-root--submit (value on-submit retain-context)
-  "Submit VALUE via ON-SUBMIT, returning non-nil on success.
-Clears input and context when RETAIN-CONTEXT is nil."
-  (when on-submit
-    (let ((result (funcall on-submit value)))
-      (when result
-        (vui-batch
-          (vui-set-state :history (lambda (history)
-                                    (append history (list value))))
-          (vui-set-state :input-text "")
-          (when (not retain-context)
-            (vui-set-state :slices nil))))
-      result)))
-
-(vui-defcomponent benedict-vui-root (session initial-slices initial-input retain-context register-actions on-slices-change on-provider-click on-submit)
+(vui-defcomponent benedict-vui-root (session register-actions on-provider-click)
   "Root component owning all shared application state."
   :state ((conversation nil)
           (streaming nil)
@@ -83,10 +68,7 @@ Clears input and context when RETAIN-CONTEXT is nil."
           (model "claude-3-5-sonnet-20241022")
           (collapsed-blocks nil)
           (error nil)
-          (usage nil)
-          (input-text "")
-          (slices nil)
-          (history nil))
+          (usage nil))
   :on-mount
   (let* ((initial-conversation (and session
                                     (benedict-session-messages-chronological session)))
@@ -95,10 +77,6 @@ Clears input and context when RETAIN-CONTEXT is nil."
          (initial-model (and session (benedict-session-model session)))
          (initial-usage (and session (benedict-session-last-usage session))))
     (vui-batch
-      (when initial-slices
-        (vui-set-state :slices initial-slices))
-      (when initial-input
-        (vui-set-state :input-text initial-input))
       (when initial-conversation
         (vui-set-state :conversation initial-conversation))
       (when initial-streaming
@@ -116,47 +94,21 @@ Clears input and context when RETAIN-CONTEXT is nil."
   :render
   (let* ((current-usage (or (plist-get --props-- :usage)
                             usage))
-         (current-slices (or (plist-get --props-- :slices)
-                             slices))
          (render-conversation (benedict-vui-root--append-streaming
                                conversation streaming))
-         (set-input (vui-use-memo ()
-                      (vui-async-callback (value)
-                        (vui-set-state :input-text value))))
-         (set-slices (vui-use-memo ()
-                       (vui-async-callback (slices-val)
-                         (vui-set-state :slices slices-val))))
-         (submit-handler (vui-use-memo (on-submit retain-context)
-                           (lambda (value)
-                             (benedict-vui-root--submit
-                              value on-submit retain-context))))
          (toggle-block (vui-use-memo ()
                          (vui-async-callback (block-id &optional next)
                            (vui-set-state :collapsed-blocks
                              (lambda (current)
                                (benedict-vui-root--toggle-collapsed-block
-                                current block-id next))))))
-         (slice-remove (vui-use-memo (current-slices on-slices-change)
-                         (lambda (slice-id)
-                           (let ((updated (cl-remove-if
-                                           (lambda (slice)
-                                             (equal (plist-get slice :id) slice-id))
-                                           current-slices)))
-                             (vui-set-state :slices updated)
-                             (when on-slices-change
-                               (funcall on-slices-change updated))))))
-         (input-change (vui-use-memo ()
-                         (lambda (value)
-                           (vui-set-state :input-text value)))))
-     (vui-use-effect (register-actions set-input set-slices toggle-block)
-       (when register-actions
-         (funcall register-actions
-                 (list :set-input set-input
-                       :set-slices set-slices
-                       :toggle-block toggle-block)))
-       (lambda ()
-         (when register-actions
-           (funcall register-actions nil))))
+                                current block-id next)))))))
+      (vui-use-effect (register-actions toggle-block)
+        (when register-actions
+          (funcall register-actions
+                   (list :toggle-block toggle-block)))
+        (lambda ()
+          (when register-actions
+            (funcall register-actions nil))))
     (vui-vstack
      (vui-component 'benedict-vui-chat-header
        :provider provider
@@ -170,24 +122,9 @@ Clears input and context when RETAIN-CONTEXT is nil."
        :streaming streaming
        :collapsed-blocks collapsed-blocks
        :on-toggle-block toggle-block)
-     (vui-component 'benedict-vui-input-area
-      :slices current-slices
-      :input-text input-text
-      :on-input-change input-change
-      :on-submit submit-handler
-      :on-slice-remove slice-remove
-      :history history
-      :placeholder "Ask Benedict..."
-      :size 5
-      :field-key 'root-input)
      (vui-component 'benedict-vui-status-bar
       :usage current-usage
       :error error))))
-
-;;; Session event subscription
-
-(defvar-local benedict-vui-root--session-subscription nil
-  "Subscription function for session events.")
 
 (defun benedict-vui-root--subscribe-to-session (session)
   "Subscribe to SESSION events.

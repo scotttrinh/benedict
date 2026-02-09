@@ -10,7 +10,6 @@
 (require 'vui)
 (require 'benedict-provider-fake)
 (require 'benedict-session)
-(require 'benedict-vui-compose-field)
 (require 'benedict-vui-root)
 
 (defmacro with-mounted-vui-root (&rest body)
@@ -24,15 +23,10 @@ Binds `session' in BODY so tests can drive session events directly."
                                            :model benedict-provider-fake-default-model)))
      (with-mounted-vui-component
          (vui-component 'benedict-vui-root
-                        :session session
-                        :initial-slices nil
-                        :initial-input nil
-                        :retain-context nil
-                        :register-actions nil
-                        :on-slices-change nil
-                        :on-provider-click nil
-                        :on-submit #'ignore)
-       ,@body)))
+                         :session session
+                         :register-actions nil
+                         :on-provider-click nil)
+        ,@body)))
 
 (defmacro with-mounted-vui-root-script (script &rest body)
   "Mount `benedict-vui-root' with fake provider SCRIPT, then run BODY."
@@ -84,27 +78,6 @@ Flushes VUI before BODY and after teardown so tests observe settled state."
           (unless clicked
             (error "No button widget found for label %s" label)))
       (error "No button labeled %s" label))))
-
-(defun benedict-vui-test--set-first-field (value)
-  "Set the first widget field to VALUE and notify."
-  (let ((widget (car widget-field-list)))
-    (unless widget
-      (error "No widget field found in buffer"))
-    (widget-value-set widget value)
-    (widget-apply widget :notify widget)))
-
-(defun benedict-vui-test--set-input (value)
-  "Set VALUE in the first compose field and flush rendering."
-  (benedict-vui-test--set-first-field value)
-  (vui-flush-sync)
-  value)
-
-(defun benedict-vui-test--submit-input (value)
-  "Set VALUE in the first compose field, submit, and flush rendering."
-  (benedict-vui-test--set-input value)
-  (call-interactively #'benedict-vui-compose-field-submit)
-  (vui-flush-sync)
-  value)
 
 (cl-defun benedict-vui-test--wait-until (predicate &key (timeout 2.0) (interval 0.01))
   "Wait until PREDICATE return non-nil.
