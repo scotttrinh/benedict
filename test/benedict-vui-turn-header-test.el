@@ -27,6 +27,17 @@
   "Missing timestamp does not render a timestamp node."
   (should-not (benedict-vui-turn-header--timestamp-node nil)))
 
+(ert-deftest benedict-vui-turn-header-falls-back-to-metadata-status ()
+  "Metadata status supplies badge role when role is nil."
+  (should (eq (benedict-vui-turn-header--status nil '(:status user)) 'user))
+  (should (eq (benedict-vui-turn-header--status nil '(:status "system")) 'system))
+  (should (eq (benedict-vui-turn-header--status nil nil) 'assistant)))
+
+(ert-deftest benedict-vui-turn-header-normalizes-role-edge-cases ()
+  "Role normalization handles unknown and non-symbol values safely."
+  (should (eq (benedict-vui-turn-header--normalize-role "TOOL") 'tool))
+  (should (eq (benedict-vui-turn-header--normalize-role 123) 'assistant)))
+
 (ert-deftest benedict-vui-turn-header-render-test ()
   "Turn header renders role badge and timestamp."
   (let ((ts (encode-time 0 0 12 1 1 2025)))

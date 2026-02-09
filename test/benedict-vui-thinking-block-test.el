@@ -19,8 +19,34 @@
                  :collapsed collapsed
                  :on-toggle (lambda (next)
                               (vui-set-state :collapsed next))
-                 :message-key message-key
-                 :block-id block-id))
+                  :message-key message-key
+                  :block-id block-id))
+
+(vui-defcomponent benedict-vui-thinking-block-test--controlled-harness (thinking-data)
+  :state ((collapsed t)
+          (last-toggle nil))
+  :render
+  (vui-vstack
+   (vui-component 'benedict-vui-thinking-block
+                  :thinking-data thinking-data
+                  :collapsed collapsed
+                  :on-toggle (lambda (next)
+                               (vui-set-state :last-toggle next))
+                  :message-key "msg-controlled"
+                  :block-id "block-controlled")
+   (vui-text (format "Last toggle: %S" last-toggle))))
+
+(vui-defcomponent benedict-vui-thinking-block-test--uncontrolled-harness (thinking-data)
+  :state ((last-toggle nil))
+  :render
+  (vui-vstack
+   (vui-component 'benedict-vui-thinking-block
+                  :thinking-data thinking-data
+                  :on-toggle (lambda (next)
+                               (vui-set-state :last-toggle next))
+                  :message-key "msg-uncontrolled"
+                  :block-id "block-uncontrolled")
+   (vui-text (format "Last toggle: %S" last-toggle))))
 
 (ert-deftest benedict-vui-thinking-block-mount-collapsed-by-default ()
   "Thinking block hides content when mounted collapsed."
@@ -76,6 +102,56 @@
     (let ((text (buffer-string)))
       (should (string-match-p (regexp-quote "[Encrypted reasoning block]") text))
       (should (string-match-p "ciphertext" text)))))
+
+(ert-deftest benedict-vui-thinking-block-empty-payload-nil ()
+  "Nil thinking payload expands safely with no detail text."
+  (with-mounted-vui-component
+      (vui-component 'benedict-vui-thinking-block-test--harness
+                     :thinking-data nil
+                     :message-key "msg-1"
+                     :block-id "block-1")
+    (benedict-vui-test--click-button-at (point-min))
+    (vui-flush-sync)
+    (let ((text (buffer-string)))
+      (should (string-match-p "THINKING" text))
+      (should-not (string-match-p "Encrypted reasoning block" text)))))
+
+(ert-deftest benedict-vui-thinking-block-empty-payload-empty-string ()
+  "Empty string thinking payload does not render placeholder content."
+  (with-mounted-vui-component
+      (vui-component 'benedict-vui-thinking-block-test--harness
+                     :thinking-data ""
+                     :message-key "msg-1"
+                     :block-id "block-1")
+    (benedict-vui-test--click-button-at (point-min))
+    (vui-flush-sync)
+    (let ((text (buffer-string)))
+      (should (string-match-p "THINKING" text))
+      (should-not (string-match-p "Encrypted reasoning block" text)))))
+
+(ert-deftest benedict-vui-thinking-block-controlled-collapse-behavior ()
+  "Controlled mode calls on-toggle without changing internal collapse state."
+  (with-mounted-vui-component
+      (vui-component 'benedict-vui-thinking-block-test--controlled-harness
+                     :thinking-data "Controlled content")
+    (should-not (string-match-p "Controlled content" (buffer-string)))
+    (benedict-vui-test--click-button-at (point-min))
+    (vui-flush-sync)
+    (let ((text (buffer-string)))
+      (should-not (string-match-p "Controlled content" text))
+      (should (string-match-p "Last toggle: nil" text)))))
+
+(ert-deftest benedict-vui-thinking-block-uncontrolled-collapse-behavior ()
+  "Uncontrolled mode toggles internal collapse state and shows content."
+  (with-mounted-vui-component
+      (vui-component 'benedict-vui-thinking-block-test--uncontrolled-harness
+                     :thinking-data "Uncontrolled content")
+    (should-not (string-match-p "Uncontrolled content" (buffer-string)))
+    (benedict-vui-test--click-button-at (point-min))
+    (vui-flush-sync)
+    (let ((text (buffer-string)))
+      (should (string-match-p "Uncontrolled content" text))
+      (should (string-match-p "Last toggle: nil" text)))))
 
 (provide 'test/benedict-vui-thinking-block-test)
 ;;; benedict-vui-thinking-block-test.el ends here

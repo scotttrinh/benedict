@@ -72,8 +72,39 @@
         (should (equal timer timer-object))
         (should (equal states '(t)))
         (should timer-callback)
-        (funcall timer-callback)
-        (should (equal states '(nil t)))))))
+         (funcall timer-callback)
+         (should (equal states '(nil t)))))))
+
+(ert-deftest benedict-vui-code-block-copy-updates-kill-ring ()
+  "Copy helper pushes normalized code into the kill ring."
+  (let ((kill-ring nil)
+        (kill-ring-yank-pointer nil)
+        (timer-callback nil))
+    (cl-letf (((symbol-function 'run-at-time)
+               (lambda (&rest args)
+                 (setq timer-callback (car (last args)))
+                 :fake-timer)))
+      (benedict-vui-code-block--copy "(message \"hello\")" (lambda (&rest _)))
+      (should (equal (current-kill 0) "(message \"hello\")"))
+      (should timer-callback))))
+
+(ert-deftest benedict-vui-code-block-large-content-display-safety ()
+  "Code block renders very large payloads without truncation or crashes."
+  (let ((large-code (make-string 12000 ?x)))
+    (with-mounted-vui-component
+        (vui-component 'benedict-vui-code-block
+                       :code large-code
+                       :language "text"
+                       :message-key "msg-large"
+                       :block-id "block-large")
+      (should (string-match-p "TEXT" (buffer-string)))
+      (should (search-forward (substring large-code 0 64) nil t))
+      (should (search-forward (substring large-code (- (length large-code) 64)) nil t))
+      (benedict-vui-test--assert-text-properties-for
+       (substring large-code 0 32)
+       :region-kind 'body
+       :message-key "msg-large"
+       :block-id "block-large"))))
 
 (ert-deftest benedict-vui-code-block-render-applies-message-properties ()
   "Rendered code carries message and block text properties."

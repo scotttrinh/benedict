@@ -11,6 +11,14 @@
 (require 'test/benedict-vui-test-utils)
 (require 'benedict-vui-streaming-indicator)
 
+(vui-defcomponent benedict-vui-streaming-indicator-test--harness ()
+  :state ((visible nil))
+  :render
+  (vui-vstack
+   (vui-button "Show" :on-click (lambda (&rest _) (vui-set-state :visible t)))
+   (vui-button "Hide" :on-click (lambda (&rest _) (vui-set-state :visible nil)))
+   (vui-component 'benedict-vui-streaming-indicator :visible visible)))
+
 (ert-deftest benedict-vui-streaming-indicator-frames-exist ()
   "Spinner frames are defined."
   (should (> (length benedict-vui-streaming-indicator--frames) 0))
@@ -54,6 +62,55 @@
       (should-not (string-match-p
                    (regexp-quote (car benedict-vui-streaming-indicator--frames))
                    text)))))
+
+(ert-deftest benedict-vui-streaming-indicator-visible-transitions-start-and-stop-timer ()
+  "Toggling visible state starts and then stops animation timer."
+  (let ((run-count 0)
+        (cancelled nil)
+        (fake-timer (list :timer "streaming")))
+    (cl-letf (((symbol-function 'run-with-timer)
+               (lambda (&rest _)
+                 (setq run-count (1+ run-count))
+                 fake-timer))
+              ((symbol-function 'cancel-timer)
+               (lambda (timer)
+                 (push timer cancelled))))
+      (with-mounted-vui-component
+          (vui-component 'benedict-vui-streaming-indicator-test--harness)
+        (should (= run-count 0))
+        (benedict-vui-test--click-button-labeled "Show")
+        (vui-flush-sync)
+        (should (> run-count 0))
+        (should (cl-some (lambda (frame)
+                           (string-match-p (regexp-quote frame) (buffer-string)))
+                         benedict-vui-streaming-indicator--frames))
+        (benedict-vui-test--click-button-labeled "Hide")
+        (vui-flush-sync)
+        (should (> (length cancelled) 0))
+        (should-not (cl-some (lambda (frame)
+                               (string-match-p (regexp-quote frame) (buffer-string)))
+                             benedict-vui-streaming-indicator--frames))))))
+
+(ert-deftest benedict-vui-streaming-indicator-cancels-timer-on-unmount ()
+  "Unmounting a visible indicator cancels its animation timer."
+  (skip-unless (fboundp 'vui-unmount))
+  (let ((cancelled nil)
+        (fake-timer (list :timer "streaming")))
+    (cl-letf (((symbol-function 'run-with-timer)
+               (lambda (&rest _)
+                 fake-timer))
+              ((symbol-function 'cancel-timer)
+               (lambda (timer)
+                 (push timer cancelled))))
+      (with-temp-buffer
+        (let ((mount (vui-mount (vui-component 'benedict-vui-streaming-indicator :visible t)
+                                (buffer-name))))
+          (vui-flush-sync)
+          (should mount)
+          (vui-unmount mount)
+          (vui-flush-sync))))
+    (should (> (length cancelled) 0))
+    (should (equal (car cancelled) fake-timer))))
 
 (provide 'test/benedict-vui-streaming-indicator-test)
 ;;; benedict-vui-streaming-indicator-test.el ends here

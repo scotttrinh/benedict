@@ -26,8 +26,14 @@
   (should (equal (benedict-vui-provider-badge--format-model
                   "openai/gpt-4")
                  "gpt-4"))
+  (should (equal (benedict-vui-provider-badge--format-model "gpt-4")
+                 "gpt-4"))
+  (should (equal (benedict-vui-provider-badge--format-model "")
+                 "unknown"))
   (should (equal (benedict-vui-provider-badge--format-model nil)
-                 "unknown")))
+                 "unknown"))
+  (should (equal (benedict-vui-provider-badge--format-model 'gpt-4)
+                 "gpt-4")))
 
 (ert-deftest benedict-vui-provider-badge-render-test ()
   "Provider badge renders formatted provider and model."
@@ -44,6 +50,19 @@
     (let* ((text (buffer-string))
            (provider-face (get-text-property 0 'face text)))
       (should (eq provider-face 'benedict-chat-header-provider)))))
+
+(ert-deftest benedict-vui-provider-badge-invokes-click-handler ()
+  "Provider label is clickable when on-click callback is provided."
+  (let ((clicked 0))
+    (with-mounted-vui-component
+        (vui-component 'benedict-vui-provider-badge
+                       :provider 'anthropic
+                       :model "claude-3-opus"
+                       :on-click (lambda ()
+                                   (setq clicked (1+ clicked))))
+      (benedict-vui-test--click-button-labeled "ANT")
+      (vui-flush-sync)
+      (should (= clicked 1)))))
 
 (provide 'test/benedict-vui-provider-badge-test)
 ;;; benedict-vui-provider-badge-test.el ends here

@@ -37,9 +37,18 @@
     (when text
       (vui-text (propertize text 'face 'benedict-chat-header-time)))))
 
+(defun benedict-vui-turn-header--status (role metadata)
+  "Return badge status derived from ROLE or METADATA."
+  (let ((meta (and (listp metadata) metadata)))
+    (benedict-vui-turn-header--normalize-role
+     (or role
+         (and meta (or (plist-get meta :role)
+                       (plist-get meta :status)))
+         'assistant))))
+
 (vui-defcomponent benedict-vui-turn-header (role timestamp metadata)
   :render
-  (let* ((actual-role (benedict-vui-turn-header--normalize-role role))
+  (let* ((actual-role (benedict-vui-turn-header--status role metadata))
          (timestamp-node (benedict-vui-turn-header--timestamp-node timestamp))
          (children (list (vui-component 'benedict-vui-badge :status actual-role))))
     (when timestamp-node

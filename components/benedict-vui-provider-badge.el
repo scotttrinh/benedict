@@ -7,6 +7,7 @@
 ;;; Code:
 
 (require 'cl-lib)
+(require 'subr-x)
 (require 'vui)
 (require 'benedict)
 (require 'benedict-vui-badge)
@@ -20,10 +21,16 @@
 
 (defun benedict-vui-provider-badge--format-model (model)
   "Return a display label for MODEL."
-  (if model
-      (let ((parts (split-string model "/")))
-        (car (last parts)))
-    "unknown"))
+  (cond
+   ((null model) "unknown")
+   ((stringp model)
+    (let* ((trimmed (string-trim model))
+           (parts (and (> (length trimmed) 0) (split-string trimmed "/" t)))
+           (tail (car (last parts))))
+      (if (and tail (> (length tail) 0))
+          tail
+        "unknown")))
+   (t (format "%s" model))))
 
 (vui-defcomponent benedict-vui-provider-badge (provider model on-click)
   :render

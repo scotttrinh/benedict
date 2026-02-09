@@ -40,5 +40,24 @@
      :message-key "msg-1"
      :block-id "block-1")))
 
+(ert-deftest benedict-vui-text-block-preserves-whitespace ()
+  "Text block keeps leading/trailing and multiline whitespace intact."
+  (let* ((content "  first line\n\n second line  ")
+         (text (benedict-vui-text-block--propertize content "msg-ws" "block-ws")))
+    (should (equal text content))
+    (should (eq (get-text-property 0 'benedict-region-kind text) 'body))
+    (should (equal (get-text-property 0 'benedict-message-key text) "msg-ws"))
+    (should (equal (get-text-property (1- (length text)) 'benedict-block-id text) "block-ws"))))
+
+(ert-deftest benedict-vui-text-block-long-content-retains-properties ()
+  "Long content remains intact and fully propertized."
+  (let* ((content (make-string 10000 ?a))
+         (text (benedict-vui-text-block--propertize content "msg-long" "block-long")))
+    (should (= (length text) 10000))
+    (should (eq (get-text-property 0 'benedict-region-kind text) 'body))
+    (should (eq (get-text-property 9999 'benedict-region-kind text) 'body))
+    (should (equal (get-text-property 9999 'benedict-message-key text) "msg-long"))
+    (should (equal (get-text-property 9999 'benedict-block-id text) "block-long"))))
+
 (provide 'test/benedict-vui-text-block-test)
 ;;; benedict-vui-text-block-test.el ends here

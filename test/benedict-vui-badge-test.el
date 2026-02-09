@@ -47,6 +47,20 @@
              'benedict-chat-header
              (get-text-property 0 'face text)))))
 
+(ert-deftest benedict-vui-badge-uses-theme-face-when-status-unknown ()
+  "Unknown status falls back to THEME face when provided."
+  (let* ((face (benedict-vui-badge--face 'mystery 'benedict-chat-header-time))
+         (text (benedict-vui-badge--propertize "MYSTERY" face)))
+    (should (eq face 'benedict-chat-header-time))
+    (should (benedict-vui-badge-test--face-member-p
+             'benedict-chat-header-time
+             (get-text-property 0 'face text)))))
+
+(ert-deftest benedict-vui-badge-coerces-theme-face-list ()
+  "Theme face list uses first valid face symbol."
+  (let ((face (benedict-vui-badge--face 'mystery '(not-a-face benedict-chat-user))))
+    (should (eq face 'benedict-chat-user))))
+
 (ert-deftest benedict-vui-badge-render-test ()
   "Badge renders directly to buffer."
   (with-mounted-vui-component

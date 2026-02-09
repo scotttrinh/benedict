@@ -15,8 +15,9 @@
 (vui-defcomponent benedict-vui-collapsible (header content on-toggle collapsed)
   :render
   (let* ((toggle-handler (lambda (&rest _)
-                           (let ((next (not collapsed)))
-                               (funcall on-toggle next)))))
+                            (let ((next (not collapsed)))
+                              (when (functionp on-toggle)
+                                (funcall on-toggle next))))))
     (vui-vstack
      (vui-hstack
       (vui-button (benedict-vui-collapsible--indicator collapsed)
