@@ -34,11 +34,11 @@
                      :message-key "msg-1"
                      :block-id "block-1")
     (should (string-match-p "Hello world" (buffer-string)))
-    (goto-char (point-min))
-    (let ((text (buffer-string)))
-      (should (eq (get-text-property 0 'benedict-region-kind text) 'body))
-      (should (equal (get-text-property 0 'benedict-message-key text) "msg-1"))
-      (should (equal (get-text-property 0 'benedict-block-id text) "block-1")))))
+    (benedict-vui-test--assert-text-properties-for
+     "Hello world"
+     :region-kind 'body
+     :message-key "msg-1"
+     :block-id "block-1")))
 
 (provide 'test/benedict-vui-text-block-test)
 ;;; benedict-vui-text-block-test.el ends here

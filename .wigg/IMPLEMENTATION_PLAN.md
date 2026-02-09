@@ -22,7 +22,7 @@ Replace broad mount-smoke confidence with behavior-driven coverage that proves t
 
 ### Phase 0 - Harness and Test Utilities
 
-- [ ] Expand `test/benedict-vui-test-utils.el` with helpers for:
+- [x] Expand `test/benedict-vui-test-utils.el` with helpers for:
   - mounting root with session + fake provider defaults,
   - driving submit/input consistently,
   - waiting/flush patterns for fake streaming steps,
