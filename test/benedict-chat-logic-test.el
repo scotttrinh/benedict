@@ -273,7 +273,74 @@
               (error (setq err e)))
             (when (buffer-live-p buffer)
               (kill-buffer buffer)))
-          (funcall done err)))))))
+           (funcall done err)))))))
+
+(ert-deftest-async benedict-chat-tool-denial-recovers-in-loop (done)
+  "Permission-denied tool calls are structured and the loop can recover."
+  (benedict-test-with-bindings done
+      ((benedict-provider 'fake)
+       (benedict-session--registry (make-hash-table :test #'equal))
+       (benedict-provider-fake-latency-seconds 0.01)
+       (benedict-provider-fake-script
+        (list (list :type 'success
+                    :content ""
+                    :tool-calls (list (list :id "call-denied"
+                                            :name 'project-search
+                                            :arguments '(:query "needle"))))
+              (list :type 'success
+                    :content "Recovered after permission denial.")))
+       (benedict-tool-permission-predicate (lambda (_tool _args) nil)))
+    (let ((buffer (generate-new-buffer " *Benedict Tool Denial Recovery*")))
+      (with-current-buffer buffer
+        (benedict-chat-mode)
+        (benedict-chat--init-buffer)
+        (benedict-chat--send-text "Try project-search, then recover if denied."))
+      (let ((deadline (+ (float-time) 3.0)))
+        (while (and (buffer-live-p buffer)
+                    (with-current-buffer buffer
+                      (and benedict-chat--session
+                           (benedict-session-request-active-p benedict-chat--session)))
+                    (< (float-time) deadline))
+          (sleep-for 0.05)
+          (accept-process-output nil 0.05))
+        (with-current-buffer buffer
+          (benedict-chat--send-text "Okay, recover with an alternative."))
+        (let ((second-deadline (+ (float-time) 3.0)))
+          (while (and (buffer-live-p buffer)
+                      (with-current-buffer buffer
+                        (and benedict-chat--session
+                             (benedict-session-request-active-p benedict-chat--session)))
+                      (< (float-time) second-deadline))
+            (sleep-for 0.05)
+            (accept-process-output nil 0.05)))
+        (let (err)
+          (unwind-protect
+              (condition-case e
+                  (with-current-buffer buffer
+                    (let* ((messages (and benedict-chat--session
+                                          (benedict-session-messages-chronological benedict-chat--session)))
+                           (tool-message
+                            (cl-find-if (lambda (message)
+                                          (eq (plist-get message :role) 'tool))
+                                        messages))
+                           (tool-metadata (and tool-message (plist-get tool-message :metadata)))
+                           (tool-error (and tool-metadata (plist-get tool-metadata :error)))
+                           (assistant-messages
+                            (cl-remove-if-not (lambda (message)
+                                                (eq (plist-get message :role) 'assistant))
+                                              messages))
+                           (latest-assistant (car (last assistant-messages))))
+                      (should tool-message)
+                      (should (eq 'failure (plist-get tool-metadata :status)))
+                      (should (eq 'permission-denied (plist-get tool-error :code)))
+                      (should (string-match-p "Tool denied:" (plist-get tool-message :content)))
+                      (should latest-assistant)
+                      (should (string-match-p "Recovered after permission denial"
+                                              (plist-get latest-assistant :content)))))
+                (error (setq err e)))
+            (when (buffer-live-p buffer)
+              (kill-buffer buffer)))
+          (funcall done err))))))
 
 (ert-deftest benedict-chat-resolves-provider-override ()
   "Provider override takes precedence in resolution chain."

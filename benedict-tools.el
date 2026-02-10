@@ -499,10 +499,13 @@ ARGS must be a plist passed directly to the tool implementation."
          (predicate (benedict--resolve-tool-permission-predicate))
          (decision (and predicate (benedict--tool-permission-decision predicate id args)))
          (approved
-          (pcase decision
-            ('allow t)
-            ('deny (signal 'benedict-error (list (format "Tool %S denied by permission predicate" id))))
-            (_ (benedict--tool-approval-allows-p spec args)))))
+           (pcase decision
+             ('allow t)
+             ('deny (signal 'benedict-tool-denied
+                            (list (format "Tool %S denied by permission predicate" id)
+                                  :tool id
+                                  :source 'predicate)))
+             (_ (benedict--tool-approval-allows-p spec args)))))
     (unless approved
       (signal 'benedict-error (list (format "Tool %S invocation canceled by user" id))))
     (benedict--tool-call-direct id args)))

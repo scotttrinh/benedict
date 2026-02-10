@@ -475,13 +475,21 @@ Return plist (:status :output :error).  Emit tool-started and tool-completed eve
         (if benedict-session-tool-invoke-fn
             (setq output (funcall benedict-session-tool-invoke-fn tool-id arguments))
           (error "No tool invoke function configured"))
+      (benedict-tool-denied
+       (setq status 'failure)
+       (setq error-info (list :message (error-message-string err)
+                              :type (car err)
+                              :data (cdr err)
+                              :code 'permission-denied))
+       (lgr-log benedict-session--logger lgr-level-warn
+                "Tool %s denied: %s" tool-id (error-message-string err)))
       (error
        (setq status 'failure)
        (setq error-info (list :message (error-message-string err)
                               :type (car err)
                               :data (cdr err)))
        (lgr-log benedict-session--logger lgr-level-error
-               "Tool %s failed: %s" tool-id (error-message-string err))))
+                "Tool %s failed: %s" tool-id (error-message-string err))))
     (benedict-session--emit session 'tool-completed
                             :tool-call tool-call
                             :tool-id tool-id
@@ -499,7 +507,9 @@ Return plist (:status :output :error).  Emit tool-started and tool-completed eve
 Return a plist suitable for adding to message history."
   (let* ((status (if error-info 'failure 'success))
          (content (if error-info
-                      (format "Tool error: %s" (plist-get error-info :message))
+                      (if (eq (plist-get error-info :code) 'permission-denied)
+                          (format "Tool denied: %s" (plist-get error-info :message))
+                        (format "Tool error: %s" (plist-get error-info :message)))
                     (cond
                      ((stringp output) output)
                      ((plist-get output :text) (plist-get output :text))

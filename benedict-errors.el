@@ -15,5 +15,9 @@
   (define-error 'benedict-provider-error "Benedict provider error"
                 'benedict-error))
 
+(unless (get 'benedict-tool-denied 'error-conditions)
+  (define-error 'benedict-tool-denied "Benedict tool permission denied"
+                'benedict-error))
+
 (provide 'benedict-errors)
 ;;; benedict-errors.el ends here

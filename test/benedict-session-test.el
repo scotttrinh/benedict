@@ -369,6 +369,24 @@
         (should (plist-get result :error))
         (should (cl-find 'tool-completed events :key #'car))))))
 
+(ert-deftest benedict-session-test-invoke-tool-permission-denied ()
+  "Permission denials are captured as structured failures."
+  (let ((benedict-session--registry (make-hash-table :test 'equal))
+        (benedict-session-tool-invoke-fn
+         (lambda (_id _args)
+           (signal 'benedict-tool-denied '("Denied by policy" :tool project-search))))
+        (events nil))
+    (let ((session (benedict-session-create)))
+      (add-hook 'benedict-session-event-hook
+                (lambda (_s type payload) (push (cons type payload) events)))
+      (let* ((result (benedict-session--invoke-tool
+                      session '(:id "call-1" :name project-search :arguments nil)))
+             (error-info (plist-get result :error)))
+        (should (eq 'failure (plist-get result :status)))
+        (should (eq 'permission-denied (plist-get error-info :code)))
+        (should (eq 'benedict-tool-denied (plist-get error-info :type)))
+        (should (cl-find 'tool-completed events :key #'car))))))
+
 (ert-deftest benedict-session-test-process-tool-calls ()
   "Processing multiple tool calls records all results."
   (let ((benedict-session--registry (make-hash-table :test 'equal))

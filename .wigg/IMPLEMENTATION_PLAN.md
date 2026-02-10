@@ -24,7 +24,7 @@ Implement programmable tool permissions as the next vertical effort so Benedict 
 
 ### Session + Model Recovery Slice
 
-- [ ] **Return structured denial results through session tool flow** (refs: 04_agent_loop.md, 07_harness_and_skills.md)
+- [x] **Return structured denial results through session tool flow** (refs: 04_agent_loop.md, 07_harness_and_skills.md)
   - Scope: Ensure denied tool calls surface as structured tool failures (permission denied) that the model can recover from, instead of opaque hard errors.
   - Files: `benedict-tools.el`, `benedict-session.el`.
   - Tests: Extend `test/benedict-session-test.el` for denied-call result formatting and `test/benedict-chat-logic-test.el` for recovery behavior in looped tool-call turns.
