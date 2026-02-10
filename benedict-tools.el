@@ -469,6 +469,26 @@ string, and the argument plist."
          (prompt (format "Benedict tool %s with args %S? " label args)))
     (y-or-n-p prompt)))
 
+(defun benedict--tool-approval-allows-p (spec args)
+  "Return non-nil when SPEC should run with ARGS per legacy approval metadata."
+  (let ((approval (plist-get spec :approval)))
+    (cond
+     ((or (null approval) (eq approval 'auto)) t)
+     ((memq approval '(confirm always))
+      (benedict--prompt-for-approval spec args))
+     (t (benedict--prompt-for-approval spec args)))))
+
+(defun benedict--tool-permission-decision (predicate id args)
+  "Return permission decision from PREDICATE for tool ID and ARGS.
+Returns one of the symbols `allow', `deny', or `fallback'."
+  (condition-case _err
+      (let ((result (funcall predicate id (benedict--tool-permission-normalize-args args))))
+        (cond
+         ((eq result t) 'allow)
+         ((eq result nil) 'deny)
+         (t 'fallback)))
+    (error 'fallback)))
+
 (defun benedict-tool-invoke (id &optional args)
   "Invoke tool ID with ARGS after applying the tool's approval policy.
 ARGS must be a plist passed directly to the tool implementation."
@@ -476,13 +496,13 @@ ARGS must be a plist passed directly to the tool implementation."
     (signal 'wrong-type-argument (list 'plistp args)))
   (let* ((spec (or (gethash id benedict--tools)
                    (signal 'benedict-error (list (format "Unknown tool: %S" id)))))
-         (approval (plist-get spec :approval))
+         (predicate (benedict--resolve-tool-permission-predicate))
+         (decision (and predicate (benedict--tool-permission-decision predicate id args)))
          (approved
-          (cond
-           ((or (null approval) (eq approval 'auto)) t)
-           ((memq approval '(confirm always))
-            (benedict--prompt-for-approval spec args))
-           (t (benedict--prompt-for-approval spec args)))))
+          (pcase decision
+            ('allow t)
+            ('deny (signal 'benedict-error (list (format "Tool %S denied by permission predicate" id))))
+            (_ (benedict--tool-approval-allows-p spec args)))))
     (unless approved
       (signal 'benedict-error (list (format "Tool %S invocation canceled by user" id))))
     (benedict--tool-call-direct id args)))

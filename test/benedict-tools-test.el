@@ -2,6 +2,7 @@
 ;;; Code:
 
 (require 'ert)
+(require 'cl-lib)
 (require 'benedict-tools)
 
 ;;; Permission resolver tests
@@ -40,6 +41,105 @@
             (kill-local-variable 'benedict-tool-permission-predicate)
             (should-not (benedict--resolve-tool-permission-predicate))))
       (set-default 'benedict-tool-permission-predicate old-default))))
+
+(ert-deftest benedict-tools-permission-predicate-allows-invocation-test ()
+  "Predicate returning t should allow invocation without prompting."
+  (let* ((tool-id 'benedict-tools-test-permission-allow)
+         (called nil)
+         (prompted nil)
+         (old-default (default-value 'benedict-tool-permission-predicate)))
+    (unwind-protect
+        (progn
+          (benedict-tools-register
+           :id tool-id
+           :fn (lambda (&rest _args)
+                 (setq called t)
+                 'ok)
+           :approval 'confirm)
+          (set-default 'benedict-tool-permission-predicate
+                       (lambda (_tool _args) t))
+          (cl-letf (((symbol-function 'benedict--prompt-for-approval)
+                     (lambda (_spec _args)
+                       (setq prompted t)
+                       t)))
+            (should (eq (benedict-tool-invoke tool-id nil) 'ok))
+            (should called)
+            (should-not prompted)))
+      (set-default 'benedict-tool-permission-predicate old-default)
+      (remhash tool-id benedict--tools))))
+
+(ert-deftest benedict-tools-permission-predicate-denies-invocation-test ()
+  "Predicate returning nil should deny invocation."
+  (let* ((tool-id 'benedict-tools-test-permission-deny)
+         (called nil)
+         (old-default (default-value 'benedict-tool-permission-predicate)))
+    (unwind-protect
+        (progn
+          (benedict-tools-register
+           :id tool-id
+           :fn (lambda (&rest _args)
+                 (setq called t)
+                 'ok)
+           :approval 'auto)
+          (set-default 'benedict-tool-permission-predicate
+                       (lambda (_tool _args) nil))
+          (should-error (benedict-tool-invoke tool-id nil) :type 'benedict-error)
+          (should-not called))
+      (set-default 'benedict-tool-permission-predicate old-default)
+      (remhash tool-id benedict--tools))))
+
+(ert-deftest benedict-tools-permission-predicate-error-falls-back-test ()
+  "Predicate errors should fall back to legacy approval flow."
+  (let* ((tool-id 'benedict-tools-test-permission-error)
+         (called nil)
+         (prompted nil)
+         (old-default (default-value 'benedict-tool-permission-predicate)))
+    (unwind-protect
+        (progn
+          (benedict-tools-register
+           :id tool-id
+           :fn (lambda (&rest _args)
+                 (setq called t)
+                 'ok)
+           :approval 'confirm)
+          (set-default 'benedict-tool-permission-predicate
+                       (lambda (_tool _args)
+                         (error "Predicate failure")))
+          (cl-letf (((symbol-function 'benedict--prompt-for-approval)
+                     (lambda (_spec _args)
+                       (setq prompted t)
+                       t)))
+            (should (eq (benedict-tool-invoke tool-id nil) 'ok))
+            (should called)
+            (should prompted)))
+      (set-default 'benedict-tool-permission-predicate old-default)
+      (remhash tool-id benedict--tools))))
+
+(ert-deftest benedict-tools-permission-predicate-non-boolean-falls-back-test ()
+  "Non-boolean predicate result should fall back to legacy approval flow."
+  (let* ((tool-id 'benedict-tools-test-permission-non-bool)
+         (called nil)
+         (prompted nil)
+         (old-default (default-value 'benedict-tool-permission-predicate)))
+    (unwind-protect
+        (progn
+          (benedict-tools-register
+           :id tool-id
+           :fn (lambda (&rest _args)
+                 (setq called t)
+                 'ok)
+           :approval 'confirm)
+          (set-default 'benedict-tool-permission-predicate
+                       (lambda (_tool _args) :maybe))
+          (cl-letf (((symbol-function 'benedict--prompt-for-approval)
+                     (lambda (_spec _args)
+                       (setq prompted t)
+                       t)))
+            (should (eq (benedict-tool-invoke tool-id nil) 'ok))
+            (should called)
+            (should prompted)))
+      (set-default 'benedict-tool-permission-predicate old-default)
+      (remhash tool-id benedict--tools))))
 
 ;;; Project search tests
 

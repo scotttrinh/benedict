@@ -15,7 +15,7 @@ Implement programmable tool permissions as the next vertical effort so Benedict 
   - Dependencies: None.
   - Notes: Keep the contract strict: predicate is called with tool symbol + normalized plist args; no behavior changes to tool implementations yet.
 
-- [ ] **Integrate predicate decisions into tool invocation with safe fallback** (refs: 04_agent_loop.md, 06_tools.md)
+- [x] **Integrate predicate decisions into tool invocation with safe fallback** (refs: 04_agent_loop.md, 06_tools.md)
   - Scope: Update tool invocation so predicate result gates execution (`t` allow, `nil` deny); predicate errors or non-boolean values trigger fallback to existing interactive approval prompt.
   - Files: `benedict-tools.el`.
   - Tests: Extend `test/benedict-tools-test.el` with cases for allow, deny, predicate error, and non-boolean return; assert fallback prompt path is used when required.
