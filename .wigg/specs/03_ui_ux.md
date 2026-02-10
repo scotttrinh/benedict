@@ -358,6 +358,8 @@ MVP note:
 Approvals should not be the primary UX. The main safety mechanism is the harness (scope + budgets + sandbox). The approval UI is used when:
 - a tool call requests privileged effects, or
 - a tool call requests scope expansion (paths, commands, network), or
+- no permission predicate is configured, or
+- a configured predicate fails and the harness falls back, or
 - the user has configured a stricter policy.
 
 ### 7.1 Simple Approval

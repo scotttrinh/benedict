@@ -62,6 +62,10 @@ When a limit is reached, the loop enters the **`checkpoint`** state.
 3.  **Harness Policy Check (Primary Safety Mechanism):**
     - Validate that the tool call stays inside the sandbox scope (paths, buffers, commands).
     - Enforce budgets (turn/time/token/cost/tool-call caps).
+    - Evaluate configured permission predicate (`tool`, `args`) when present.
+      - `t`: allow.
+      - `nil`: deny with structured result.
+      - no predicate configured: use interactive approval fallback.
     - If the agent requests a privileged effect (scope expansion), prompt the user to approve *the scope change*.
       - If user denies scope expansion: feed back a structured "scope denied" tool result so the model can recover.
 4.  **Invocation:**

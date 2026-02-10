@@ -2,140 +2,61 @@
 
 ## Goal
 
-Replace broad mount-smoke confidence with behavior-driven coverage that proves the VUI chat UI works end-to-end from `benedict-vui-root` through `benedict-session` using `benedict-provider-fake`, while also deepening per-component behavior tests.
-
-## Testing Principles
-
-- Test through mounted buffers and user-like interaction (`vui-mount`, widget/button interaction, keyboard simulation when relevant).
-- Assert user-visible output and text properties used for navigation/styling.
-- Prefer public behavior and session events; avoid targeting private `--` helpers unless unavoidable.
-- Keep async deterministic (fake provider scripts, explicit `vui-flush-sync`, timer stubs where needed).
-- Validate both steady-state rendering and state transitions (start/update/finalize/error/cancel).
-
-## Known Reality Check (Important)
-
-- The current VUI chat buffer implementation is known to be broken in real interactive use, even when many tests pass.
-- Future tasks must treat this as a bug-hunting effort, not a test-green effort: do not encode current broken behavior into new assertions just to make tests pass.
-- Prefer assertions that reflect expected user behavior from the specs and real mounted-buffer interaction, and investigate failing E2E tests as likely product defects first.
-
-## Current Coverage Snapshot (Reset Baseline)
-
-- Strong today: `tool-use-block`, `tool-result-block`, `compose-field`, `context-indicator`.
-- Medium today: `turn`, `turn-list`, `conversation-view`, `status-bar`, `chat-header`, `streaming-indicator`, `thinking-block`, `code-block`, `text-block`, `provider-badge`, `badge`, `turn-header`, `collapsible`.
-- Weak today (highest risk): `root`, `content-block-list`, and full root-to-provider streaming/error/tool-call paths.
+Implement programmable tool permissions as the next vertical effort so Benedict can evaluate a predicate `(tool args) -> t|nil` from project dir-locals or global config, while preserving the current interactive approval flow as fallback.
 
 ## Priority Tasks
 
-### Phase -1 - Highest Priority: Reproduce and Fix Non-Reactive Chat Buffer
+### Permission Engine (Core)
 
-- [x] Add a dedicated integration regression test (new file or extension of existing chat integration tests) that mounts the real `benedict-chat` buffer path and reproduces this failure mode explicitly: provider/session events are emitted (visible in `*Messages*`) but chat UI does not update.
-- [x] Ensure the test drives the same production path users hit (chat command + mounted buffer + submit flow), not direct root-only mounting.
-- [x] Add assertions that fail on the current bug and prove end-user-visible reactivity across request lifecycle (`draft-started`, `draft-updated`, `message-added`, `request-completed`, `state-changed`).
-- [x] Implement production code changes required to make the new regression test pass (subscription/mount/event wiring), then keep the regression test as a permanent guardrail.
-- [x] Treat this regression as the next task before all remaining unchecked work in later phases.
+- [ ] **Add predicate configuration and resolver primitives** (refs: 06_tools.md, 07_harness_and_skills.md)
+  - Scope: Introduce a global defcustom for tool permission predicate, a project-local override path, and a single resolver that enforces precedence: dir-local -> global -> fallback.
+  - Files: `benedict-tools.el`, `benedict-chat-profiles.el` (if project-root/dir-local helpers are reused), `benedict.el` (only if user-facing customization docs live there).
+  - Tests: Add/extend `test/benedict-tools-test.el` to cover resolver precedence and "no configured predicate" behavior.
+  - Dependencies: None.
+  - Notes: Keep the contract strict: predicate is called with tool symbol + normalized plist args; no behavior changes to tool implementations yet.
 
-### Phase 0 - Harness and Test Utilities
+- [ ] **Integrate predicate decisions into tool invocation with safe fallback** (refs: 04_agent_loop.md, 06_tools.md)
+  - Scope: Update tool invocation so predicate result gates execution (`t` allow, `nil` deny); predicate errors or non-boolean values trigger fallback to existing interactive approval prompt.
+  - Files: `benedict-tools.el`.
+  - Tests: Extend `test/benedict-tools-test.el` with cases for allow, deny, predicate error, and non-boolean return; assert fallback prompt path is used when required.
+  - Dependencies: Add predicate resolver primitives.
+  - Notes: Keep legacy `:approval` metadata behavior intact for backward compatibility.
 
-- [x] Expand `test/benedict-vui-test-utils.el` with helpers for:
-  - mounting root with session + fake provider defaults,
-  - driving submit/input consistently,
-  - waiting/flush patterns for fake streaming steps,
-  - asserting common text properties (`benedict-message-key`, `benedict-block-id`, `benedict-region-kind`).
-- [x] Add helper coverage tests only where behavior cannot be naturally exercised downstream.
+### Session + Model Recovery Slice
 
-### Phase 1 - Root Session Event Contract Tests
+- [ ] **Return structured denial results through session tool flow** (refs: 04_agent_loop.md, 07_harness_and_skills.md)
+  - Scope: Ensure denied tool calls surface as structured tool failures (permission denied) that the model can recover from, instead of opaque hard errors.
+  - Files: `benedict-tools.el`, `benedict-session.el`.
+  - Tests: Extend `test/benedict-session-test.el` for denied-call result formatting and `test/benedict-chat-logic-test.el` for recovery behavior in looped tool-call turns.
+  - Dependencies: Predicate integration into tool invocation.
+  - Notes: Preserve existing `tool-started`/`tool-completed` event ordering for denied calls.
 
-- [x] Extend `test/benedict-vui-root-test.el` to cover every event handled by `benedict-vui-root--handle-session-event`:
-  - `message-added` appends conversation,
-  - `draft-started` creates active streaming payload,
-  - `draft-updated` appends deltas,
-  - `draft-updated` appends tool-call entries,
-  - `draft-finalized` clears streaming,
-  - `request-completed` success updates provider/model/usage and clears error,
-  - `request-completed` failure renders error,
-  - `state-changed` error/idle transitions clear or set error messaging correctly.
-- [x] Add tests for root local behavior:
-  - submit clears input and appends history,
-  - retain-context true/false behavior for slices,
-  - collapsed block toggling for list and hash-table representations.
+- [ ] **Add audit/event coverage for permission decision paths** (refs: 02_architecture.md, 07_harness_and_skills.md)
+  - Scope: Emit and verify events for predicate-allow, predicate-deny, and fallback-on-error decisions so UI/logging can explain why a call ran or was blocked.
+  - Files: `benedict-session.el`, `benedict-chat-status.el` (if surfaced), `benedict-flywire.el` (only if audit plumbing belongs there).
+  - Tests: Extend `test/benedict-session-test.el` event assertions; add focused assertions in `test/benedict-chat-session-test.el` for visible telemetry path where available.
+  - Dependencies: Structured denial results through session flow.
+  - Notes: Keep this additive; avoid introducing new UI complexity before behavior is stable.
 
-### Phase 2 - End-to-End Root -> Fake Provider Matrix
+### Project Policy UX Slice
 
-- [x] Add `test/benedict-vui-root-e2e-test.el` for full mounted-root flows driven by `benedict-provider-fake` scripts.
-- [x] Cover these scenarios with explicit assertions on visible UI output and session state:
-  - simple success (user + assistant message lifecycle),
-  - streaming text chunks (incremental draft then final message),
-  - streaming + tool-calls (tool-use + tool-result blocks appear with statuses),
-  - streaming + thinking payload (thinking block visibility/toggle behavior),
-  - provider/model changes returned in result update header badge,
-  - usage data appears in status bar,
-  - provider error path displays error and stops streaming indicator,
-  - cancellation mid-stream clears draft/indicator without corrupting transcript,
-  - empty assistant response path (no crash, correct fallback text if applicable).
-- [x] Add one multi-turn scripted run asserting conversation continuity and stable navigation properties across turns.
+- [ ] **Support dir-local permission policy and document usage** (refs: 06_tools.md, 07_harness_and_skills.md)
+  - Scope: Finalize project-local configuration path for permission predicate and document a minimal `.dir-locals.el` recipe with expected function signature and safety notes.
+  - Files: `benedict-tools.el` and/or `benedict-chat-profiles.el` (where resolver lives), `README.md` (or docs file used for customization guidance).
+  - Tests: Add an integration-style test in `test/benedict-tools-test.el` or new `test/benedict-tool-permissions-test.el` that simulates project-local override winning over global.
+  - Dependencies: Predicate resolver primitives.
+  - Notes: Keep docs explicit that interactive approval remains the fallback when no predicate decision is available.
 
-### Phase 3 - Composition Layer Hardening
+## Validation Gates
 
-- [x] `test/benedict-vui-content-block-list-test.el`:
-  - mixed block types in one message,
-  - unknown block fallback behavior,
-  - empty block list behavior,
-  - `:on-toggle-block` callback arguments and propagation,
-  - block/message property propagation.
-- [x] `test/benedict-vui-turn-test.el`:
-  - role-specific rendering and faces,
-  - assistant/tool message composition,
-  - metadata/error styling,
-  - timestamp/header behavior with and without metadata.
-- [x] `test/benedict-vui-turn-list-test.el`:
-  - grouping/ordering correctness,
-  - streaming synthetic message handling,
-  - navigation properties across multiple turns,
-  - empty conversation behavior.
-- [x] `test/benedict-vui-conversation-view-test.el`:
-  - streaming indicator visibility transitions,
-  - malformed/nil streaming payload safety,
-  - integration with turn-list output for multi-turn conversations.
-
-### Phase 4 - Leaf Component Behavior Expansion
-
-- [x] `test/benedict-vui-chat-header-test.el`: click handler wiring, nil provider/model/title variants, status badge transitions.
-- [x] `test/benedict-vui-input-area-test.el`: obsolete after transcript-only chat/compose split removed `benedict-vui-input-area` and related VUI compose components.
-- [x] Finish the other tests:
-    - [x] `test/benedict-vui-status-bar-test.el`: separator logic across token/cost/error combinations and nil/partial usage payloads.
-    - [x] `test/benedict-vui-streaming-indicator-test.el`: visible false->true->false transitions, timer cleanup on unmount.
-    - [x] `test/benedict-vui-thinking-block-test.el`: empty payload handling, controlled/uncontrolled collapse behavior, multi-detail/chunk rendering.
-    - [x] `test/benedict-vui-code-block-test.el`: copy result assertions (including kill-ring effect), unknown language fallback, large content display safety.
-    - [x] `test/benedict-vui-text-block-test.el`: whitespace/empty/long content behavior and property coverage.
-    - [x] `test/benedict-vui-provider-badge-test.el`: click handler wiring and model formatting edge cases.
-    - [x] `test/benedict-vui-turn-header-test.el` and `test/benedict-vui-badge-test.el`: metadata/status fallback and face mapping edge cases.
-    - [x] `test/benedict-vui-collapsible-test.el`: nil callback safety and function-valued header/content behavior.
-
-### Task 5 - Chat/Session Integration Guardrails for VUI
-
-- [x] Extend `test/benedict-chat-session-test.el` and/or `test/benedict-chat-integration-test.el` with UI-facing assertions that mounted chat buffers reflect live session changes during:
-  - attach during active stream,
-  - headless continuation then reattach,
-  - tool-call execution and result insertion,
-  - request failure and recovery on next submit.
-- [x] Add regression test for post-request metadata mutation path so UI updates remain observable after assistant message finalization.
-
-## Test Execution Gates
-
-- Fast loop while implementing:
-  - `nix run .#test -- test/benedict-vui-root-test.el`
-  - `nix run .#test -- test/benedict-vui-root-e2e-test.el`
-  - targeted file under change.
-- Phase completion gates:
-  - `nix run .#test -- test/benedict-vui-*-test.el`
-  - `nix run .#test -- test/benedict-chat-session-test.el test/benedict-chat-integration-test.el test/benedict-chat-logic-test.el`
-- Final confidence gate:
+- Per-task fast loop:
+  - `nix run .#test -- test/benedict-tools-test.el`
+  - `nix run .#test -- test/benedict-session-test.el`
+  - `nix run .#test -- test/benedict-chat-logic-test.el`
+- End-of-chunk confidence:
+  - `nix run .#test -- test/benedict-tools-test.el test/benedict-session-test.el test/benedict-chat-session-test.el test/benedict-chat-logic-test.el`
   - `nix run .#test`
 
-## Definition of Done
+## Completed
 
-- [ ] Root event contract fully exercised with explicit assertions for every handled event.
-- [ ] Dedicated root->fake-provider E2E file exists and passes for success/streaming/tools/errors/cancel/update scenarios.
-- [ ] Each `components/benedict-vui-*.el` file has behavior tests beyond mount-only smoke coverage.
-- [ ] Navigation/styling text properties used by chat navigation are asserted in representative integration paths.
-- [ ] Targeted VUI and chat/session test suites pass locally.
+- [x] Previous VUI chat behavior and coverage implementation plan completed; next effort starts with programmable tool permissions.

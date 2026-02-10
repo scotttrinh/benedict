@@ -55,6 +55,22 @@ The harness emits structured events for:
 
 These events are shown in the UI and form the basis for persistence later.
 
+### 1.5 Programmable Tool Permission
+
+The harness supports a programmable permission function for per-call authorization decisions.
+
+- Signature: `(lambda (tool args) ...)` where `tool` is a symbol and `args` is the normalized plist.
+- Return contract:
+  - `t` means allow the tool call.
+  - `nil` means deny the tool call.
+- Resolution order:
+  1) project dir-local permission function
+  2) user/global permission function
+  3) fallback to interactive approval (existing behavior) when no function is configured
+- Robustness:
+  - if the configured function errors, emit an audit event and use interactive approval fallback
+  - denied calls should return a structured "permission denied" tool result so the model can recover
+
 ## 2. Agent Instructions and Skills (AGENTS.md / SKILL.md)
 
 ### 2.1 Instruction Sources (Ordered)

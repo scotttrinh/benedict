@@ -70,7 +70,7 @@ This document details the architectural components of Benedict and their interac
 - **Registry:** Maps tool IDs to:
     - Implementation function (Elisp).
     - JSON Schema (for LLM definition).
-    - Approval Policy (`auto`, `confirm`, `always`).
+    - Approval metadata (legacy `auto`/`confirm`/`always`) plus optional permission predicate evaluation.
 - **Execution:**
     - Invoked by the Session when the LLM requests a tool call.
     - Results are fed back into the conversation history.

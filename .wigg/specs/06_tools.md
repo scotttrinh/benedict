@@ -20,7 +20,23 @@ Tools are defined using `benedict-tools-register`.
     - `'always`: Always prompt (reserved for privileged effects like arbitrary eval).
 - **`:schema`** (plist): JSON Schema definition of arguments.
 
-### 1.2 Schema Format
+### 1.2 Programmable Permission Predicate
+
+In addition to declarative scope/effect policy, Benedict supports a user-defined permission predicate for tool calls.
+
+- Function contract:
+  - Input: tool symbol and normalized args plist.
+  - Output: `t` (allow) or `nil` (deny).
+- Configuration levels:
+  - project-local via dir-locals
+  - user/global via `defcustom`
+- Precedence:
+  - project-local predicate overrides global predicate
+  - if no predicate is configured, fall back to the existing interactive approval flow
+- Failure behavior:
+  - if the predicate errors or returns a non-boolean value, treat it as "no predicate decision" and fall back to interactive approval
+
+### 1.3 Schema Format
 A simplified plist representation of JSON Schema:
 ```elisp
 '(:type object
@@ -134,7 +150,7 @@ Users can extend Benedict with their own capabilities.
 - **`benedict-register-tool`**:
     - Users define an Elisp function and a JSON Schema.
     - The tool becomes available to the agent immediately.
-    - Custom tools share the same approval policies as built-ins.
+    - Custom tools share the same approval policies as built-ins, including predicate-based permission checks.
 
 ## 5. Error Handling
 
