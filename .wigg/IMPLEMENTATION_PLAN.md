@@ -8,7 +8,7 @@ Implement programmable tool permissions as the next vertical effort so Benedict 
 
 ### Permission Engine (Core)
 
-- [ ] **Add predicate configuration and resolver primitives** (refs: 06_tools.md, 07_harness_and_skills.md)
+- [x] **Add predicate configuration and resolver primitives** (refs: 06_tools.md, 07_harness_and_skills.md)
   - Scope: Introduce a global defcustom for tool permission predicate, a project-local override path, and a single resolver that enforces precedence: dir-local -> global -> fallback.
   - Files: `benedict-tools.el`, `benedict-chat-profiles.el` (if project-root/dir-local helpers are reused), `benedict.el` (only if user-facing customization docs live there).
   - Tests: Add/extend `test/benedict-tools-test.el` to cover resolver precedence and "no configured predicate" behavior.

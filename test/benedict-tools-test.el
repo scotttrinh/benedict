@@ -4,6 +4,43 @@
 (require 'ert)
 (require 'benedict-tools)
 
+;;; Permission resolver tests
+
+(ert-deftest benedict-tools-resolve-tool-permission-predicate-global-test ()
+  "Global permission predicate is used when no local override exists."
+  (let ((global (lambda (_tool _args) t))
+        (old-default (default-value 'benedict-tool-permission-predicate)))
+    (unwind-protect
+        (progn
+          (set-default 'benedict-tool-permission-predicate global)
+          (with-temp-buffer
+            (should (eq (benedict--resolve-tool-permission-predicate) global))))
+      (set-default 'benedict-tool-permission-predicate old-default))))
+
+(ert-deftest benedict-tools-resolve-tool-permission-predicate-local-overrides-global-test ()
+  "Project-local predicate overrides global predicate."
+  (let ((global (lambda (_tool _args) t))
+        (local (lambda (_tool _args) nil))
+        (old-default (default-value 'benedict-tool-permission-predicate)))
+    (unwind-protect
+        (progn
+          (set-default 'benedict-tool-permission-predicate global)
+          (with-temp-buffer
+            (setq-local benedict-tool-permission-predicate local)
+            (should (eq (benedict--resolve-tool-permission-predicate) local))))
+      (set-default 'benedict-tool-permission-predicate old-default))))
+
+(ert-deftest benedict-tools-resolve-tool-permission-predicate-none-configured-test ()
+  "Resolver returns nil when no permission predicate is configured."
+  (let ((old-default (default-value 'benedict-tool-permission-predicate)))
+    (unwind-protect
+        (progn
+          (set-default 'benedict-tool-permission-predicate nil)
+          (with-temp-buffer
+            (kill-local-variable 'benedict-tool-permission-predicate)
+            (should-not (benedict--resolve-tool-permission-predicate))))
+      (set-default 'benedict-tool-permission-predicate old-default))))
+
 ;;; Project search tests
 
 (ert-deftest benedict-tools-search-project-max-matches-per-file-test ()

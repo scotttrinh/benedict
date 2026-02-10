@@ -46,6 +46,25 @@ Each entry becomes a \"--glob !PATTERN\" argument to ripgrep."
   :type '(repeat string)
   :group 'benedict)
 
+(defcustom benedict-tool-permission-predicate nil
+  "Permission predicate for tool calls.
+The function is called with two arguments: TOOL (a symbol) and ARGS (a
+normalized plist with keyword keys).  Return t to allow and nil to deny.
+
+Set this as a buffer-local value (for example via .dir-locals.el) to
+override the global value in that project.  When nil, callers should use
+the existing interactive approval flow."
+  :type '(choice (const :tag "None" nil)
+                 function)
+  :group 'benedict)
+
+(put 'benedict-tool-permission-predicate
+     'safe-local-variable
+     (lambda (value)
+       (or (null value)
+           (symbolp value)
+           (functionp value))))
+
 ;;; Tool schema encoding
 
 (defun benedict-tool--plist-entries (plist)
@@ -388,6 +407,47 @@ APPROVAL is one of 'auto, 'confirm, or 'always.  DOC is an optional string."
 (defun benedict-tools-list ()
   "Return a list of tool specs."
   (let (acc) (maphash (lambda (_k v) (push v acc)) benedict--tools) (nreverse acc)))
+
+(defun benedict--tool-permission--keyword (key)
+  "Normalize KEY to a keyword symbol for permission predicate args."
+  (cond
+   ((keywordp key) key)
+   ((symbolp key) (intern (concat ":" (symbol-name key))))
+   ((stringp key) (intern (concat ":" key)))
+   (t (error "Tool permission args key must be symbol or string: %S" key))))
+
+(defun benedict--tool-permission-normalize-args (args)
+  "Return ARGS normalized into a plist with keyword keys.
+Accepts nil, plist, or alist input."
+  (cond
+   ((null args) nil)
+   ((and (listp args) (consp (car args)))
+    (let (result)
+      (dolist (pair args)
+        (let ((key (car pair))
+              (value (cdr pair)))
+          (setq result (plist-put result
+                                  (benedict--tool-permission--keyword key)
+                                  value))))
+      result))
+   ((listp args)
+    (unless (cl-evenp (length args))
+      (error "Tool args plist must have even length: %S" args))
+    (let (result)
+      (cl-loop for (key value) on args by #'cddr
+               do (setq result (plist-put result
+                                          (benedict--tool-permission--keyword key)
+                                          value)))
+      result))
+   (t (error "Tool args must be a plist or alist: %S" args))))
+
+(defun benedict--resolve-tool-permission-predicate ()
+  "Return the effective tool permission predicate for the current buffer.
+Resolution precedence is project-local (buffer-local/dir-locals) first,
+then global custom value, then nil when no predicate is configured."
+  (if (local-variable-p 'benedict-tool-permission-predicate (current-buffer))
+      benedict-tool-permission-predicate
+    (default-value 'benedict-tool-permission-predicate)))
 
 (defun benedict--tool-call-direct (id args)
   "Invoke tool ID with ARGS without applying approval policy."
