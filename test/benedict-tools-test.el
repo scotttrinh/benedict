@@ -39,8 +39,34 @@
           (set-default 'benedict-tool-permission-predicate nil)
           (with-temp-buffer
             (kill-local-variable 'benedict-tool-permission-predicate)
-            (should-not (benedict--resolve-tool-permission-predicate))))
+             (should-not (benedict--resolve-tool-permission-predicate))))
       (set-default 'benedict-tool-permission-predicate old-default))))
+
+(ert-deftest benedict-tools-resolve-tool-permission-predicate-dir-locals-overrides-global-test ()
+  "Dir-local predicate overrides global predicate resolution."
+  (let* ((test-dir (make-temp-file "benedict-test-dir-locals-" t))
+         (dir-locals (expand-file-name ".dir-locals.el" test-dir))
+         (global (lambda (_tool _args) t))
+         (old-default (default-value 'benedict-tool-permission-predicate))
+         (old-cache dir-locals-directory-cache)
+         (old-class-alist dir-locals-class-alist))
+    (unwind-protect
+        (progn
+          (with-temp-file dir-locals
+            (insert "((nil . ((benedict-tool-permission-predicate . benedict-tools-test--project-policy))))\n"))
+          (set-default 'benedict-tool-permission-predicate global)
+          (setq dir-locals-directory-cache nil)
+          (setq dir-locals-class-alist nil)
+          (with-temp-buffer
+            (setq default-directory (file-name-as-directory test-dir))
+            (hack-dir-local-variables-non-file-buffer)
+            (should (local-variable-p 'benedict-tool-permission-predicate (current-buffer)))
+            (should (eq (benedict--resolve-tool-permission-predicate)
+                        'benedict-tools-test--project-policy))))
+      (set-default 'benedict-tool-permission-predicate old-default)
+      (setq dir-locals-directory-cache old-cache)
+      (setq dir-locals-class-alist old-class-alist)
+      (delete-directory test-dir t))))
 
 (ert-deftest benedict-tools-permission-predicate-allows-invocation-test ()
   "Predicate returning t should allow invocation without prompting."

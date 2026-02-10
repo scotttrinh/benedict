@@ -222,6 +222,33 @@ Example: registering a tool (sketch)
 - Diff previews for file changes via `propose-edit`.
 - Provenance: structured logs of all tool calls and outcomes.
 
+* Project-Local Tool Permission Policy
+Benedict supports a project-local tool permission predicate via =.dir-locals.el=.
+This predicate overrides the global =benedict-tool-permission-predicate= value for
+buffers in that project.
+
+Predicate contract:
+- Inputs: =tool= (symbol), =args= (normalized plist with keyword keys).
+- Return =t= to allow, =nil= to deny.
+- If no predicate is configured, or if the predicate errors/returns a non-boolean,
+  Benedict falls back to the existing interactive approval flow.
+
+Minimal =.dir-locals.el= recipe:
+#+begin_src elisp
+((nil . ((benedict-tool-permission-predicate . my-project-tool-policy))))
+
+(defun my-project-tool-policy (tool args)
+  "Allow reads by default; deny high-risk execution."
+  (pcase tool
+    ((or 'read-file 'find-files 'project-search) t)
+    ('exec-elisp nil)
+    (_ nil)))
+#+end_src
+
+Safety notes:
+- The predicate executes in your Emacs session. Only use trusted policy code.
+- Keep deny paths explicit so behavior is predictable.
+
 * Loop and Autonomy Safeguards
 Benedict includes safeguards to prevent runaway loops or infinite tool usage.
 

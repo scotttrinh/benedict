@@ -40,7 +40,7 @@ Implement programmable tool permissions as the next vertical effort so Benedict 
 
 ### Project Policy UX Slice
 
-- [ ] **Support dir-local permission policy and document usage** (refs: 06_tools.md, 07_harness_and_skills.md)
+- [x] **Support dir-local permission policy and document usage** (refs: 06_tools.md, 07_harness_and_skills.md)
   - Scope: Finalize project-local configuration path for permission predicate and document a minimal `.dir-locals.el` recipe with expected function signature and safety notes.
   - Files: `benedict-tools.el` and/or `benedict-chat-profiles.el` (where resolver lives), `README.md` (or docs file used for customization guidance).
   - Tests: Add an integration-style test in `test/benedict-tools-test.el` or new `test/benedict-tool-permissions-test.el` that simulates project-local override winning over global.
