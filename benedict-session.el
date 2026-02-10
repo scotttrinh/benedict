@@ -455,7 +455,16 @@ Events emitted:
 
 (defvar benedict-session-tool-invoke-fn nil
   "Function to invoke tools.  Set by tool module.
-Called as (funcall fn TOOL-ID ARGUMENTS).  Return tool output or signal error.")
+Called as (funcall fn TOOL-ID ARGUMENTS &rest OPTIONS).
+Implementations may ignore OPTIONS.  Return tool output or signal error.")
+
+(defun benedict-session--tool-invoke-supports-options-p (fn)
+  "Return non-nil when FN can accept optional keyword arguments."
+  (when fn
+    (let ((arity (func-arity fn)))
+      (or (eq (cdr arity) 'many)
+          (and (integerp (cdr arity))
+               (>= (cdr arity) 3))))))
 
 (defun benedict-session--invoke-tool (session tool-call)
   "Execute TOOL-CALL plist for SESSION.
@@ -473,7 +482,11 @@ Return plist (:status :output :error).  Emit tool-started and tool-completed eve
     (lgr-log benedict-session--logger lgr-level-debug "Invoking tool %s" tool-id)
     (condition-case err
         (if benedict-session-tool-invoke-fn
-            (setq output (funcall benedict-session-tool-invoke-fn tool-id arguments))
+            (setq output
+                  (if (benedict-session--tool-invoke-supports-options-p benedict-session-tool-invoke-fn)
+                      (funcall benedict-session-tool-invoke-fn
+                               tool-id arguments :session session)
+                    (funcall benedict-session-tool-invoke-fn tool-id arguments)))
           (error "No tool invoke function configured"))
       (benedict-tool-denied
        (setq status 'failure)

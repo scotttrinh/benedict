@@ -141,6 +141,35 @@
       (set-default 'benedict-tool-permission-predicate old-default)
       (remhash tool-id benedict--tools))))
 
+(ert-deftest benedict-tools-permission-decision-allow-metadata-test ()
+  "Permission decision metadata marks allow decisions explicitly."
+  (let ((decision (benedict--tool-permission-decision
+                   (lambda (_tool _args) t)
+                   'project-search
+                   '(:query "foo"))))
+    (should (eq 'allow (plist-get decision :policy)))
+    (should (eq 'predicate-allow (plist-get decision :decision)))))
+
+(ert-deftest benedict-tools-permission-decision-deny-metadata-test ()
+  "Permission decision metadata marks deny decisions explicitly."
+  (let ((decision (benedict--tool-permission-decision
+                   (lambda (_tool _args) nil)
+                   'project-search
+                   '(:query "foo"))))
+    (should (eq 'deny (plist-get decision :policy)))
+    (should (eq 'predicate-deny (plist-get decision :decision)))))
+
+(ert-deftest benedict-tools-permission-decision-fallback-on-error-metadata-test ()
+  "Permission decision metadata preserves fallback-on-error reason text."
+  (let ((decision (benedict--tool-permission-decision
+                   (lambda (_tool _args)
+                     (error "boom"))
+                   'project-search
+                   '(:query "foo"))))
+    (should (eq 'fallback (plist-get decision :policy)))
+    (should (eq 'fallback-on-error (plist-get decision :decision)))
+    (should (string-match-p "boom" (or (plist-get decision :error-message) "")))))
+
 ;;; Project search tests
 
 (ert-deftest benedict-tools-search-project-max-matches-per-file-test ()

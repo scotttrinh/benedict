@@ -364,7 +364,36 @@
                        (let ((tool-calls (plist-get assistant-msg :tool-calls)))
                          (should (= 1 (length tool-calls)))
                          (should (string= "call1" (plist-get (car tool-calls) :id)))))
-                     (funcall done))))))
+                      (funcall done))))))
+
+(ert-deftest benedict-chat-session-test-permission-denial-telemetry-visible ()
+  "Chat-attached sessions expose permission decision telemetry events."
+  (let ((benedict-session--registry (make-hash-table :test 'equal))
+        (events nil)
+        (benedict-session-event-hook nil)
+        (benedict-session-tool-invoke-fn #'benedict-tool-invoke))
+    (with-temp-buffer
+      (benedict-chat-mode)
+      (benedict-chat--init-buffer)
+      (setq-local benedict-tool-permission-predicate (lambda (_tool _args) nil))
+      (let ((session benedict-chat--session))
+        (add-hook 'benedict-session-event-hook
+                  (lambda (_s type payload)
+                    (push (cons type payload) events)))
+        (let* ((result (benedict-session--invoke-tool
+                        session
+                        '(:id "call-deny" :name project-search :arguments (:query "needle"))))
+               (tool-message (benedict-session--format-tool-result
+                              (plist-get result :tool-id)
+                              (plist-get result :call-id)
+                              (plist-get result :output)
+                              (plist-get result :error)))
+               (decision-event (cl-find 'tool-permission-decision events :key #'car)))
+          (should (eq 'failure (plist-get result :status)))
+          (should decision-event)
+          (should (eq 'predicate-deny (plist-get (cdr decision-event) :decision)))
+          (should (eq 'deny (plist-get (cdr decision-event) :policy)))
+          (should (string-match-p "Tool denied:" (plist-get tool-message :content))))))))
 
 (ert-deftest-async benedict-chat-session-test-reattach-midstream (done)
   "Reattaching mid-stream shows accumulated content."

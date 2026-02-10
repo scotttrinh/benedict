@@ -14,6 +14,7 @@
   (add-to-list 'load-path repo))
 
 (require 'benedict-session)
+(require 'benedict-tools)
 
 ;;; Registry Tests
 
@@ -386,6 +387,111 @@
         (should (eq 'permission-denied (plist-get error-info :code)))
         (should (eq 'benedict-tool-denied (plist-get error-info :type)))
         (should (cl-find 'tool-completed events :key #'car))))))
+
+(ert-deftest benedict-session-test-invoke-tool-emits-permission-allow-decision-event ()
+  "Predicate allow decisions emit permission audit events."
+  (let* ((tool-id 'benedict-session-test-permission-allow)
+         (events nil)
+         (old-default (default-value 'benedict-tool-permission-predicate))
+         (benedict-session--registry (make-hash-table :test 'equal))
+         (benedict-session-event-hook nil)
+         (benedict-session-tool-invoke-fn #'benedict-tool-invoke))
+    (unwind-protect
+        (progn
+          (benedict-tools-register
+           :id tool-id
+           :fn (lambda (&rest _args) "ok")
+           :approval 'confirm)
+          (set-default 'benedict-tool-permission-predicate
+                       (lambda (_tool _args) t))
+          (let ((session (benedict-session-create)))
+            (add-hook 'benedict-session-event-hook
+                      (lambda (_s type payload)
+                        (push (cons type payload) events)))
+            (let ((result (benedict-session--invoke-tool
+                           session
+                           `(:id "call-allow" :name ,tool-id :arguments (:a 1)))))
+              (should (eq 'success (plist-get result :status)))
+              (let ((decision-event (cl-find 'tool-permission-decision events :key #'car)))
+                (should decision-event)
+                (should (eq 'allow (plist-get (cdr decision-event) :policy)))
+                (should (eq 'predicate-allow (plist-get (cdr decision-event) :decision)))
+                (should (eq tool-id (plist-get (cdr decision-event) :tool-id)))))))
+      (set-default 'benedict-tool-permission-predicate old-default)
+      (remhash tool-id benedict--tools))))
+
+(ert-deftest benedict-session-test-invoke-tool-emits-permission-deny-decision-event ()
+  "Predicate deny decisions emit permission audit events."
+  (let* ((tool-id 'benedict-session-test-permission-deny)
+         (events nil)
+         (old-default (default-value 'benedict-tool-permission-predicate))
+         (benedict-session--registry (make-hash-table :test 'equal))
+         (benedict-session-event-hook nil)
+         (benedict-session-tool-invoke-fn #'benedict-tool-invoke))
+    (unwind-protect
+        (progn
+          (benedict-tools-register
+           :id tool-id
+           :fn (lambda (&rest _args) "ok")
+           :approval 'auto)
+          (set-default 'benedict-tool-permission-predicate
+                       (lambda (_tool _args) nil))
+          (let ((session (benedict-session-create)))
+            (add-hook 'benedict-session-event-hook
+                      (lambda (_s type payload)
+                        (push (cons type payload) events)))
+            (let* ((result (benedict-session--invoke-tool
+                            session
+                            `(:id "call-deny" :name ,tool-id :arguments nil)))
+                   (error-info (plist-get result :error))
+                   (decision-event (cl-find 'tool-permission-decision events :key #'car)))
+              (should (eq 'failure (plist-get result :status)))
+              (should (eq 'permission-denied (plist-get error-info :code)))
+              (should decision-event)
+              (should (eq 'deny (plist-get (cdr decision-event) :policy)))
+              (should (eq 'predicate-deny (plist-get (cdr decision-event) :decision))))))
+      (set-default 'benedict-tool-permission-predicate old-default)
+      (remhash tool-id benedict--tools))))
+
+(ert-deftest benedict-session-test-invoke-tool-emits-permission-fallback-on-error-event ()
+  "Predicate errors emit fallback audit events and use legacy approval flow."
+  (let* ((tool-id 'benedict-session-test-permission-fallback)
+         (events nil)
+         (prompted nil)
+         (old-default (default-value 'benedict-tool-permission-predicate))
+         (benedict-session--registry (make-hash-table :test 'equal))
+         (benedict-session-event-hook nil)
+         (benedict-session-tool-invoke-fn #'benedict-tool-invoke))
+    (unwind-protect
+        (progn
+          (benedict-tools-register
+           :id tool-id
+           :fn (lambda (&rest _args) "ok")
+           :approval 'confirm)
+          (set-default 'benedict-tool-permission-predicate
+                       (lambda (_tool _args)
+                         (error "permission predicate blew up")))
+          (cl-letf (((symbol-function 'benedict--prompt-for-approval)
+                     (lambda (_spec _args)
+                       (setq prompted t)
+                       t)))
+            (let ((session (benedict-session-create)))
+              (add-hook 'benedict-session-event-hook
+                        (lambda (_s type payload)
+                          (push (cons type payload) events)))
+              (let* ((result (benedict-session--invoke-tool
+                              session
+                              `(:id "call-fallback" :name ,tool-id :arguments nil)))
+                     (decision-event (cl-find 'tool-permission-decision events :key #'car)))
+                (should (eq 'success (plist-get result :status)))
+                (should prompted)
+                (should decision-event)
+                (should (eq 'fallback (plist-get (cdr decision-event) :policy)))
+                (should (eq 'fallback-on-error (plist-get (cdr decision-event) :decision)))
+                (should (string-match-p "predicate blew up"
+                                        (or (plist-get (cdr decision-event) :error-message) "")))))))
+      (set-default 'benedict-tool-permission-predicate old-default)
+      (remhash tool-id benedict--tools))))
 
 (ert-deftest benedict-session-test-process-tool-calls ()
   "Processing multiple tool calls records all results."

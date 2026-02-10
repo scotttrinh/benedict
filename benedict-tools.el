@@ -14,6 +14,9 @@
 (require 'subr-x)
 (require 'benedict-errors)
 
+(declare-function benedict-session--emit "benedict-session" (session event-type &rest payload))
+(declare-function benedict-session-p "benedict-session" (object))
+
 (defvar benedict--tools (make-hash-table :test 'eq)
   "Registry of tool specs keyed by :id symbol.")
 
@@ -479,36 +482,69 @@ string, and the argument plist."
      (t (benedict--prompt-for-approval spec args)))))
 
 (defun benedict--tool-permission-decision (predicate id args)
-  "Return permission decision from PREDICATE for tool ID and ARGS.
-Returns one of the symbols `allow', `deny', or `fallback'."
-  (condition-case _err
-      (let ((result (funcall predicate id (benedict--tool-permission-normalize-args args))))
-        (cond
-         ((eq result t) 'allow)
-         ((eq result nil) 'deny)
-         (t 'fallback)))
-    (error 'fallback)))
+  "Return permission decision metadata from PREDICATE for tool ID and ARGS.
+Returns a plist with keys:
+- :policy, one of `allow', `deny', or `fallback'
+- :decision, one of `predicate-allow', `predicate-deny',
+  `fallback-on-error', or `fallback-on-invalid-result'
+- :error-message, non-nil only for `fallback-on-error' decisions."
+  (let ((normalized-args (benedict--tool-permission-normalize-args args)))
+    (condition-case err
+        (let ((result (funcall predicate id normalized-args)))
+          (cond
+           ((eq result t)
+            (list :policy 'allow
+                  :decision 'predicate-allow))
+           ((eq result nil)
+            (list :policy 'deny
+                  :decision 'predicate-deny))
+           (t
+            (list :policy 'fallback
+                  :decision 'fallback-on-invalid-result))))
+      (error
+       (list :policy 'fallback
+             :decision 'fallback-on-error
+             :error-message (error-message-string err))))))
 
-(defun benedict-tool-invoke (id &optional args)
+(defun benedict--tool-permission-emit-decision (session id args decision-metadata)
+  "Emit permission decision event for SESSION, ID, ARGS, and DECISION-METADATA."
+  (when (and session
+             (fboundp 'benedict-session-p)
+             (benedict-session-p session)
+             (fboundp 'benedict-session--emit))
+    (benedict-session--emit session
+                            'tool-permission-decision
+                            :tool-id id
+                            :args (benedict--tool-permission-normalize-args args)
+                            :policy (plist-get decision-metadata :policy)
+                            :decision (plist-get decision-metadata :decision)
+                            :error-message (plist-get decision-metadata :error-message))))
+
+(defun benedict-tool-invoke (id &optional args &rest options)
   "Invoke tool ID with ARGS after applying the tool's approval policy.
-ARGS must be a plist passed directly to the tool implementation."
+ARGS must be a plist passed directly to the tool implementation.
+OPTIONS accepts :session for emitting tool permission audit events."
   (unless (or (null args) (listp args))
     (signal 'wrong-type-argument (list 'plistp args)))
-  (let* ((spec (or (gethash id benedict--tools)
+  (let* ((session (plist-get options :session))
+         (spec (or (gethash id benedict--tools)
                    (signal 'benedict-error (list (format "Unknown tool: %S" id)))))
          (predicate (benedict--resolve-tool-permission-predicate))
-         (decision (and predicate (benedict--tool-permission-decision predicate id args)))
-         (approved
-           (pcase decision
+         (decision-metadata (and predicate (benedict--tool-permission-decision predicate id args)))
+         (decision-policy (and decision-metadata (plist-get decision-metadata :policy))))
+    (when decision-metadata
+      (benedict--tool-permission-emit-decision session id args decision-metadata))
+    (let ((approved
+           (pcase decision-policy
              ('allow t)
              ('deny (signal 'benedict-tool-denied
                             (list (format "Tool %S denied by permission predicate" id)
                                   :tool id
                                   :source 'predicate)))
              (_ (benedict--tool-approval-allows-p spec args)))))
-    (unless approved
-      (signal 'benedict-error (list (format "Tool %S invocation canceled by user" id))))
-    (benedict--tool-call-direct id args)))
+      (unless approved
+        (signal 'benedict-error (list (format "Tool %S invocation canceled by user" id))))
+      (benedict--tool-call-direct id args))))
 
 (benedict-tools-register
  :id 'write

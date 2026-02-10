@@ -31,7 +31,7 @@ Implement programmable tool permissions as the next vertical effort so Benedict 
   - Dependencies: Predicate integration into tool invocation.
   - Notes: Preserve existing `tool-started`/`tool-completed` event ordering for denied calls.
 
-- [ ] **Add audit/event coverage for permission decision paths** (refs: 02_architecture.md, 07_harness_and_skills.md)
+- [x] **Add audit/event coverage for permission decision paths** (refs: 02_architecture.md, 07_harness_and_skills.md)
   - Scope: Emit and verify events for predicate-allow, predicate-deny, and fallback-on-error decisions so UI/logging can explain why a call ran or was blocked.
   - Files: `benedict-session.el`, `benedict-chat-status.el` (if surfaced), `benedict-flywire.el` (only if audit plumbing belongs there).
   - Tests: Extend `test/benedict-session-test.el` event assertions; add focused assertions in `test/benedict-chat-session-test.el` for visible telemetry path where available.
