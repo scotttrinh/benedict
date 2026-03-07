@@ -67,8 +67,8 @@
    :blocks (list (benedict-message--tool-result-block tool-call-id name status content details))
    :metadata (list :status status :details details)))
 
-(defun benedict-message-from-legacy (message)
-  "Normalize legacy plist MESSAGE into a `benedict-message'."
+(defun benedict-message-from-data (message)
+  "Normalize MESSAGE data into a `benedict-message'."
   (if (benedict-message-p message)
       (benedict-message-create
        :id (benedict-message-id message)
@@ -142,51 +142,73 @@
   "Return the tool-result block from MESSAGE, or nil."
   (benedict-message--block-of-type message 'tool-result))
 
-(defun benedict-message-to-legacy (message)
-  "Convert canonical MESSAGE to the legacy plist shape."
-  (let* ((role (benedict-message-role message))
-         (tool-result (and (eq role 'tool)
-                           (benedict-message--tool-result-block-data message)))
-         (metadata (copy-tree (benedict-message-metadata message)))
-         (legacy (list :id (benedict-message-id message)
-                       :kind (benedict-message-kind message)
-                       :role role
-                       :content (benedict-message-text message)
-                       :thinking (benedict-message-thinking message)
-                       :tool-calls (benedict-message-tool-calls message)
-                       :timestamp (benedict-message-timestamp message)
-                       :metadata metadata)))
-    (when tool-result
-      (setq legacy (plist-put legacy :tool-call-id (plist-get tool-result :tool-call-id)))
-      (setq legacy (plist-put legacy :name (plist-get tool-result :name)))
-      (setq legacy (plist-put legacy :content (plist-get tool-result :content)))
-      (setq legacy (plist-put legacy :metadata
-                              (append metadata
-                                      (list :status (plist-get tool-result :status)
-                                            :error (plist-get tool-result :details))))))
-    legacy))
+(defun benedict-message-metadata-value (message key)
+  "Return metadata value for KEY from MESSAGE."
+  (plist-get (benedict-message-metadata message) key))
 
-(defun benedict-message-legacy-get (message key)
-  "Read KEY from MESSAGE via the legacy plist contract."
-  (plist-get (benedict-message-to-legacy message) key))
+(defun benedict-message-status (message)
+  "Return canonical status metadata for MESSAGE."
+  (benedict-message-metadata-value message :status))
 
-(defun benedict-message-merge-legacy (message updates)
-  "Apply legacy plist UPDATES to canonical MESSAGE."
-  (let* ((legacy (benedict-message-to-legacy message))
-         (merged (copy-sequence legacy)))
-    (cl-loop for (key value) on updates by #'cddr
-             do (setq merged (plist-put merged key value)))
-    (benedict-message-from-legacy merged)))
+(defun benedict-message-tool-result-name (message)
+  "Return tool result name from MESSAGE, or nil."
+  (when-let ((block (benedict-message--tool-result-block-data message)))
+    (plist-get block :name)))
+
+(defun benedict-message-tool-result-id (message)
+  "Return tool call identifier from MESSAGE, or nil."
+  (when-let ((block (benedict-message--tool-result-block-data message)))
+    (plist-get block :tool-call-id)))
+
+(defun benedict-message-tool-result-details (message)
+  "Return tool result details from MESSAGE, or nil."
+  (when-let ((block (benedict-message--tool-result-block-data message)))
+    (plist-get block :details)))
+
+(defun benedict-message-blocks-for-display (message)
+  "Return display blocks for canonical MESSAGE."
+  (let ((role (benedict-message-role message))
+        (blocks nil))
+    (dolist (block (benedict-message-blocks message))
+      (pcase (plist-get block :type)
+        ('text
+         (push (list :type 'text :content (plist-get block :text)) blocks))
+        ('thinking
+         (push (list :type 'thinking :thinking-data (plist-get block :content)) blocks))
+        ('tool-call
+         (push (list :type 'tool-use
+                     :tool-call (list :id (plist-get block :id)
+                                      :name (plist-get block :name)
+                                      :arguments (plist-get block :arguments)))
+               blocks))
+        ('tool-result
+         (push (list :type 'tool-result
+                     :result (list :tool-call-id (plist-get block :tool-call-id)
+                                   :name (plist-get block :name)
+                                   :status (plist-get block :status)
+                                   :content (plist-get block :content)
+                                   :error (plist-get block :details))
+                     :status (plist-get block :status))
+               blocks))))
+    (if (and (eq role 'tool) blocks)
+        (nreverse (cl-remove-if-not
+                   (lambda (block) (eq (plist-get block :type) 'tool-result))
+                   blocks))
+      (nreverse blocks))))
 
 (defun benedict-message->provider-message (message provider-id)
   "Convert canonical MESSAGE to a provider request message for PROVIDER-ID."
   (ignore provider-id)
   (let* ((role (benedict-message-role message))
-         (payload (list :role role
-                        :content (or (benedict-message-text message) "")))
-         (tool-calls (benedict-message-tool-calls message))
          (tool-result (and (eq role 'tool)
-                           (benedict-message--tool-result-block-data message))))
+                           (benedict-message--tool-result-block-data message)))
+         (content (or (benedict-message-text message)
+                      (and tool-result (plist-get tool-result :content))
+                      ""))
+         (payload (list :role role
+                        :content content))
+         (tool-calls (benedict-message-tool-calls message))
+         )
     (when tool-calls
       (setq payload (plist-put payload :tool-calls tool-calls)))
     (when tool-result

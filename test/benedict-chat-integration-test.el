@@ -9,8 +9,10 @@
 (require 'ert-async)
 (require 'cl-lib)
 (require 'vui)
+(require 'benedict-message)
 (require 'benedict-chat)
 (require 'benedict-provider-fake)
+(require 'benedict-store)
 (require 'benedict-test-helpers)
 (require 'test/benedict-vui-test-utils)
 
@@ -30,22 +32,22 @@
                      (lambda ()
                        (with-current-buffer target-buffer
                           (let* ((session benedict-chat--session)
-                                 (messages (and session (benedict-session-messages session)))
+                                 (messages (and session (benedict-session-entries session)))
                                  (user (and messages
                                             (cl-find-if (lambda (msg)
-                                                          (eq (plist-get msg :role) 'user))
+                                                          (eq (benedict-message-role msg) 'user))
                                                         messages)))
                                  (assistant (and messages
                                                  (cl-find-if (lambda (msg)
-                                                               (eq (plist-get msg :role) 'assistant))
+                                                               (eq (benedict-message-role msg) 'assistant))
                                                              messages))))
                             (should session)
                             (should user)
                             (should (string-match-p "hello integration"
-                                                    (plist-get user :content)))
+                                                    (benedict-message-text user)))
                             (should assistant)
                             (should (string-match-p "Fake echo: hello integration"
-                                                    (plist-get assistant :content)))))
+                                                    (benedict-message-text assistant)))))
                          (kill-buffer chat-buffer-name)
                          (funcall done)))))))
 
@@ -154,6 +156,60 @@
         (remove-hook 'benedict-session-event-hook event-handler)
         (kill-buffer chat-buffer)
         (funcall done)))))
+
+(ert-deftest-async benedict-chat-integration-session-reload-roundtrip (done)
+  "A saved chat session reloads and can dispatch another fake-provider prompt."
+  (benedict-test-with-bindings done
+      ((benedict-session--registry (make-hash-table :test 'equal))
+       (benedict-provider 'fake)
+       (benedict-chat-buffer-name "*Benedict Test Chat Reload*")
+       (benedict-provider-fake-latency-seconds 0.01))
+    (let* ((store-root (make-temp-file "benedict-chat-store-" t))
+           (chat-buffer nil)
+           (loaded nil))
+      (save-window-excursion
+        (benedict-chat)
+        (setq chat-buffer (get-buffer benedict-chat-buffer-name)))
+      (with-current-buffer chat-buffer
+        (benedict-chat-send-prompt "reload origin"))
+      (run-at-time
+       0.4 nil
+       (lambda ()
+         (condition-case err
+             (progn
+               (with-current-buffer chat-buffer
+                 (should (benedict-vui-test--wait-for-request-finished benedict-chat--session 2.0))
+                 (benedict-session-save benedict-chat--session :root store-root)
+                 (setq loaded
+                       (benedict-session-load
+                        (benedict-store-session-path
+                         (benedict-session-id benedict-chat--session)
+                         store-root)))
+                 (should (= 2 (length (benedict-session-entries-chronological loaded))))
+                 (benedict-session-add-message loaded '(:role user :content "after reload"))
+                 (benedict-session-dispatch loaded
+                                            (benedict-session--build-request loaded)))
+               (run-at-time
+                0.4 nil
+                (lambda ()
+                  (unwind-protect
+                      (progn
+                        (should (benedict-vui-test--wait-for-request-finished loaded 2.0))
+                        (let* ((entries (benedict-session-entries-chronological loaded))
+                               (last-entry (car (last entries))))
+                          (should (= 4 (length entries)))
+                          (should (eq 'assistant (benedict-message-role last-entry)))
+                          (should (string-match-p "Fake echo: after reload"
+                                                  (benedict-message-text last-entry)))))
+                    (when (buffer-live-p chat-buffer)
+                      (kill-buffer chat-buffer))
+                    (delete-directory store-root t)
+                    (funcall done)))))
+           (error
+            (when (buffer-live-p chat-buffer)
+              (kill-buffer chat-buffer))
+            (delete-directory store-root t)
+            (funcall done err))))))))
 
 (provide 'test/benedict-chat-integration-test)
 ;;; benedict-chat-integration-test.el ends here

@@ -18,6 +18,7 @@
 (require 'vui)
 (require 'benedict)
 (require 'benedict-context)
+(require 'benedict-message)
 (require 'benedict-tools)
 (require 'benedict-flywire)
 (require 'benedict-session)
@@ -374,7 +375,7 @@ Returns the session or nil if agent frame is disabled."
   (with-current-buffer buffer
     (let* ((session benedict-chat--session)
            (message (and session (benedict-chat-nav--find-last-assistant)))
-           (message-metadata (and message (plist-get message :metadata)))
+           (message-metadata (and message (benedict-message-metadata message)))
            (provider (or (plist-get result :provider)
                          (and session (benedict-session-provider session))
                          (benedict-chat-profiles--resolve-provider)))
@@ -390,16 +391,20 @@ Returns the session or nil if agent frame is disabled."
       (when message
         (let ((updated (copy-sequence metadata)))
           (when empty-response
-            (plist-put updated :empty-response t))
-          (plist-put message :metadata updated)
-          (when thinking
-            (plist-put message :thinking thinking))
-          (when (and empty-response
-                     (string-empty-p (or (plist-get message :content) "")))
-            (let ((display (if thinking
-                               "Response finished with reasoning only; no assistant message."
-                             "Response finished without assistant text.")))
-              (plist-put message :display-content display))))))))
+            (setq updated (plist-put updated :empty-response t)))
+          (let ((updates (list :metadata updated)))
+            (when thinking
+              (setq updates (plist-put updates :thinking thinking)))
+            (when (and empty-response
+                       (string-empty-p (or (benedict-message-text message) "")))
+              (let ((display (if thinking
+                                 "Response finished with reasoning only; no assistant message."
+                               "Response finished without assistant text.")))
+                (setq updates (plist-put updates :content display))))
+            (benedict-session-update-message
+             session
+             (benedict-message-id message)
+             updates)))))))
 
 (defun benedict-chat-send-prompt (text)
   "Send TEXT to the provider and insert the assistant reply."
@@ -428,9 +433,7 @@ When SKIP-CONTEXT is non-nil, do not append context slices."
                            text benedict-chat--context-slices)
                         text)))
           (benedict-session-add-message session
-                                        (list :role 'user
-                                              :content final
-                                              :time (current-time))))
+                                        (benedict-message-user-text final)))
         (when (and benedict-chat--context-slices
                    (not benedict-chat-context-retain-after-send))
           (benedict-chat--set-context-slices nil))
@@ -652,7 +655,7 @@ When SESSION is non-nil, attach to it instead of creating a new one."
 Includes title, state, and message count."
   (let ((title (or (benedict-session-title session) "Untitled"))
         (state (benedict-session-state session))
-        (msg-count (length (benedict-session-messages session))))
+        (msg-count (length (benedict-session-entries session))))
     (format "%s [%s] - %d messages" title state msg-count)))
 
 (defun benedict-chat--buffer-for-session (session)

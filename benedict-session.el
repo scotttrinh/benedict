@@ -12,6 +12,9 @@
 (require 'benedict-harness)
 (require 'benedict-message)
 
+(autoload 'benedict-store-save-session "benedict-store" nil nil)
+(autoload 'benedict-store-load-session "benedict-store" nil nil)
+
 (defvar benedict-session--logger (lgr-get-logger "benedict.session")
   "Logger for session events.")
 
@@ -166,6 +169,17 @@ Returns t if deleted, nil if not found."
   (setf (benedict-session-harness session) harness)
   (benedict-session-touch session)
   session)
+
+(cl-defun benedict-session-save (session &key root)
+  "Persist SESSION to disk under ROOT and return the session directory path."
+  (benedict-session-touch session)
+  (benedict-store-save-session session :root root))
+
+(cl-defun benedict-session-load (path &key root)
+  "Load a persisted session from PATH or session id under ROOT."
+  (let ((session (benedict-store-load-session path :root root)))
+    (puthash (benedict-session-id session) session benedict-session--registry)
+    session))
 
 (defun benedict-session--sync-harness-budgets (session)
   "Copy SESSION loop-config limits into the attached harness budgets."

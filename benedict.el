@@ -194,6 +194,7 @@
 (require 'benedict-provider-ollama)
 
 (with-eval-after-load 'benedict-session
+  (require 'benedict-store)
   (with-eval-after-load 'benedict-tools
     (setq benedict-session-tool-invoke-fn #'benedict-tool-invoke)))
 

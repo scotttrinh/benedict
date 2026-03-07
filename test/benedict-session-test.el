@@ -14,6 +14,7 @@
   (add-to-list 'load-path repo))
 
 (require 'benedict-session)
+(require 'benedict-store)
 (require 'benedict-tools)
 
 ;;; Registry Tests
@@ -836,6 +837,55 @@ session returns to idle state."
         '(:prompt-tokens 100 :completion-tokens 50 :total-tokens 150) nil)
       (should (= 100 (plist-get (benedict-session-accumulated-usage session) :prompt)))
       (should (= 1.0 (benedict-session-accumulated-seconds session))))))
+
+(ert-deftest benedict-session-test-save-load-roundtrip ()
+  "Saving and loading a session preserves canonical transcript state."
+  (let ((benedict-session--registry (make-hash-table :test 'equal)))
+    (let* ((root (make-temp-file "benedict-store-" t))
+           (session (benedict-session-create
+                     :title "Persistent Session"
+                     :root "/tmp/project"
+                     :provider 'fake
+                     :model "benedict/fake-echo"
+                     :profile 'coder
+                     :meta '(:instruction-sources ("AGENTS.md" ".wigg/specs/01_overview.md")
+                             :branch-parent-id "ses-parent-001")
+                     :system-prompt '((:role system :content "System seed"))))
+           (loaded nil)
+           (request nil))
+      (unwind-protect
+          (progn
+            (setf (benedict-session-loop-config session) '(:max-turns 3 :max-tool-calls 2))
+            (setf (benedict-harness-audit-log (benedict-session-harness session))
+                  '((:phase authorization :tool-id read-file :policy allow :decision allow)))
+            (benedict-session-add-message session '(:role user :content "Persist me"))
+            (benedict-session-add-message
+             session
+             (benedict-message-tool-result "call-1" 'read-file 'success "Tool output"))
+            (benedict-session-save session :root root)
+            (setq loaded (benedict-session-load
+                          (benedict-store-session-path (benedict-session-id session) root)))
+            (setq request (benedict-session--build-request loaded))
+            (should (equal (benedict-session-id session) (benedict-session-id loaded)))
+            (should (equal "Persistent Session" (benedict-session-title loaded)))
+            (should (equal 'fake (plist-get request :provider)))
+            (should (equal "benedict/fake-echo" (plist-get request :model)))
+            (should (= 2 (length (benedict-session-entries-chronological loaded))))
+            (should (equal '(:max-turns 3 :max-tool-calls 2)
+                           (benedict-session-loop-config loaded)))
+            (should (equal "ses-parent-001"
+                           (plist-get (benedict-session-meta loaded) :branch-parent-id)))
+            (should (= 1 (length (benedict-harness-audit-log
+                                  (benedict-session-harness loaded)))))
+            (should (equal "Persist me"
+                           (benedict-message-text
+                            (car (benedict-session-entries-chronological loaded)))))
+            (should (equal 'tool
+                           (benedict-message-role
+                            (cadr (benedict-session-entries-chronological loaded)))))
+            (should (equal "Tool output"
+                           (plist-get (car (last (plist-get request :messages))) :content))))
+        (delete-directory root t)))))
 
 ;;; Property Tests
 
