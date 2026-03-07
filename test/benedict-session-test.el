@@ -18,6 +18,26 @@
 
 ;;; Registry Tests
 
+(ert-deftest benedict-session-test-add-message-creates-canonical-entry ()
+  "Adding a legacy message also stores a canonical entry."
+  (let ((benedict-session--registry (make-hash-table :test 'equal)))
+    (let* ((session (benedict-session-create))
+           (message (benedict-session-add-message session '(:role user :content "First")))
+           (entry (car (benedict-session-entries session))))
+      (should (string= (plist-get message :id) (benedict-message-id entry)))
+      (should (eq 'user (benedict-message-role entry)))
+      (should (string= "First" (benedict-message-text entry))))))
+
+(ert-deftest benedict-session-test-entries-chronological ()
+  "Canonical entries preserve chronological ordering."
+  (let ((benedict-session--registry (make-hash-table :test 'equal)))
+    (let ((session (benedict-session-create)))
+      (benedict-session-add-message session '(:role user :content "First"))
+      (benedict-session-add-message session '(:role assistant :content "Second"))
+      (let ((entries (benedict-session-entries-chronological session)))
+        (should (string= "First" (benedict-message-text (car entries))))
+        (should (string= "Second" (benedict-message-text (cadr entries))))))))
+
 (ert-deftest benedict-session-test-create-registers ()
   "Creating a session registers it in the registry."
   (let ((benedict-session--registry (make-hash-table :test 'equal)))
@@ -686,6 +706,20 @@ session returns to idle state."
                   (push (list s type payload) events)))
       (benedict-session-add-message session '(:role user :content "Test"))
       (should (cl-find 'message-added events :key #'cadr)))))
+
+(ert-deftest benedict-session-test-event-payload-includes-canonical-event ()
+  "Session event payloads include a `benedict-event' object."
+  (let ((benedict-session--registry (make-hash-table :test 'equal))
+        (captured nil))
+    (let ((session (benedict-session-create)))
+      (add-hook 'benedict-session-event-hook
+                (lambda (_s _type payload)
+                  (setq captured (plist-get payload :event))))
+      (benedict-session-add-message session '(:role user :content "Test"))
+      (should (benedict-event-p captured))
+      (should (eq 'message-added (benedict-event-type captured)))
+      (should (equal (benedict-session-id session)
+                     (benedict-event-session-id captured))))))
 
 (ert-deftest benedict-session-test-event-on-draft-update ()
   "Draft updates emit events."

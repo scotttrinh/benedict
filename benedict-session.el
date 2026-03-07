@@ -8,6 +8,8 @@
 
 (require 'cl-lib)
 (require 'lgr)
+(require 'benedict-event)
+(require 'benedict-message)
 
 (defvar benedict-session--logger (lgr-get-logger "benedict.session")
   "Logger for session events.")
@@ -17,6 +19,7 @@
 (cl-defstruct (benedict-session (:constructor benedict-session--create))
   "In-memory session owning conversation state and runtime."
   id created-at updated-at title
+  entries
   messages (message-seq 0)
   (state 'idle) draft pending-question inflight last-error last-request
   root provider model profile meta
@@ -100,22 +103,6 @@ CONFIG is a plist with keys: :provider :model :profile :tools
 
 ;;; Request Building
 
-(defun benedict-session--message->provider (message)
-  "Convert internal MESSAGE to provider format."
-  (let* ((role (plist-get message :role))
-         (content (plist-get message :content))
-         (tool-calls (plist-get message :tool-calls))
-         (tool-call-id (plist-get message :tool-call-id))
-         (name (plist-get message :name))
-         (payload (list :role role :content (or content ""))))
-    (when tool-calls
-      (setq payload (plist-put payload :tool-calls tool-calls)))
-    (when tool-call-id
-      (setq payload (plist-put payload :tool-call-id tool-call-id)))
-    (when name
-      (setq payload (plist-put payload :name name)))
-    payload))
-
 (defun benedict-session--build-request (session)
   "Build a provider request plist from SESSION state."
   (let* ((provider (benedict-session-provider session))
@@ -125,8 +112,9 @@ CONFIG is a plist with keys: :provider :model :profile :tools
          (system (benedict-session-system-prompt session))
          (autonomy (benedict-session-autonomy session))
          (verbosity (benedict-session-verbosity session))
-         (history (mapcar #'benedict-session--message->provider
-                          (benedict-session-messages-chronological session)))
+         (history (mapcar (lambda (entry)
+                            (benedict-message->provider-message entry provider))
+                          (benedict-session-entries-chronological session)))
          (messages (if system (append system history) history)))
     (list :provider provider
           :model model
@@ -163,6 +151,11 @@ Returns t if deleted, nil if not found."
   "Update SESSION's updated-at timestamp to now."
   (setf (benedict-session-updated-at session) (current-time)))
 
+(defun benedict-session--sync-message-mirror (session)
+  "Refresh SESSION's legacy plist message mirror from canonical entries."
+  (setf (benedict-session-messages session)
+        (mapcar #'benedict-message-to-legacy (benedict-session-entries session))))
+
 ;;; Events
 
 (defvar benedict-session-event-hook nil
@@ -175,8 +168,14 @@ Each function receives (SESSION QUESTION-PLIST).")
 
 (defun benedict-session--emit (session event-type &rest payload)
   "Emit EVENT-TYPE for SESSION with PAYLOAD."
-  (benedict-session-touch session)
-  (run-hook-with-args 'benedict-session-event-hook session event-type payload)
+  (let ((event (benedict-event-create
+                :type event-type
+                :session-id (benedict-session-id session)
+                :timestamp (current-time)
+                :payload payload)))
+    (benedict-session-touch session)
+    (run-hook-with-args 'benedict-session-event-hook
+                        session event-type (plist-put payload :event event)))
   (when (eq event-type 'question-raised)
     (run-hook-with-args 'benedict-session-ask-user-hook session (car payload))))
 
@@ -189,33 +188,60 @@ Each function receives (SESSION QUESTION-PLIST).")
 
 ;;; Messages
 
+(defun benedict-session-add-entry (session entry)
+  "Add canonical ENTRY to SESSION, assigning ID and timestamp when missing."
+  (let ((normalized (benedict-message-from-legacy entry)))
+    (unless (benedict-message-id normalized)
+      (setf (benedict-message-id normalized)
+            (format "msg-%03d" (cl-incf (benedict-session-message-seq session)))))
+    (unless (benedict-message-timestamp normalized)
+      (setf (benedict-message-timestamp normalized) (current-time)))
+    (push normalized (benedict-session-entries session))
+    (benedict-session--sync-message-mirror session)
+    (benedict-session--emit session 'message-added
+                            :message (benedict-message-to-legacy normalized)
+                            :entry normalized)
+    normalized))
+
 (defun benedict-session-add-message (session message)
-  "Add MESSAGE to SESSION, assigning ID and timestamp.
-MESSAGE is a plist with :role, :content, etc.
-Returns the message with :id and :timestamp added."
-  (let ((id (format "msg-%03d" (cl-incf (benedict-session-message-seq session)))))
-    (setq message (plist-put (copy-sequence message) :id id))
-    (setq message (plist-put message :timestamp (current-time)))
-    (push message (benedict-session-messages session))
-    (benedict-session--emit session 'message-added :message message)
-    message))
+  "Add MESSAGE to SESSION and return the legacy plist view."
+  (benedict-message-to-legacy (benedict-session-add-entry session message)))
+
+(defun benedict-session-get-entry (session id)
+  "Get canonical entry with ID from SESSION, or nil if not found."
+  (cl-find id (benedict-session-entries session)
+           :key #'benedict-message-id :test #'equal))
 
 (defun benedict-session-get-message (session id)
-  "Get message with ID from SESSION, or nil if not found."
-  (cl-find id (benedict-session-messages session)
-           :key (lambda (m) (plist-get m :id)) :test #'equal))
+  "Get legacy plist message with ID from SESSION, or nil if not found."
+  (when-let ((entry (benedict-session-get-entry session id)))
+    (benedict-message-to-legacy entry)))
 
 (defun benedict-session-update-message (session id updates)
   "Update message with ID in SESSION, merging the change plist.
 Return the updated message or nil if not found."
-  (when-let ((msg (benedict-session-get-message session id)))
-    (cl-loop for (k v) on updates by #'cddr do (plist-put msg k v))
-    (benedict-session--emit session 'message-updated :id id :updates updates)
-    msg))
+  (when-let ((entry (benedict-session-get-entry session id)))
+    (let ((updated (benedict-message-merge-legacy entry updates)))
+      (setf (benedict-session-entries session)
+            (cl-loop for candidate in (benedict-session-entries session)
+                     collect (if (equal (benedict-message-id candidate) id)
+                                 updated
+                               candidate)))
+      (benedict-session--sync-message-mirror session)
+      (benedict-session--emit session 'message-updated
+                              :id id
+                              :updates updates
+                              :entry updated)
+      (benedict-message-to-legacy updated))))
+
+(defun benedict-session-entries-chronological (session)
+  "Return SESSION entries in chronological order (oldest first)."
+  (reverse (copy-sequence (benedict-session-entries session))))
 
 (defun benedict-session-messages-chronological (session)
   "Return SESSION messages in chronological order (oldest first)."
-  (reverse (copy-sequence (benedict-session-messages session))))
+  (mapcar #'benedict-message-to-legacy
+          (benedict-session-entries-chronological session)))
 
 ;;; Draft (streaming accumulator)
 
@@ -560,13 +586,26 @@ If nil, loop waits for `benedict-session-continue' call.")
 
 (defun benedict-session--check-repetition (session tool-calls)
   "Return non-nil if TOOL-CALLS match previous assistant message in SESSION."
-  (let* ((messages (benedict-session-messages session))
+  (cl-labels ((normalize (calls)
+                (mapcar (lambda (call)
+                          (let (normalized)
+                            (when-let ((id (plist-get call :id)))
+                              (setq normalized (plist-put normalized :id id)))
+                            (when-let ((name (or (plist-get call :name)
+                                                 (plist-get call :tool))))
+                              (setq normalized (plist-put normalized :name name)))
+                            (when-let ((arguments (plist-get call :arguments)))
+                              (setq normalized (plist-put normalized :arguments arguments)))
+                            normalized))
+                        (if (vectorp calls) (append calls nil) calls))))
+    (let* ((tool-calls (normalize tool-calls))
+         (messages (benedict-session-entries session))
          (assistants (cl-remove-if-not
-                      (lambda (m) (eq (plist-get m :role) 'assistant))
+                      (lambda (m) (eq (benedict-message-role m) 'assistant))
                       messages))
          (previous (cadr assistants)))
-    (when previous
-      (equal tool-calls (plist-get previous :tool-calls)))))
+      (when previous
+        (equal tool-calls (normalize (benedict-message-tool-calls previous)))))))
 
 (defun benedict-session--check-turn-limit (session)
   "Return non-nil if SESSION turn limit reached.  Emits checkpoint-requested if so."
@@ -616,7 +655,7 @@ If nil, loop waits for `benedict-session-continue' call.")
 (defun benedict-session--should-continue (session assistant-message)
   "Decide whether SESSION loop should continue after ASSISTANT-MESSAGE.
 Return 'continue, 'stop, or 'checkpoint."
-  (let ((tool-calls (plist-get assistant-message :tool-calls)))
+  (let ((tool-calls (benedict-message-tool-calls assistant-message)))
     (cond
      ((not tool-calls) 'stop)
      ((benedict-session--check-repetition session tool-calls)
@@ -628,9 +667,9 @@ Return 'continue, 'stop, or 'checkpoint."
 (defun benedict-session--loop-step (session)
   "Execute one step of the agent loop for SESSION.
 Process tool calls from the last message, then dispatch if it should continue."
-  (let* ((messages (benedict-session-messages session))
+  (let* ((messages (benedict-session-entries session))
          (last-msg (car messages))
-         (tool-calls (plist-get last-msg :tool-calls)))
+         (tool-calls (and last-msg (benedict-message-tool-calls last-msg))))
     (lgr-log benedict-session--logger lgr-level-debug
              "Loop step for session %s: %d tool calls"
              (benedict-session-id session) (length tool-calls))
