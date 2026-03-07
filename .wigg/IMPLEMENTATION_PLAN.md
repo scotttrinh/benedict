@@ -10,7 +10,7 @@ After this change, a developer should be able to open `*Benedict Chat*`, have th
 
 ## Progress
 
-- [ ] (2026-03-07 15:38Z) Audit `.wigg/specs/` and current implementation; identify existing seams in `benedict-session.el`, `benedict-chat.el`, `benedict-tools.el`, and current tests (completed: repository/spec analysis; remaining: implementation, validation, retrospective).
+- [x] (2026-03-07 15:43Z) Audit `.wigg/specs/` and current implementation; identify existing seams in `benedict-session.el`, `benedict-chat.el`, `benedict-tools.el`, and current tests.
 - [ ] (YYYY-MM-DD HH:MMZ) Introduce a canonical message and event model that sits between provider adapters, runtime state, persistence, and UI.
 - [ ] (YYYY-MM-DD HH:MMZ) Add a harness module that enforces scope, budgets, permission predicates, and audit event emission for every tool call.
 - [ ] (YYYY-MM-DD HH:MMZ) Add a provider-agnostic session store with save/load, branch metadata hooks, and replay into the runtime.
@@ -26,6 +26,8 @@ The largest gap is architectural, not UI polish. Messages are still loose plists
 
 The current chat checkpoint flow also still uses `y-or-n-p` inside `benedict-chat--handle-session-event` even though the specs require a persistent checkpoint block in the chat buffer. That is an implementation smell worth removing early because it couples runtime safety to transient UI prompts.
 
+Baseline validation for this run succeeded without code changes. `git status --short` showed only the intentional modification to `.wigg/IMPLEMENTATION_PLAN.md`, `rg --files .wigg/specs` found the seven numbered spec files plus `benedict-assistant.md`, and `nix run .#test -- test/benedict-session-test.el test/benedict-agent-loop-test.el test/benedict-chat-integration-test.el test/benedict-tools-test.el` exited `0` after running 83 tests.
+
 ## Decision Log
 
 - **Decision:** Build the missing features around a new canonical message/event layer instead of extending the current raw plist history directly.
@@ -39,6 +41,35 @@ The current chat checkpoint flow also still uses `y-or-n-p` inside `benedict-cha
 - **Decision:** Use an s-expression transcript file for the first persistence milestone.
 - **Rationale:** The specs explicitly prefer JSONL or s-expressions over early SQLite lock-in. This repository is Emacs Lisp-first, so readable s-expressions are simpler to debug in tests and easier for novice contributors to inspect and repair.
 - **Date/Author:** 2026-03-07 / Codex
+
+- **Decision:** Treat the pre-existing edit to `.wigg/IMPLEMENTATION_PLAN.md` as intentional local work and continue the audit against the current working tree.
+- **Rationale:** Concrete Step 1 allows intentional local changes, and this run's task is to update the ExecPlan itself. Resetting or ignoring that file would violate the instruction to rely on the current tree and not rewrite history.
+- **Date/Author:** 2026-03-07 / Codex
+
+## Artifacts and Notes
+
+  - `git status --short`
+    ```text
+     M .wigg/IMPLEMENTATION_PLAN.md
+    ```
+  - `rg --files .wigg/specs`
+    ```text
+    .wigg/specs/03_ui_ux.md
+    .wigg/specs/02_architecture.md
+    .wigg/specs/04_agent_loop.md
+    .wigg/specs/01_overview.md
+    .wigg/specs/06_tools.md
+    .wigg/specs/05_providers.md
+    .wigg/specs/benedict-assistant.md
+    .wigg/specs/07_harness_and_skills.md
+    ```
+  - `nix run .#test -- test/benedict-session-test.el test/benedict-agent-loop-test.el test/benedict-chat-integration-test.el test/benedict-tools-test.el`
+    ```text
+    warning: Git tree '/Users/scotttrinh/github.com/scotttrinh/benedict' has uncommitted changes
+    ................................................................................
+
+    Ran 83 tests in 0.985 seconds
+    ```
 
 ## Outcomes & Retrospective
 
@@ -257,6 +288,8 @@ nix run .#test -- test/benedict-session-test.el test/benedict-agent-loop-test.el
 ```
 
 also exits with status `0`, proving the core runtime, harness, tool path, and chat integration still work together.
+
+Revision Note (2026-03-07 15:43Z): Marked the initial audit milestone complete after running the baseline repo-state and targeted test commands, and recorded the resulting evidence and working-tree observation for the next implementation run.
 
 Manual acceptance in Emacs must show the following behavior:
 
