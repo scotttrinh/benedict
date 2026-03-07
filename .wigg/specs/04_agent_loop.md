@@ -4,7 +4,16 @@ This document defines the autonomous loop logic that allows Benedict to perform 
 
 ## 0. Core Idea: Agent Programs (Programmable Loop)
 
-The "agent loop" is not a single hard-coded behavior. Benedict must support "agent programs" (Ralph Wiggum Loop style): configurable, testable loop policies that determine how the agent thinks/acts/verifies and how it produces artifacts.
+The "agent loop" is not a single hard-coded behavior. Benedict must support configurable, testable loop policies that determine how the agent thinks/acts/verifies and how it produces artifacts.
+
+However, the runtime should start from a **small core**:
+- prompt/continue
+- stream assistant response
+- execute tools
+- continue until stop/tool boundary/checkpoint
+- emit stable lifecycle events
+
+More specialized behavior such as step graphs, subagents, or custom planning policies should layer on top of that core rather than be baked into its minimal contract.
 
 An agent program is data (and optionally small amounts of Elisp) that configures:
 - step sequence (observe/plan/act/verify/capture)
@@ -30,6 +39,22 @@ The Agent Loop is a state machine that drives the conversation forward until a t
     - Append Tool Results to history.
     - **Loop:** Go back to Step 1.
 
+### 1.1 Core Runtime Contract
+
+The loop must expose a stable event sequence similar to:
+- `agent-start`
+- `turn-start`
+- `message-start`
+- `message-update`
+- `message-end`
+- `tool-started`
+- `tool-updated` (optional)
+- `tool-completed`
+- `turn-end`
+- `agent-end`
+
+The UI, persistence layer, and extensions should be able to build on this without depending on runtime internals.
+
 **Artifact-first completion:**
 - The loop should prefer producing a durable artifact (file, buffer, draft, org capture) as the "result" of work.
 - Persistence of the chat transcript is valuable but not required for v0.1 usefulness if artifacts are consistently produced.
@@ -46,7 +71,7 @@ To prevent runaway agents (infinite loops, excessive costs), the loop is bounded
 ### 2.2 Checkpoints
 When a limit is reached, the loop enters the **`checkpoint`** state.
 - **Behavior:** Execution pauses.
-- **UI:** User is presented with a prompt: "Benedict has run 5 steps. Continue? (y/n)" (or an equivalent VUI prompt).
+- **UI:** User is presented with a persistent checkpoint block in the chat UI, not only an ephemeral yes/no prompt.
 - **Resolution:**
     - `y`: Reset counters/timers and continue.
     - `n`: Stop loop.
@@ -72,11 +97,22 @@ When a limit is reached, the loop enters the **`checkpoint`** state.
     - Run the tool function (potentially in `flywire` sandbox).
     - Capture `stdout`/`return value` or `error`.
 5.  **Result Formatting:**
-    - Create a `tool` role message.
+    - Create a typed tool result message.
     - `tool_call_id`: Links back to the assistant's call.
     - `content`: The output of the tool.
+    - `details`: Structured metadata for UI/persistence/extensions.
+    - `actions`: Optional Emacs-native follow-up actions.
+    - `effects`: Summary of what changed (files, buffers, subprocesses, network).
 
-## 4. Sub-Agents & Delegation (Advanced Architecture)
+### 3.1 Queueing During Active Runs
+
+The loop must support two classes of user input while busy:
+- **steering** messages: delivered at the next safe interruption boundary
+- **follow-up** messages: delivered after the loop would otherwise stop
+
+This should be part of the runtime contract, not a UI-only trick.
+
+## 4. Sub-Agents & Delegation
 
 Complex tasks require specialized contexts. The Main Agent can spawn Sub-Agents.
 
@@ -90,10 +126,14 @@ Complex tasks require specialized contexts. The Main Agent can spawn Sub-Agents.
 
 ### 4.1 First-Class Subagents (v0.1 MVP direction)
 
-Subagents should not be "advanced only"; they are a primary mechanism for keeping context clean:
+Subagents are useful for context hygiene, but they are not a substitute for a clean core/runtime contract.
+
+When introduced:
 - A subagent runs in an isolated session with a narrow task and narrower tool access.
 - The output contract is explicit: summary + optional artifacts (files/buffers/patches) + citations to local evidence when applicable.
 - The main agent decides whether to merge subagent output into the main thread history.
+
+The persistence layer must record subagent provenance explicitly.
 
 ## 5. Multi-Model Experiments
 
@@ -129,3 +169,14 @@ Requirements:
   - subagent spawn points (e.g., "research" step always delegates)
   - verification steps (tests, lint, compilation) as explicit phases
 - Programs must be observable in UI (current step, budgets, why a tool is allowed/denied).
+
+## 8. Delivery Order
+
+Recommended implementation order:
+
+1. stable core loop and event contract
+2. typed message/tool-result model
+3. queued steering/follow-up inputs
+4. persistence and branching integration
+5. programmable loop policies
+6. subagents and multi-model orchestration

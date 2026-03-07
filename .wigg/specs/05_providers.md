@@ -20,7 +20,7 @@ A Provider is a struct implementing the following contract:
 
 ### 2.1 Request Payload
 Standardized plist passed to `send`:
-- `:messages` (list): Chronological message history.
+- `:messages` (list): Chronological provider-ready message history derived from Benedict's internal message model.
 - `:model` (string): Model identifier (e.g., "anthropic/claude-3-opus").
 - `:tools` (list): List of tool definitions (JSON Schema).
 - `:stream` (bool): Whether to request streaming.
@@ -29,7 +29,7 @@ Standardized plist passed to `send`:
 Called with a result plist:
 - `:message` (plist): The final message object.
     - `:role` ('assistant)
-    - `:content` (string)
+    - `:content` (string or typed content blocks before normalization)
     - `:tool-calls` (list, optional)
 - `:usage` (plist): Token usage stats.
 - `:model` (string): The actual model used.
@@ -45,11 +45,33 @@ Persistence should be able to reuse existing, widely-used transcript formats whe
 
 Requirements:
 - Benedict maintains a provider-agnostic internal message model.
+- Provider adapters are responsible for translating between internal messages and provider payloads.
+- Benedict must not persist raw provider request/response bodies as the canonical chat history.
+- Provider/model switches in a conversation should be represented as explicit session metadata/events, not by mutating older messages into the new provider's shape.
 - Benedict can export/import transcripts via adapters to external schemas, such as:
   - OpenAI-style message arrays (role/content/tool messages)
   - Vercel AI SDK compatible transcript/message representations
   - Opencode-compatible transcript serialization (if available)
 - The persistence layer can choose one canonical on-disk format, but adapters must exist so users can interop with other tooling.
+
+### 2.5 Cross-Provider Replay and Model Switching
+
+To support switching models/providers in the same chat, Benedict should use a layered approach:
+
+1. Persist canonical internal messages and session events.
+2. Reconstruct canonical history from persistence on resume/branch/replay.
+3. Convert canonical history into LLM-compatible messages.
+4. Apply provider-specific normalization only for the target model/provider.
+
+Examples of provider-specific normalization that belong at replay/send time:
+- dropping or degrading reasoning/thinking blocks that only the original model can replay safely
+- normalizing tool-call IDs when one provider emits IDs another provider rejects
+- synthesizing missing tool results or other repair messages when a target API requires stricter turn structure
+- stripping provider-specific signatures or encrypted reasoning payloads that are meaningless cross-model
+
+The provider layer should therefore support both:
+- **forward translation**: internal messages -> provider request payload
+- **cross-provider replay normalization**: canonical history -> provider-safe history
 
 ## 3. Supported Providers
 

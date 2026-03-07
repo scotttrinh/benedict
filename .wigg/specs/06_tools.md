@@ -19,6 +19,7 @@ Tools are defined using `benedict-tools-register`.
     - `'confirm`: Prompt if scope expansion is required.
     - `'always`: Always prompt (reserved for privileged effects like arbitrary eval).
 - **`:schema`** (plist): JSON Schema definition of arguments.
+- **`:prompt-snippet` / `:prompt-guidance`** (future public API): optional hints that help the model use the tool correctly without bloating the base system prompt.
 
 ### 1.2 Programmable Permission Predicate
 
@@ -49,6 +50,13 @@ A simplified plist representation of JSON Schema:
 
 Benedict favors a small, high-leverage kernel of tools. Complex behaviors should be composed or dynamically extended using `exec-elisp`.
 
+This is an explicit design goal. Benedict should prefer:
+- a compact, dependable built-in kernel
+- dynamic extension through public APIs
+- rich tool result metadata for UI and persistence
+
+It should avoid turning the core into a giant pile of one-off built-ins.
+
 ### 2.1 File System
 - **`read-file`**
     - **Args:** `:path` (string), `:start-line` (int), `:end-line` (int).
@@ -74,6 +82,16 @@ Benedict favors a small, high-leverage kernel of tools. Complex behaviors should
     - **Args:** `:target` (object), `:old_text` (string), `:new_text` (string).
     - **Behavior:** Exact string replacement. Fails if `old_text` matches 0 or >1 times.
     - **Approval:** `confirm`.
+
+### 2.3.1 Write UX Principle
+
+Mutating tools should return more than raw text:
+- changed targets
+- concise summary
+- diff or hunk metadata when applicable
+- optional actions (`open`, `ediff`, `revert`, `apply`)
+
+This lets Benedict feel like an Emacs tool rather than a plain transcript of shell output.
 
 ### 2.4 Web & External (The OpenClaw Gap)
 To function as a personal assistant, Benedict needs to see the world.
@@ -143,16 +161,28 @@ In v0.1, "modern safety" means:
 - the default experience should not rely on constant user confirmation
 - the harness enforces scope and budgets, and only prompts on scope expansion
 
-## 4. Custom Tools API
+## 4. Tool Result Contract
+
+All tools should normalize into a structured result object with:
+- `:content`: text sent back to the model
+- `:details`: structured metadata for UI/persistence/extensions
+- `:ui`: optional render hints and actions
+- `:effects`: summary of observed side effects
+- `:status`: success/failure
+
+This contract is more important than exact implementation details of any single built-in tool.
+
+## 5. Custom Tools API
 
 Users can extend Benedict with their own capabilities.
 
-- **`benedict-register-tool`**:
+- **`benedict-tools-register`** (current internal name; public alias may be added later):
     - Users define an Elisp function and a JSON Schema.
     - The tool becomes available to the agent immediately.
     - Custom tools share the same approval policies as built-ins, including predicate-based permission checks.
+    - Future extension/runtime APIs should support dynamic registration and removal at session startup or during a live session.
 
-## 5. Error Handling
+## 6. Error Handling
 
 - Tools must return useful error messages on failure (e.g., "File not found", "Match not unique").
 - Errors are captured and returned to the LLM as a Tool Result with `status: failure`.

@@ -83,6 +83,15 @@ Each session builds its instruction context from sources, in order:
 
 This must be configurable, but the default should "just work" for new projects.
 
+### 2.1.1 Progressive Disclosure
+
+Instruction loading should follow a progressive-disclosure model:
+- keep discovery metadata cheap and always available
+- load full skill/spec bodies only when the task clearly matches or the user explicitly requests them
+- preserve relative paths and reusable scripts/assets inside skills
+
+This keeps context small while still making Benedict extensible.
+
 ### 2.2 Session Bootstrap Hook
 
 The system must support a hook that runs when creating a new session/thread:
@@ -100,6 +109,7 @@ A "skill" is a reusable workflow bundle:
 - steps and success criteria
 - tool preferences and constraints
 - output format expectations
+- optional helper scripts and reference material
 
 Skills can apply to:
 - planning work
@@ -107,7 +117,21 @@ Skills can apply to:
 - implementation work
 - review work
 
-### 2.4 Dynamic Skills (Self-Extension)
+Skills should be treated as a first-class product surface, not only as local prompt files. The long-term goal is a shareable Benedict ecosystem similar in spirit to successful package/skill systems in other harnesses.
+
+### 2.4 Extensions and Dynamic Capabilities
+
+In addition to file-based skills, Benedict needs a public extension/runtime API for:
+- registering tools
+- registering context providers
+- injecting or transforming context
+- customizing UI rendering
+- persisting extension-owned session metadata
+- adding commands or session bootstrap behavior
+
+This should be designed as a stable surface rather than leaving customization to internal module patching.
+
+### 2.5 Dynamic Skills (Self-Extension)
 
 Benedict supports **Dynamic Skills**: tools written by the agent itself during a session.
 
@@ -127,3 +151,21 @@ Subagents are first-class in v0.1:
 - a subagent has a smaller context window and stricter harness budgets
 - subagents should be the default mechanism for "broad search" or "deep dive" tasks
 - the UI must clearly surface subagent work as collapsible blocks, not interleaved noise
+
+## 4. Persistence and Audit
+
+Harness and skill activity should be persistable as structured session data:
+- scope expansions and denials
+- tool permission decisions
+- loaded skills/instruction sources
+- extension-owned custom entries
+- model/provider change events
+- compaction and branch summary entries
+
+This supports resume, branching, compaction, and later debugging without forcing every detail into provider-visible message history.
+
+Persistence rule:
+- store canonical internal events/messages first
+- derive provider-specific payloads only when dispatching or exporting
+
+This keeps skill and harness metadata compatible with model switching and cross-provider replay.

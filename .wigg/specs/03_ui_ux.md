@@ -6,6 +6,8 @@ This document describes Benedict's UI as the target end-state after refactoring 
 
 Benedict's UI is a tree of `vui` components mounted into Emacs buffers. Components render virtual nodes describing UI structure; vui.el reconciles and commits changes while preserving cursor/scroll positions.
 
+The goal is not to mimic a terminal harness inside Emacs. The UI should use the same architectural discipline as strong CLI agents while leaning into what Emacs does better: actionable text, jump targets, diffs, overlays, buffers, and capture workflows.
+
 ### 1.1 Unidirectional Data Flow
 
 - **Data flows down** through props (inputs to child components)
@@ -75,6 +77,8 @@ The `BenedictRoot` component owns all shared application state:
  :provider           ; :anthropic | :openai | :bedrock | :openrouter
  :model              ; "claude-sonnet-4-20250514" etc.
  :collapsed-blocks   ; Set of block-ids that are collapsed
+ :queued-messages    ; pending steering/follow-up messages
+ :session-branch     ; current branch/session identity
  :error)             ; Current error state or nil
 ```
 
@@ -108,8 +112,9 @@ The Chat Buffer is the primary interface, rendered as a vui.el component tree.
 
 - **Header**: Provider/Model badge, status indicator, session title
 - **Conversation Stream**: `vui-list` of turns with stable keys
-- **Compose Area**: Controlled `vui-field` at buffer bottom with context indicators
+- **Compose Area**: Controlled `vui-field` at buffer bottom with context indicators and queue controls
   - Keybindings for submit/history are set up by parent buffer, not by component render
+- **Session Controls**: branch/resume state, queued-message indicator, checkpoint actions
 
 ### 3.2 Visual Elements
 
@@ -161,6 +166,12 @@ Thinking blocks, tool calls, and tool results use a compound component pattern:
         (funcall content)))))
 ```
 
+Additional first-class block types:
+- queued user messages (`steer` vs `follow-up`)
+- checkpoint / approval requests
+- subagent activity summaries
+- persistence markers (branch summary, compaction summary)
+
 ### 3.4 Interactive Elements
 
 #### Buttons
@@ -176,6 +187,8 @@ Keybindings are registered in `benedict-mode-map` and dispatch actions to a root
 |-----------|-------------------------------|
 | `C-c C-s` | Send prompt / Stream response |
 | `C-c C-k` | Cancel streaming/loop         |
+| `C-c C-q` | Queue as follow-up            |
+| `C-c C-i` | Queue as steer/interruption   |
 | `g r`     | Retry last request            |
 | `w`       | Copy last response            |
 | `n` / `p` | Next/Prev turn                |
@@ -277,6 +290,18 @@ Streaming updates must use `vui-with-async-context` and `vui-async-callback`:
 - **Use `vui-use-ref` for non-render state**: Scroll position, accumulated but unflushed content
 - **Memoize expensive computations**: Syntax highlighting, token counting
 
+## 4.4 Queueing While Busy
+
+Benedict should support the equivalent of:
+- **steer**: interrupt after the current tool execution boundary
+- **follow-up**: wait until the current run completes
+
+UI requirements:
+- queued items are visible in the chat buffer, not hidden in transient minibuffer state
+- users can reorder, edit, or pull queued items back into the compose area
+- canceling a run should preserve queued work rather than discarding it
+- queue state must be represented in the session model so frontends and persistence agree
+
 ## 5. Context Management UI
 
 Commands for feeding Emacs context into the chat:
@@ -318,6 +343,19 @@ In-compose pickers (MVP):
                  (vui-box :class "context-preview"
                    (vui-text (truncate-for-preview content)))))))
 ```
+
+## 6. Emacs-Native Action Surfaces
+
+Tool output should not be treated as dead transcript text. When possible, tool result blocks should expose Emacs-native actions:
+
+- open file or buffer
+- jump to line, xref, or hunk
+- open `ediff` / diff preview for writes
+- re-run compile/test commands in compilation buffers
+- capture into Org
+- apply or reject a proposed patch
+
+This is a primary Benedict UX advantage over terminal agents and should be reflected in the message/tool result schema.
 
 ## 6. History Browsing
 
