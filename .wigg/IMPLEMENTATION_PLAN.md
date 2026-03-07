@@ -11,7 +11,7 @@ After this change, a developer should be able to open `*Benedict Chat*`, have th
 ## Progress
 
 - [x] (2026-03-07 15:43Z) Audit `.wigg/specs/` and current implementation; identify existing seams in `benedict-session.el`, `benedict-chat.el`, `benedict-tools.el`, and current tests.
-- [ ] (YYYY-MM-DD HH:MMZ) Introduce a canonical message and event model that sits between provider adapters, runtime state, persistence, and UI.
+- [x] (2026-03-07 15:50Z) Introduce a canonical message and event model that sits between provider adapters, runtime state, persistence, and UI.
 - [ ] (YYYY-MM-DD HH:MMZ) Add a harness module that enforces scope, budgets, permission predicates, and audit event emission for every tool call.
 - [ ] (YYYY-MM-DD HH:MMZ) Add a provider-agnostic session store with save/load, branch metadata hooks, and replay into the runtime.
 - [ ] (YYYY-MM-DD HH:MMZ) Add instruction bootstrap that loads `AGENTS.md`, selected `SKILL.md` files, and `.wigg/specs/` into session startup context with progressive disclosure.
@@ -27,6 +27,8 @@ The largest gap is architectural, not UI polish. Messages are still loose plists
 The current chat checkpoint flow also still uses `y-or-n-p` inside `benedict-chat--handle-session-event` even though the specs require a persistent checkpoint block in the chat buffer. That is an implementation smell worth removing early because it couples runtime safety to transient UI prompts.
 
 Baseline validation for this run succeeded without code changes. `git status --short` showed only the intentional modification to `.wigg/IMPLEMENTATION_PLAN.md`, `rg --files .wigg/specs` found the seven numbered spec files plus `benedict-assistant.md`, and `nix run .#test -- test/benedict-session-test.el test/benedict-agent-loop-test.el test/benedict-chat-integration-test.el test/benedict-tools-test.el` exited `0` after running 83 tests.
+
+The canonical-message milestone needed one compatibility shim for legacy test data: some older assistant messages still carry `:tool-calls` as a vector, and repetition detection compares sparse tool-call plists that omit nil keys. Normalizing both vector/list inputs and pruning nil fields kept the new canonical entry layer compatible without rewriting unrelated callers.
 
 ## Decision Log
 
@@ -44,6 +46,14 @@ Baseline validation for this run succeeded without code changes. `git status --s
 
 - **Decision:** Treat the pre-existing edit to `.wigg/IMPLEMENTATION_PLAN.md` as intentional local work and continue the audit against the current working tree.
 - **Rationale:** Concrete Step 1 allows intentional local changes, and this run's task is to update the ExecPlan itself. Resetting or ignoring that file would violate the instruction to rely on the current tree and not rewrite history.
+- **Date/Author:** 2026-03-07 / Codex
+
+- **Decision:** Keep `benedict-session-messages` as a legacy plist mirror while making canonical `benedict-message` structs the runtime source of truth.
+- **Rationale:** Milestone 1 only requires the runtime contract refactor, not a repo-wide caller migration. A synchronized mirror preserves current UI/tests while `benedict-session--build-request`, loop logic, and future persistence code move onto canonical entries immediately.
+- **Date/Author:** 2026-03-07 / Codex
+
+- **Decision:** Attach a `benedict-event` object inside the existing session hook payload instead of changing the hook arity in this milestone.
+- **Rationale:** This introduces a stable event contract for new consumers without breaking the existing hook subscribers that still expect `(SESSION EVENT-TYPE PAYLOAD)`.
 - **Date/Author:** 2026-03-07 / Codex
 
 ## Artifacts and Notes
@@ -69,6 +79,28 @@ Baseline validation for this run succeeded without code changes. `git status --s
     ................................................................................
 
     Ran 83 tests in 0.985 seconds
+    ```
+  - `git commit -m "Refactor session history around canonical entries"`
+    ```text
+    [from-pi 3a17d94] Refactor session history around canonical entries
+     4 files changed, 337 insertions(+), 44 deletions(-)
+     create mode 100644 benedict-event.el
+     create mode 100644 benedict-message.el
+    ```
+  - `nix run .#test -- test/benedict-session-test.el test/benedict-agent-loop-test.el`
+    ```text
+    warning: Git tree '/Users/scotttrinh/github.com/scotttrinh/benedict' has uncommitted changes
+    ✓ Checking local archives `local`... done!
+    ................................................................
+
+    Ran 64 tests in 1.470 seconds
+    ```
+  - File-scoped diff notes
+    ```text
+    benedict-message.el: added canonical `benedict-message` structs, legacy-plist normalization helpers, and provider translation helpers.
+    benedict-event.el: added stable `benedict-event` structs plus plist conversion.
+    benedict-session.el: added canonical `entries`, synced legacy message mirrors, emitted canonical event objects, and switched request-building/loop checks onto canonical entries.
+    test/benedict-session-test.el: added focused coverage for canonical entry storage, chronological entry access, and embedded canonical events.
     ```
 
 ## Outcomes & Retrospective
@@ -330,3 +362,5 @@ Important repository evidence gathered while drafting this plan:
 - Existing validation anchors are `test/benedict-session-test.el`, `test/benedict-agent-loop-test.el`, `test/benedict-tools-test.el`, and `test/benedict-chat-integration-test.el`.
 
 When implementation is complete, append the final test transcripts and one saved-session file example here so a novice can compare their result directly against a known-good artifact.
+
+Revision Note (2026-03-07 15:50Z): Marked the canonical message/event milestone complete after adding `benedict-message.el` and `benedict-event.el`, refactoring `benedict-session.el` to store canonical entries with a temporary plist mirror, adding focused session tests, and recording the passing milestone transcript plus the compatibility decisions needed to keep legacy callers green.
