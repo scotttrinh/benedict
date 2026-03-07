@@ -24,7 +24,7 @@
     (let* ((session (benedict-session-create))
            (message (benedict-session-add-message session '(:role user :content "First")))
            (entry (car (benedict-session-entries session))))
-      (should (string= (plist-get message :id) (benedict-message-id entry)))
+      (should (string= (benedict-message-id message) (benedict-message-id entry)))
       (should (eq 'user (benedict-message-role entry)))
       (should (string= "First" (benedict-message-text entry))))))
 
@@ -100,15 +100,15 @@
     (let ((session (benedict-session-create)))
       (let ((m1 (benedict-session-add-message session '(:role user :content "First")))
             (m2 (benedict-session-add-message session '(:role assistant :content "Second"))))
-        (should (string= "msg-001" (plist-get m1 :id)))
-        (should (string= "msg-002" (plist-get m2 :id)))))))
+        (should (string= "msg-001" (benedict-message-id m1)))
+        (should (string= "msg-002" (benedict-message-id m2)))))))
 
 (ert-deftest benedict-session-test-add-message-assigns-timestamp ()
   "Adding a message assigns a timestamp."
   (let ((benedict-session--registry (make-hash-table :test 'equal)))
     (let ((session (benedict-session-create)))
       (let ((msg (benedict-session-add-message session '(:role user :content "Test"))))
-        (should (plist-get msg :timestamp))))))
+        (should (benedict-message-timestamp msg))))))
 
 (ert-deftest benedict-session-test-messages-newest-first ()
   "Messages are stored newest-first."
@@ -116,8 +116,8 @@
     (let ((session (benedict-session-create)))
       (benedict-session-add-message session '(:role user :content "First"))
       (benedict-session-add-message session '(:role assistant :content "Second"))
-      (let ((messages (benedict-session-messages session)))
-        (should (string= "Second" (plist-get (car messages) :content)))))))
+      (let ((messages (benedict-session-entries session)))
+        (should (string= "Second" (benedict-message-text (car messages))))))))
 
 (ert-deftest benedict-session-test-messages-chronological ()
   "Chronological accessor returns oldest-first."
@@ -126,7 +126,7 @@
       (benedict-session-add-message session '(:role user :content "First"))
       (benedict-session-add-message session '(:role assistant :content "Second"))
       (let ((messages (benedict-session-messages-chronological session)))
-        (should (string= "First" (plist-get (car messages) :content)))))))
+        (should (string= "First" (benedict-message-text (car messages))))))))
 
 (ert-deftest benedict-session-test-get-message-by-id ()
   "Can retrieve message by ID."
@@ -135,7 +135,7 @@
       (benedict-session-add-message session '(:role user :content "Find me"))
       (let ((found (benedict-session-get-message session "msg-001")))
         (should found)
-        (should (string= "Find me" (plist-get found :content))))
+        (should (string= "Find me" (benedict-message-text found))))
       (should-not (benedict-session-get-message session "msg-999")))))
 
 (ert-deftest benedict-session-test-update-message ()
@@ -145,7 +145,7 @@
       (benedict-session-add-message session '(:role user :content "Original"))
       (benedict-session-update-message session "msg-001" '(:metadata (:edited t)))
       (let ((msg (benedict-session-get-message session "msg-001")))
-        (should (plist-get (plist-get msg :metadata) :edited))))))
+        (should (plist-get (benedict-message-metadata msg) :edited))))))
 
 ;;; State Tests
 
@@ -209,8 +209,8 @@
       (benedict-session-start-draft session)
       (benedict-session-append-draft session "Response text")
       (let ((msg (benedict-session-finalize-draft session)))
-        (should (eq 'assistant (plist-get msg :role)))
-        (should (string= "Response text" (plist-get msg :content)))
+        (should (eq 'assistant (benedict-message-role msg)))
+        (should (string= "Response text" (benedict-message-text msg)))
         (should-not (benedict-session-draft session))
         (should (eq 'idle (benedict-session-state session)))))))
 
@@ -222,7 +222,7 @@
       (benedict-session-append-draft session "Partial")
       (benedict-session-discard-draft session)
       (should-not (benedict-session-draft session))
-      (should (= 0 (length (benedict-session-messages session)))))))
+      (should (= 0 (length (benedict-session-entries session)))))))
 
 ;;; Inflight Request Tests
 
@@ -316,7 +316,7 @@
                      :usage (:prompt_tokens 10 :completion_tokens 5 :total_tokens 15)))
           (should-not (benedict-session-busy-p session))
           (should (eq 'idle (benedict-session-state session)))
-          (should (= 1 (length (benedict-session-messages session))))
+          (should (= 1 (length (benedict-session-entries session))))
           (should (cl-find 'request-completed events :key #'car)))))))
 
 (ert-deftest benedict-session-test-dispatch-error-headless ()
@@ -353,9 +353,9 @@
         (funcall (plist-get captured-callbacks :on-success)
                  '(:message (:role assistant :content "Direct response")
                    :provider mock :model mock))
-        (should (= 1 (length (benedict-session-messages session))))
+        (should (= 1 (length (benedict-session-entries session))))
         (should (string= "Direct response"
-                         (plist-get (car (benedict-session-messages session)) :content)))))))
+                         (benedict-message-text (car (benedict-session-entries session)))))))))
 
 ;;; Tool Execution Tests
 
@@ -394,8 +394,10 @@
   "Permission denials are captured as structured failures."
   (let ((benedict-session--registry (make-hash-table :test 'equal))
         (benedict-session-tool-invoke-fn
-         (lambda (_id _args)
-           (signal 'benedict-tool-denied '("Denied by policy" :tool project-search))))
+         (lambda (_id _args &rest _options)
+           '(:status denied
+             :error (:message "Denied by policy"
+                     :code permission-denied))))
         (events nil))
     (let ((session (benedict-session-create)))
       (add-hook 'benedict-session-event-hook
@@ -403,9 +405,8 @@
       (let* ((result (benedict-session--invoke-tool
                       session '(:id "call-1" :name project-search :arguments nil)))
              (error-info (plist-get result :error)))
-        (should (eq 'failure (plist-get result :status)))
+        (should (eq 'denied (plist-get result :status)))
         (should (eq 'permission-denied (plist-get error-info :code)))
-        (should (eq 'benedict-tool-denied (plist-get error-info :type)))
         (should (cl-find 'tool-completed events :key #'car))))))
 
 (ert-deftest benedict-session-test-invoke-tool-emits-permission-allow-decision-event ()
@@ -428,15 +429,17 @@
             (add-hook 'benedict-session-event-hook
                       (lambda (_s type payload)
                         (push (cons type payload) events)))
-            (let ((result (benedict-session--invoke-tool
-                           session
-                           `(:id "call-allow" :name ,tool-id :arguments (:a 1)))))
+            (let* ((result (benedict-session--invoke-tool
+                            session
+                            `(:id "call-allow" :name ,tool-id :arguments (:a 1))))
+                   (audit-event (cl-find 'tool-audit events :key #'car))
+                   (decision-event (and audit-event
+                                        (plist-get (cdr audit-event) :audit))))
               (should (eq 'success (plist-get result :status)))
-              (let ((decision-event (cl-find 'tool-permission-decision events :key #'car)))
-                (should decision-event)
-                (should (eq 'allow (plist-get (cdr decision-event) :policy)))
-                (should (eq 'predicate-allow (plist-get (cdr decision-event) :decision)))
-                (should (eq tool-id (plist-get (cdr decision-event) :tool-id)))))))
+              (should decision-event)
+              (should (eq 'allow (plist-get decision-event :policy)))
+              (should (eq 'predicate-allow (plist-get decision-event :decision)))
+              (should (eq tool-id (plist-get decision-event :tool-id))))))
       (set-default 'benedict-tool-permission-predicate old-default)
       (remhash tool-id benedict--tools))))
 
@@ -464,12 +467,15 @@
                             session
                             `(:id "call-deny" :name ,tool-id :arguments nil)))
                    (error-info (plist-get result :error))
-                   (decision-event (cl-find 'tool-permission-decision events :key #'car)))
-              (should (eq 'failure (plist-get result :status)))
+                   (audit-event (cl-find 'tool-audit events :key #'car))
+                   (decision-event (and audit-event
+                                        (plist-get (cdr audit-event) :audit))))
+              (should (eq 'denied (plist-get result :status)))
               (should (eq 'permission-denied (plist-get error-info :code)))
               (should decision-event)
-              (should (eq 'deny (plist-get (cdr decision-event) :policy)))
-              (should (eq 'predicate-deny (plist-get (cdr decision-event) :decision))))))
+              (should (eq 'deny (plist-get decision-event :policy)))
+              (should (eq 'predicate-deny
+                          (plist-get decision-event :decision))))))
       (set-default 'benedict-tool-permission-predicate old-default)
       (remhash tool-id benedict--tools))))
 
@@ -502,14 +508,17 @@
               (let* ((result (benedict-session--invoke-tool
                               session
                               `(:id "call-fallback" :name ,tool-id :arguments nil)))
-                     (decision-event (cl-find 'tool-permission-decision events :key #'car)))
+                     (audit-event (cl-find 'tool-audit events :key #'car))
+                     (decision-event (and audit-event
+                                          (plist-get (cdr audit-event) :audit))))
                 (should (eq 'success (plist-get result :status)))
                 (should prompted)
                 (should decision-event)
-                (should (eq 'fallback (plist-get (cdr decision-event) :policy)))
-                (should (eq 'fallback-on-error (plist-get (cdr decision-event) :decision)))
+                (should (eq 'fallback (plist-get decision-event :policy)))
+                (should (eq 'fallback-on-error (plist-get decision-event :decision)))
                 (should (string-match-p "predicate blew up"
-                                        (or (plist-get (cdr decision-event) :error-message) "")))))))
+                                        (or (plist-get decision-event :error-message)
+                                            "")))))))
       (set-default 'benedict-tool-permission-predicate old-default)
       (remhash tool-id benedict--tools))))
 
@@ -523,8 +532,28 @@
        session
        '((:id "call-1" :name tool_a :arguments nil)
          (:id "call-2" :name tool_b :arguments nil)))
-      (should (= 2 (length (benedict-session-messages session))))
-      (should (eq 'tool (plist-get (car (benedict-session-messages session)) :role))))))
+      (let ((entries (benedict-session-entries session)))
+        (should (= 2 (length entries)))
+        (should (eq 'tool (benedict-message-role (car entries))))))))
+
+(ert-deftest benedict-session-test-process-tool-calls-records-denial-message ()
+  "Denied tool calls still leave a readable transcript entry."
+  (let ((benedict-session--registry (make-hash-table :test 'equal))
+        (benedict-session-tool-invoke-fn
+         (lambda (_id _args &rest _options)
+           '(:status denied
+             :error (:message "Denied by policy"
+                     :code permission-denied)))))
+    (let ((session (benedict-session-create)))
+      (benedict-session--process-tool-calls
+       session
+       '((:id "call-1" :name project-search :arguments (:query "needle"))))
+      (let* ((entry (car (benedict-session-entries session)))
+             (details (benedict-message-tool-result-details entry)))
+        (should (eq 'tool (benedict-message-role entry)))
+        (should (eq 'denied (benedict-message-status entry)))
+        (should (string-match-p "Tool denied:" (benedict-message-text entry)))
+        (should (eq 'permission-denied (plist-get details :code)))))))
 
 (ert-deftest benedict-session-test-tool-event-ordering ()
   "Tool events fire after request completion and preserve message order."
@@ -569,8 +598,8 @@
           (should (< tool-complete-idx tool-msg-idx)))
         (let ((history (benedict-session-messages-chronological session)))
           (should (= 2 (length history)))
-          (should (eq 'assistant (plist-get (car history) :role)))
-          (should (eq 'tool (plist-get (cadr history) :role))))))))
+          (should (eq 'assistant (benedict-message-role (car history))))
+          (should (eq 'tool (benedict-message-role (cadr history))))))))
 
 ;;; Loop Management Tests
 
@@ -807,7 +836,7 @@ session returns to idle state."
          (n (propcheck-generate-integer "count" :min 1 :max 100)))
     (dotimes (i n)
       (benedict-session-add-message session `(:role user :content ,(format "msg %d" i))))
-    (let ((ids (mapcar (lambda (m) (plist-get m :id))
+    (let ((ids (mapcar #'benedict-message-id
                        (benedict-session-messages-chronological session))))
       (propcheck-should (equal ids
                                (cl-loop for i from 1 to n

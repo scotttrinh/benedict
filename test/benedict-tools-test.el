@@ -3,6 +3,7 @@
 
 (require 'ert)
 (require 'cl-lib)
+(require 'benedict-harness)
 (require 'benedict-tools)
 
 ;;; Permission resolver tests
@@ -15,7 +16,7 @@
         (progn
           (set-default 'benedict-tool-permission-predicate global)
           (with-temp-buffer
-            (should (eq (benedict--resolve-tool-permission-predicate) global))))
+            (should (eq (benedict-harness-resolve-permission-predicate) global))))
       (set-default 'benedict-tool-permission-predicate old-default))))
 
 (ert-deftest benedict-tools-resolve-tool-permission-predicate-local-overrides-global-test ()
@@ -28,7 +29,7 @@
           (set-default 'benedict-tool-permission-predicate global)
           (with-temp-buffer
             (setq-local benedict-tool-permission-predicate local)
-            (should (eq (benedict--resolve-tool-permission-predicate) local))))
+            (should (eq (benedict-harness-resolve-permission-predicate) local))))
       (set-default 'benedict-tool-permission-predicate old-default))))
 
 (ert-deftest benedict-tools-resolve-tool-permission-predicate-none-configured-test ()
@@ -39,7 +40,7 @@
           (set-default 'benedict-tool-permission-predicate nil)
           (with-temp-buffer
             (kill-local-variable 'benedict-tool-permission-predicate)
-             (should-not (benedict--resolve-tool-permission-predicate))))
+             (should-not (benedict-harness-resolve-permission-predicate))))
       (set-default 'benedict-tool-permission-predicate old-default))))
 
 (ert-deftest benedict-tools-resolve-tool-permission-predicate-dir-locals-overrides-global-test ()
@@ -61,7 +62,7 @@
             (setq default-directory (file-name-as-directory test-dir))
             (hack-dir-local-variables-non-file-buffer)
             (should (local-variable-p 'benedict-tool-permission-predicate (current-buffer)))
-            (should (eq (benedict--resolve-tool-permission-predicate)
+            (should (eq (benedict-harness-resolve-permission-predicate)
                         'benedict-tools-test--project-policy))))
       (set-default 'benedict-tool-permission-predicate old-default)
       (setq dir-locals-directory-cache old-cache)
@@ -88,7 +89,9 @@
                      (lambda (_spec _args)
                        (setq prompted t)
                        t)))
-            (should (eq (benedict-tool-invoke tool-id nil) 'ok))
+            (let ((result (benedict-tool-invoke tool-id nil)))
+              (should (eq 'success (plist-get result :status)))
+              (should (eq 'ok (plist-get result :output))))
             (should called)
             (should-not prompted)))
       (set-default 'benedict-tool-permission-predicate old-default)
@@ -109,7 +112,10 @@
            :approval 'auto)
           (set-default 'benedict-tool-permission-predicate
                        (lambda (_tool _args) nil))
-          (should-error (benedict-tool-invoke tool-id nil) :type 'benedict-error)
+          (let ((result (benedict-tool-invoke tool-id nil)))
+            (should (eq 'denied (plist-get result :status)))
+            (should (eq 'permission-denied
+                        (plist-get (plist-get result :error) :code))))
           (should-not called))
       (set-default 'benedict-tool-permission-predicate old-default)
       (remhash tool-id benedict--tools))))
@@ -135,7 +141,9 @@
                      (lambda (_spec _args)
                        (setq prompted t)
                        t)))
-            (should (eq (benedict-tool-invoke tool-id nil) 'ok))
+            (let ((result (benedict-tool-invoke tool-id nil)))
+              (should (eq 'success (plist-get result :status)))
+              (should (eq 'ok (plist-get result :output))))
             (should called)
             (should prompted)))
       (set-default 'benedict-tool-permission-predicate old-default)
@@ -161,7 +169,9 @@
                      (lambda (_spec _args)
                        (setq prompted t)
                        t)))
-            (should (eq (benedict-tool-invoke tool-id nil) 'ok))
+            (let ((result (benedict-tool-invoke tool-id nil)))
+              (should (eq 'success (plist-get result :status)))
+              (should (eq 'ok (plist-get result :output))))
             (should called)
             (should prompted)))
       (set-default 'benedict-tool-permission-predicate old-default)
@@ -169,32 +179,65 @@
 
 (ert-deftest benedict-tools-permission-decision-allow-metadata-test ()
   "Permission decision metadata marks allow decisions explicitly."
-  (let ((decision (benedict--tool-permission-decision
-                   (lambda (_tool _args) t)
-                   'project-search
-                   '(:query "foo"))))
+  (let ((decision (benedict-harness-authorize-tool-call
+                   (benedict-harness-create :permission-predicate (lambda (_tool _args) t))
+                   '(:id project-search)
+                   '(:query "foo")
+                   nil)))
     (should (eq 'allow (plist-get decision :policy)))
     (should (eq 'predicate-allow (plist-get decision :decision)))))
 
 (ert-deftest benedict-tools-permission-decision-deny-metadata-test ()
   "Permission decision metadata marks deny decisions explicitly."
-  (let ((decision (benedict--tool-permission-decision
-                   (lambda (_tool _args) nil)
-                   'project-search
-                   '(:query "foo"))))
+  (let ((decision (benedict-harness-authorize-tool-call
+                   (benedict-harness-create :permission-predicate (lambda (_tool _args) nil))
+                   '(:id project-search)
+                   '(:query "foo")
+                   nil)))
     (should (eq 'deny (plist-get decision :policy)))
     (should (eq 'predicate-deny (plist-get decision :decision)))))
 
 (ert-deftest benedict-tools-permission-decision-fallback-on-error-metadata-test ()
   "Permission decision metadata preserves fallback-on-error reason text."
-  (let ((decision (benedict--tool-permission-decision
-                   (lambda (_tool _args)
-                     (error "boom"))
-                   'project-search
-                   '(:query "foo"))))
+  (let ((decision (benedict-harness-authorize-tool-call
+                   (benedict-harness-create
+                    :permission-predicate (lambda (_tool _args)
+                                            (error "boom")))
+                   '(:id project-search)
+                   '(:query "foo")
+                   nil)))
     (should (eq 'fallback (plist-get decision :policy)))
     (should (eq 'fallback-on-error (plist-get decision :decision)))
     (should (string-match-p "boom" (or (plist-get decision :error-message) "")))))
+
+(ert-deftest benedict-tools-harness-scope-denies-out-of-root-path-test ()
+  "Harness denies file access outside the configured path scope."
+  (let* ((harness (benedict-harness-create
+                   :scope (list :paths (list "/tmp/project"))
+                   :permission-predicate (lambda (_tool _args) t)))
+         (decision (benedict-harness-authorize-tool-call
+                    harness
+                    '(:id read-file)
+                    '(:path "../elsewhere.txt")
+                    nil)))
+    (should (eq 'deny (plist-get decision :policy)))
+    (should (eq 'scope-expansion-required (plist-get decision :code)))))
+
+(ert-deftest benedict-tools-harness-budget-denies-after-tool-cap-test ()
+  "Harness denies calls after the configured tool budget is consumed."
+  (let* ((harness (benedict-harness-create
+                   :budgets '(:max-tool-calls 1)
+                   :permission-predicate (lambda (_tool _args) t))))
+    (benedict-harness-record-effect harness
+                                    '(:tool-id project-search :status success)
+                                    nil)
+    (let ((decision (benedict-harness-authorize-tool-call
+                     harness
+                     '(:id project-search)
+                     '(:query "foo")
+                     nil)))
+      (should (eq 'deny (plist-get decision :policy)))
+      (should (eq 'budget-exceeded (plist-get decision :code))))))
 
 ;;; Project search tests
 

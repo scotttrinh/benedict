@@ -13,6 +13,7 @@
 (require 'project)
 (require 'subr-x)
 (require 'benedict-errors)
+(require 'benedict-harness)
 
 (declare-function benedict-session--emit "benedict-session" (session event-type &rest payload))
 (declare-function benedict-session-p "benedict-session" (object))
@@ -411,47 +412,6 @@ APPROVAL is one of 'auto, 'confirm, or 'always.  DOC is an optional string."
   "Return a list of tool specs."
   (let (acc) (maphash (lambda (_k v) (push v acc)) benedict--tools) (nreverse acc)))
 
-(defun benedict--tool-permission--keyword (key)
-  "Normalize KEY to a keyword symbol for permission predicate args."
-  (cond
-   ((keywordp key) key)
-   ((symbolp key) (intern (concat ":" (symbol-name key))))
-   ((stringp key) (intern (concat ":" key)))
-   (t (error "Tool permission args key must be symbol or string: %S" key))))
-
-(defun benedict--tool-permission-normalize-args (args)
-  "Return ARGS normalized into a plist with keyword keys.
-Accepts nil, plist, or alist input."
-  (cond
-   ((null args) nil)
-   ((and (listp args) (consp (car args)))
-    (let (result)
-      (dolist (pair args)
-        (let ((key (car pair))
-              (value (cdr pair)))
-          (setq result (plist-put result
-                                  (benedict--tool-permission--keyword key)
-                                  value))))
-      result))
-   ((listp args)
-    (unless (cl-evenp (length args))
-      (error "Tool args plist must have even length: %S" args))
-    (let (result)
-      (cl-loop for (key value) on args by #'cddr
-               do (setq result (plist-put result
-                                          (benedict--tool-permission--keyword key)
-                                          value)))
-      result))
-   (t (error "Tool args must be a plist or alist: %S" args))))
-
-(defun benedict--resolve-tool-permission-predicate ()
-  "Return the effective tool permission predicate for the current buffer.
-Resolution precedence is project-local (buffer-local/dir-locals) first,
-then global custom value, then nil when no predicate is configured."
-  (if (local-variable-p 'benedict-tool-permission-predicate (current-buffer))
-      benedict-tool-permission-predicate
-    (default-value 'benedict-tool-permission-predicate)))
-
 (defun benedict--tool-call-direct (id args)
   "Invoke tool ID with ARGS without applying approval policy."
   (let ((spec (gethash id benedict--tools)))
@@ -481,70 +441,64 @@ string, and the argument plist."
       (benedict--prompt-for-approval spec args))
      (t (benedict--prompt-for-approval spec args)))))
 
-(defun benedict--tool-permission-decision (predicate id args)
-  "Return permission decision metadata from PREDICATE for tool ID and ARGS.
-Returns a plist with keys:
-- :policy, one of `allow', `deny', or `fallback'
-- :decision, one of `predicate-allow', `predicate-deny',
-  `fallback-on-error', or `fallback-on-invalid-result'
-- :error-message, non-nil only for `fallback-on-error' decisions."
-  (let ((normalized-args (benedict--tool-permission-normalize-args args)))
-    (condition-case err
-        (let ((result (funcall predicate id normalized-args)))
-          (cond
-           ((eq result t)
-            (list :policy 'allow
-                  :decision 'predicate-allow))
-           ((eq result nil)
-            (list :policy 'deny
-                  :decision 'predicate-deny))
-           (t
-            (list :policy 'fallback
-                  :decision 'fallback-on-invalid-result))))
-      (error
-       (list :policy 'fallback
-             :decision 'fallback-on-error
-             :error-message (error-message-string err))))))
-
-(defun benedict--tool-permission-emit-decision (session id args decision-metadata)
-  "Emit permission decision event for SESSION, ID, ARGS, and DECISION-METADATA."
-  (when (and session
-             (fboundp 'benedict-session-p)
-             (benedict-session-p session)
-             (fboundp 'benedict-session--emit))
-    (benedict-session--emit session
-                            'tool-permission-decision
-                            :tool-id id
-                            :args (benedict--tool-permission-normalize-args args)
-                            :policy (plist-get decision-metadata :policy)
-                            :decision (plist-get decision-metadata :decision)
-                            :error-message (plist-get decision-metadata :error-message))))
-
-(defun benedict-tool-invoke (id &optional args &rest options)
+(cl-defun benedict-tool-invoke (id &optional args &key session harness)
   "Invoke tool ID with ARGS after applying the tool's approval policy.
 ARGS must be a plist passed directly to the tool implementation.
-OPTIONS accepts :session for emitting tool permission audit events."
+SESSION supplies runtime context for audit emission.  HARNESS overrides the
+session-attached harness when non-nil.
+
+Return a plist with at least :status and :tool-id.  Successful invocations
+also include :output.  Denials return structured :error metadata instead of
+signaling."
   (unless (or (null args) (listp args))
     (signal 'wrong-type-argument (list 'plistp args)))
-  (let* ((session (plist-get options :session))
-         (spec (or (gethash id benedict--tools)
+  (let* ((spec (or (gethash id benedict--tools)
                    (signal 'benedict-error (list (format "Unknown tool: %S" id)))))
-         (predicate (benedict--resolve-tool-permission-predicate))
-         (decision-metadata (and predicate (benedict--tool-permission-decision predicate id args)))
-         (decision-policy (and decision-metadata (plist-get decision-metadata :policy))))
-    (when decision-metadata
-      (benedict--tool-permission-emit-decision session id args decision-metadata))
-    (let ((approved
-           (pcase decision-policy
-             ('allow t)
-             ('deny (signal 'benedict-tool-denied
-                            (list (format "Tool %S denied by permission predicate" id)
-                                  :tool id
-                                  :source 'predicate)))
-             (_ (benedict--tool-approval-allows-p spec args)))))
-      (unless approved
-        (signal 'benedict-error (list (format "Tool %S invocation canceled by user" id))))
-      (benedict--tool-call-direct id args))))
+         (effective-harness
+          (or harness
+              (and session
+                   (fboundp 'benedict-session-harness)
+                   (benedict-session-harness session))
+              (benedict-harness-create)))
+         (authorization (benedict-harness-authorize-tool-call effective-harness spec args session))
+         (decision-policy (plist-get authorization :policy))
+         (normalized-args (plist-get authorization :args)))
+    (pcase decision-policy
+      ('allow
+       (let ((output (benedict--tool-call-direct id normalized-args)))
+         (benedict-harness-record-effect effective-harness
+                                         (list :tool-id id
+                                               :args normalized-args
+                                               :status 'success)
+                                         session)
+         (list :status 'success
+               :tool-id id
+               :args normalized-args
+               :output output)))
+      ('deny
+       (list :status 'denied
+             :tool-id id
+             :args normalized-args
+             :error (list :message (plist-get authorization :message)
+                          :code (plist-get authorization :code)
+                          :policy (plist-get authorization :policy)
+                          :decision (plist-get authorization :decision)
+                          :scope-request (plist-get authorization :scope-request))))
+      (_
+       (unless (benedict--tool-approval-allows-p spec normalized-args)
+         (signal 'benedict-error (list (format "Tool %S invocation canceled by user" id))))
+       (let ((output (benedict--tool-call-direct id normalized-args)))
+         (benedict-harness-record-effect effective-harness
+                                         (list :tool-id id
+                                               :args normalized-args
+                                               :status 'success
+                                               :decision (plist-get authorization :decision))
+                                         session)
+         (list :status 'success
+               :tool-id id
+               :args normalized-args
+               :output output
+               :audit authorization))))))
 
 (benedict-tools-register
  :id 'write
