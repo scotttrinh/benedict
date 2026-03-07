@@ -14,7 +14,7 @@ After this change, a developer should be able to open `*Benedict Chat*`, have th
 - [x] (2026-03-07 15:50Z) Introduce a canonical message and event model that sits between provider adapters, runtime state, persistence, and UI.
 - [x] (2026-03-07 16:22Z) Add `benedict-harness.el`, attach harness state to sessions, route `benedict-tool-invoke` through harness authorization/effect recording, and cover the new tool-audit contract plus structured denial results in focused tool/loop tests.
 - [x] (2026-03-07 16:27Z) Finish the harness milestone by restoring a green `test/benedict-session-test.el` run under `nix run .#test -- test/benedict-tools-test.el test/benedict-session-test.el test/benedict-agent-loop-test.el`, then validate the denial transcript assertions from that file end-to-end.
-- [ ] (YYYY-MM-DD HH:MMZ) Add a provider-agnostic session store with save/load, branch metadata hooks, and replay into the runtime.
+- [x] (2026-03-07 16:35Z) Add a provider-agnostic session store with save/load, branch metadata hooks, and replay into the runtime.
 - [ ] (YYYY-MM-DD HH:MMZ) Add instruction bootstrap that loads `AGENTS.md`, selected `SKILL.md` files, and `.wigg/specs/` into session startup context with progressive disclosure.
 - [ ] (YYYY-MM-DD HH:MMZ) Update the chat/VUI surface to render checkpoints, audit/tool results, and persistence-backed session metadata without relying on ephemeral minibuffer prompts.
 - [ ] (YYYY-MM-DD HH:MMZ) Prove the feature with focused ERT coverage and a manual fake-provider transcript round-trip.
@@ -34,6 +34,8 @@ The canonical-message milestone needed one compatibility shim for legacy test da
 The harness work exposed an existing instability in the current working tree: `nix run .#test -- test/benedict-tools-test.el test/benedict-session-test.el test/benedict-agent-loop-test.el` now stops while loading `test/benedict-session-test.el` with `end-of-file`, even though the newly added harness-focused tests in `test/benedict-tools-test.el` and the loop tests run green on their own. That blocks full milestone acceptance until the session test file is repaired in-tree.
 
 That instability was localized to the test file, not the runtime. Repairing the broken `ert-deftest` forms in `test/benedict-session-test.el` exposed a second issue: the updated harness emits both `authorization` and `effect` `tool-audit` entries on successful tool execution, so the session tests had to match the authorization-phase audit entry before asserting `:policy` and `:decision`.
+
+The persistence milestone exposed two remaining canonical-message edges in the current runtime. `benedict-message->provider-message` was dropping tool-result content after reload because tool messages can exist as tool-result blocks without a separate text block, and `benedict-chat--apply-request-result-extras` still treated assistant entries as mutable plists. Fixing both was required to make a saved fake-provider transcript dispatch correctly after reload.
 
 ## Decision Log
 
@@ -67,6 +69,10 @@ That instability was localized to the test file, not the runtime. Repairing the 
 
 - **Decision:** Update session-level harness assertions to select the `authorization` `tool-audit` entry instead of the first audit event emitted for a tool call.
 - **Rationale:** Successful tool calls now emit an authorization audit followed by an effect audit. The first event in the stream is no longer a stable proxy for the permission decision the tests mean to validate.
+- **Date/Author:** 2026-03-07 / Codex
+
+- **Decision:** Persist sessions as a directory containing `metadata.sexp` plus newline-delimited canonical entry forms in `transcript.sexp`.
+- **Rationale:** This keeps writes atomic and debuggable while preserving deterministic replay without needing a database or a monolithic unreadable blob. Metadata such as provider/model, loop state, harness audit log, and branch-related `meta` keys can evolve independently from transcript entries.
 - **Date/Author:** 2026-03-07 / Codex
 
 ## Artifacts and Notes
@@ -142,6 +148,46 @@ That instability was localized to the test file, not the runtime. Repairing the 
     ............................................................
 
     Ran 60 tests in 0.146 seconds
+    ```
+  - `git commit -m "Persist canonical sessions for deterministic reloads"`
+    ```text
+    [from-pi 541ac81] Persist canonical sessions for deterministic reloads
+     7 files changed, 480 insertions(+), 60 deletions(-)
+     create mode 100644 benedict-store.el
+    ```
+  - `nix run .#test -- test/benedict-session-test.el test/benedict-chat-integration-test.el`
+    ```text
+    warning: Git tree '/Users/scotttrinh/github.com/scotttrinh/benedict' has uncommitted changes
+    ✓ Checking local archives `local`... done!
+    Type C-c C-c to compose, C-c C-s to prompt, g r retries, w copies last response.
+    Compose buffer ready. C-c C-c to send; C-c C-k to cancel.
+    Reactive regression saw event: message-added
+    Reactive regression saw event: state-changed
+    Reactive regression saw event: state-changed
+    Reactive regression saw event: draft-started
+    Reactive regression saw event: request-started
+    Benedict: sent prompt with context
+    Reactive regression saw event: draft-updated
+    Reactive regression saw event: draft-updated
+    Reactive regression saw event: state-changed
+    Reactive regression saw event: draft-finalized
+    Reactive regression saw event: message-added
+    Reactive regression saw event: request-completed
+    Reactive regression saw event: message-updated
+    ..
+    Type C-c C-c to compose, C-c C-s to prompt, g r retries, w copies last response.
+    ...............................................................
+
+    Ran 65 tests in 1.660 seconds
+    ```
+  - File-scoped diff notes
+    ```text
+    benedict-store.el: added deterministic session directories, atomic metadata/transcript writes, and deserialization back into runtime sessions and harnesses.
+    benedict-session.el: added explicit `benedict-session-save`/`benedict-session-load` entry points and registry reattachment on load.
+    benedict-message.el: fixed provider-request translation so persisted tool-result entries replay with their result content.
+    benedict-chat.el: switched post-response assistant updates onto canonical message accessors to keep reload/send flows working after transcript hydration.
+    test/benedict-session-test.el: added round-trip coverage for provider/model metadata, harness audit persistence, and branch-related session metadata.
+    test/benedict-chat-integration-test.el: added a fake-provider save/reload/send flow proving a restored session can dispatch again.
     ```
 
 ## Outcomes & Retrospective
@@ -411,3 +457,5 @@ Revision Note (2026-03-07 15:50Z): Marked the canonical message/event milestone 
 Revision Note (2026-03-07 16:22Z): Split the harness milestone into the completed runtime/tool wiring work and a remaining validation follow-up because the current working-tree `test/benedict-session-test.el` fails to load with `end-of-file` under the exact milestone command; recorded the passing focused tool/loop transcript plus the blocking failure evidence.
 
 Revision Note (2026-03-07 16:27Z): Marked the remaining harness validation milestone complete after repairing the broken `test/benedict-session-test.el` forms, updating the session audit assertions to target the authorization-phase `tool-audit` entry, and recording the now-passing exact milestone command plus the session-test rerun that covers the denial transcript assertions.
+
+Revision Note (2026-03-07 16:35Z): Marked the persistence milestone complete after adding `benedict-store.el`, wiring explicit session save/load wrappers, fixing canonical replay for tool-result and assistant metadata updates, recording the passing save/reload test transcript, and noting the new on-disk session layout for future milestones.
