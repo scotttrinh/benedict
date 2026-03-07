@@ -13,7 +13,7 @@ After this change, a developer should be able to open `*Benedict Chat*`, have th
 - [x] (2026-03-07 15:43Z) Audit `.wigg/specs/` and current implementation; identify existing seams in `benedict-session.el`, `benedict-chat.el`, `benedict-tools.el`, and current tests.
 - [x] (2026-03-07 15:50Z) Introduce a canonical message and event model that sits between provider adapters, runtime state, persistence, and UI.
 - [x] (2026-03-07 16:22Z) Add `benedict-harness.el`, attach harness state to sessions, route `benedict-tool-invoke` through harness authorization/effect recording, and cover the new tool-audit contract plus structured denial results in focused tool/loop tests.
-- [ ] (YYYY-MM-DD HH:MMZ) Finish the harness milestone by restoring a green `test/benedict-session-test.el` run under `nix run .#test -- test/benedict-tools-test.el test/benedict-session-test.el test/benedict-agent-loop-test.el`, then validate the denial transcript assertions from that file end-to-end.
+- [x] (2026-03-07 16:27Z) Finish the harness milestone by restoring a green `test/benedict-session-test.el` run under `nix run .#test -- test/benedict-tools-test.el test/benedict-session-test.el test/benedict-agent-loop-test.el`, then validate the denial transcript assertions from that file end-to-end.
 - [ ] (YYYY-MM-DD HH:MMZ) Add a provider-agnostic session store with save/load, branch metadata hooks, and replay into the runtime.
 - [ ] (YYYY-MM-DD HH:MMZ) Add instruction bootstrap that loads `AGENTS.md`, selected `SKILL.md` files, and `.wigg/specs/` into session startup context with progressive disclosure.
 - [ ] (YYYY-MM-DD HH:MMZ) Update the chat/VUI surface to render checkpoints, audit/tool results, and persistence-backed session metadata without relying on ephemeral minibuffer prompts.
@@ -32,6 +32,8 @@ Baseline validation for this run succeeded without code changes. `git status --s
 The canonical-message milestone needed one compatibility shim for legacy test data: some older assistant messages still carry `:tool-calls` as a vector, and repetition detection compares sparse tool-call plists that omit nil keys. Normalizing both vector/list inputs and pruning nil fields kept the new canonical entry layer compatible without rewriting unrelated callers.
 
 The harness work exposed an existing instability in the current working tree: `nix run .#test -- test/benedict-tools-test.el test/benedict-session-test.el test/benedict-agent-loop-test.el` now stops while loading `test/benedict-session-test.el` with `end-of-file`, even though the newly added harness-focused tests in `test/benedict-tools-test.el` and the loop tests run green on their own. That blocks full milestone acceptance until the session test file is repaired in-tree.
+
+That instability was localized to the test file, not the runtime. Repairing the broken `ert-deftest` forms in `test/benedict-session-test.el` exposed a second issue: the updated harness emits both `authorization` and `effect` `tool-audit` entries on successful tool execution, so the session tests had to match the authorization-phase audit entry before asserting `:policy` and `:decision`.
 
 ## Decision Log
 
@@ -61,6 +63,10 @@ The harness work exposed an existing instability in the current working tree: `n
 
 - **Decision:** Attach a `benedict-event` object inside the existing session hook payload instead of changing the hook arity in this milestone.
 - **Rationale:** This introduces a stable event contract for new consumers without breaking the existing hook subscribers that still expect `(SESSION EVENT-TYPE PAYLOAD)`.
+- **Date/Author:** 2026-03-07 / Codex
+
+- **Decision:** Update session-level harness assertions to select the `authorization` `tool-audit` entry instead of the first audit event emitted for a tool call.
+- **Rationale:** Successful tool calls now emit an authorization audit followed by an effect audit. The first event in the stream is no longer a stable proxy for the permission decision the tests mean to validate.
 - **Date/Author:** 2026-03-07 / Codex
 
 ## Artifacts and Notes
@@ -121,16 +127,21 @@ The harness work exposed an existing instability in the current working tree: `n
     ```text
     warning: Git tree '/Users/scotttrinh/github.com/scotttrinh/benedict' has uncommitted changes
     ✓ Checking local archives `local`... done!
+    .......................................................................................
 
-    Error: end-of-file ("/Users/scotttrinh/github.com/scotttrinh/benedict/test/benedict-session-test.el")
+    Ran 87 tests in 0.181 seconds
     ```
   - File-scoped diff notes
     ```text
-    benedict-harness.el: added harness structs, scope/budget authorization, scope-expansion audit recording, and buffer/project permission predicate resolution.
-    benedict-tools.el: delegated authorization to the harness and changed `benedict-tool-invoke` to return structured success/denial results.
-    benedict-session.el: attached a harness to sessions, synced loop budgets into the harness, and preserved denied tool calls as transcript-visible tool results.
-    test/benedict-tools-test.el: moved permission decision assertions onto harness helpers and added focused scope/budget denial coverage.
-    test/benedict-session-test.el: partially migrated denial/audit expectations from `tool-permission-decision` to `tool-audit`; file still needs repair because the current working-tree version fails to load under the full milestone command.
+    test/benedict-session-test.el: repaired the broken harness-related `ert-deftest` forms, preserved the denial transcript assertions, and matched `tool-audit` events by `:phase authorization` so the tests inspect the actual permission decision rather than the later effect audit.
+    ```
+  - `nix run .#test -- test/benedict-session-test.el`
+    ```text
+    warning: Git tree '/Users/scotttrinh/github.com/scotttrinh/benedict' has uncommitted changes
+    ✓ Checking local archives `local`... done!
+    ............................................................
+
+    Ran 60 tests in 0.146 seconds
     ```
 
 ## Outcomes & Retrospective
@@ -398,3 +409,5 @@ When implementation is complete, append the final test transcripts and one saved
 Revision Note (2026-03-07 15:50Z): Marked the canonical message/event milestone complete after adding `benedict-message.el` and `benedict-event.el`, refactoring `benedict-session.el` to store canonical entries with a temporary plist mirror, adding focused session tests, and recording the passing milestone transcript plus the compatibility decisions needed to keep legacy callers green.
 
 Revision Note (2026-03-07 16:22Z): Split the harness milestone into the completed runtime/tool wiring work and a remaining validation follow-up because the current working-tree `test/benedict-session-test.el` fails to load with `end-of-file` under the exact milestone command; recorded the passing focused tool/loop transcript plus the blocking failure evidence.
+
+Revision Note (2026-03-07 16:27Z): Marked the remaining harness validation milestone complete after repairing the broken `test/benedict-session-test.el` forms, updating the session audit assertions to target the authorization-phase `tool-audit` entry, and recording the now-passing exact milestone command plus the session-test rerun that covers the denial transcript assertions.

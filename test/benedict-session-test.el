@@ -432,7 +432,13 @@
             (let* ((result (benedict-session--invoke-tool
                             session
                             `(:id "call-allow" :name ,tool-id :arguments (:a 1))))
-                   (audit-event (cl-find 'tool-audit events :key #'car))
+                   (audit-event
+                    (cl-find-if
+                     (lambda (event)
+                       (and (eq 'tool-audit (car event))
+                            (eq 'authorization
+                                (plist-get (plist-get (cdr event) :audit) :phase))))
+                     events))
                    (decision-event (and audit-event
                                         (plist-get (cdr audit-event) :audit))))
               (should (eq 'success (plist-get result :status)))
@@ -467,7 +473,13 @@
                             session
                             `(:id "call-deny" :name ,tool-id :arguments nil)))
                    (error-info (plist-get result :error))
-                   (audit-event (cl-find 'tool-audit events :key #'car))
+                   (audit-event
+                    (cl-find-if
+                     (lambda (event)
+                       (and (eq 'tool-audit (car event))
+                            (eq 'authorization
+                                (plist-get (plist-get (cdr event) :audit) :phase))))
+                     events))
                    (decision-event (and audit-event
                                         (plist-get (cdr audit-event) :audit))))
               (should (eq 'denied (plist-get result :status)))
@@ -508,7 +520,13 @@
               (let* ((result (benedict-session--invoke-tool
                               session
                               `(:id "call-fallback" :name ,tool-id :arguments nil)))
-                     (audit-event (cl-find 'tool-audit events :key #'car))
+                     (audit-event
+                      (cl-find-if
+                       (lambda (event)
+                         (and (eq 'tool-audit (car event))
+                              (eq 'authorization
+                                  (plist-get (plist-get (cdr event) :audit) :phase))))
+                       events))
                      (decision-event (and audit-event
                                           (plist-get (cdr audit-event) :audit))))
                 (should (eq 'success (plist-get result :status)))
@@ -599,7 +617,7 @@
         (let ((history (benedict-session-messages-chronological session)))
           (should (= 2 (length history)))
           (should (eq 'assistant (benedict-message-role (car history))))
-          (should (eq 'tool (benedict-message-role (cadr history))))))))
+          (should (eq 'tool (benedict-message-role (cadr history)))))))))
 
 ;;; Loop Management Tests
 
