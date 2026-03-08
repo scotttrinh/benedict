@@ -7,6 +7,7 @@
 
 (require 'cl-lib)
 (require 'subr-x)
+(require 'benedict-message)
 (require 'benedict-session)
 
 ;; Declare functions and variables from benedict-chat.el
@@ -32,35 +33,32 @@
 
 (defun benedict-chat-nav--message-text (message)
   "Return display text for MESSAGE when available."
-  (or (plist-get message :display-content)
-      (plist-get message :content)
-      (plist-get message :text)))
+  (benedict-message-text message))
 
 (defun benedict-chat-nav--assistant-message-p (message)
   "Return non-nil when MESSAGE represents an assistant response."
-  (eq (benedict-chat-nav--normalize-role (plist-get message :role)) 'assistant))
+  (eq (benedict-chat-nav--normalize-role (benedict-message-role message)) 'assistant))
 
 (defun benedict-chat-nav--assistant-with-tools-p (message)
   "Return non-nil when MESSAGE is an assistant message with tool call data."
   (and (benedict-chat-nav--assistant-message-p message)
-       (plist-get message :tool-calls)))
+       (benedict-message-tool-calls message)))
 
 (defun benedict-chat-nav--tool-message-p (message)
   "Return non-nil when MESSAGE represents a tool result."
-  (eq (benedict-chat-nav--normalize-role (plist-get message :role)) 'tool))
+  (eq (benedict-chat-nav--normalize-role (benedict-message-role message)) 'tool))
 
 (defun benedict-chat-nav--tool-failure-message-p (message)
   "Return non-nil when MESSAGE represents a failed tool result."
   (and (benedict-chat-nav--tool-message-p message)
-       (let ((status (plist-get (plist-get message :metadata) :status)))
+       (let ((status (benedict-message-status message)))
          (memq status '(failure error)))))
 
 (defun benedict-chat-nav--error-message-p (message)
   "Return non-nil when MESSAGE captures an error state."
-  (let ((metadata (plist-get message :metadata)))
-    (or (plist-get metadata :error)
-        (eq (plist-get metadata :status) 'failure)
-        (eq (plist-get metadata :status) 'error))))
+  (or (benedict-message-metadata-value message :error)
+      (eq (benedict-message-status message) 'failure)
+      (eq (benedict-message-status message) 'error)))
 
 (defun benedict-chat-nav--message-index (message messages)
   "Return MESSAGE index within MESSAGES, or nil."
@@ -71,10 +69,7 @@
   "Return a navigation key for MESSAGE within MESSAGES.
 
 Prefer stable IDs when available; fall back to MESSAGE index."
-  (or (plist-get message :id)
-      (plist-get message :message-id)
-      (plist-get message :turn-id)
-      (plist-get message :uuid)
+  (or (benedict-message-id message)
       (benedict-chat-nav--message-index message messages)))
 
 (defun benedict-chat-nav--goto-message-by-property (message-key direction)
@@ -156,7 +151,7 @@ When INCLUDE-ERRORS is nil, skip entries flagged with :error metadata."
      (lambda (message)
        (and (benedict-chat-nav--assistant-message-p message)
             (or include-errors
-                (not (plist-get (plist-get message :metadata) :error)))))
+                (not (benedict-message-metadata-value message :error)))))
      (reverse messages))))
 
 (defun benedict-chat-nav--item-at-point ()
@@ -237,14 +232,14 @@ When INCLUDE-ERRORS is nil, skip entries flagged with :error metadata."
   "Move point to the next thinking block."
   (interactive)
   (benedict-chat-nav--navigate
-   (lambda (message) (plist-get message :thinking))
+   (lambda (message) (benedict-message-thinking message))
    'forward "thinking blocks"))
 
 (defun benedict-chat-nav-previous-thinking ()
   "Move point to the previous thinking block."
   (interactive)
   (benedict-chat-nav--navigate
-   (lambda (message) (plist-get message :thinking))
+   (lambda (message) (benedict-message-thinking message))
    'backward "thinking blocks"))
 
 (defun benedict-chat-nav-toggle-thinking ()
@@ -269,7 +264,7 @@ For the vui.el UI this toggles the block at point when possible."
       (let ((messages (benedict-chat-nav--messages))
             (last-user nil))
         (dolist (msg (reverse messages))
-          (when (and (eq (benedict-chat-nav--normalize-role (plist-get msg :role)) 'user)
+          (when (and (eq (benedict-chat-nav--normalize-role (benedict-message-role msg)) 'user)
                      (not last-user))
             (setq last-user msg)))
         (if last-user

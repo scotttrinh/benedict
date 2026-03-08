@@ -9,6 +9,7 @@
 (require 'cl-lib)
 (require 'subr-x)
 (require 'vui)
+(require 'benedict-message)
 (require 'benedict-vui-turn)
 
 (defun benedict-vui-turn-list--alist-to-plist (alist)
@@ -25,24 +26,28 @@
           (setq plist (plist-put plist keyword (cdr pair))))))))
 
 (defun benedict-vui-turn-list--normalize-message (message)
-  "Return MESSAGE normalized to a plist or nil."
+  "Return MESSAGE normalized to a canonical entry or nil."
   (cond
    ((null message) nil)
-   ((stringp message) (list :role 'assistant :content message))
+   ((stringp message) (benedict-message-assistant-text message))
    ((vectorp message)
     (benedict-vui-turn-list--normalize-message (append message nil)))
+   ((benedict-message-p message) message)
    ((listp message)
-    (let ((plist (if (and (consp (car message))
-                          (not (keywordp (caar message))))
-                     (benedict-vui-turn-list--alist-to-plist message)
-                   message)))
-      (copy-sequence plist)))
-   (t (list :role 'assistant :content (format "%s" message)))))
+    (let* ((plist (if (and (consp (car message))
+                           (not (keywordp (caar message))))
+                      (benedict-vui-turn-list--alist-to-plist message)
+                    (copy-sequence message)))
+           (display-content (plist-get plist :display-content)))
+      (when display-content
+        (setq plist (plist-put plist :content display-content)))
+      (benedict-message-from-data plist)))
+   (t (benedict-message-assistant-text (format "%s" message)))))
 
 (defun benedict-vui-turn-list--normalize-messages (messages)
   "Return MESSAGES normalized to a list of message plists.
 
-Each normalized message includes a :nav-index for navigation properties."
+Each normalized message is a canonical entry."
   (cond
    ((null messages) nil)
    ((vectorp messages)
@@ -53,7 +58,11 @@ Each normalized message includes a :nav-index for navigation properties."
                    for index from 0
                    for normalized = (benedict-vui-turn-list--normalize-message message)
                    when normalized
-                   collect (plist-put normalized :nav-index index))))
+                   collect (if (benedict-message-id normalized)
+                               normalized
+                             (progn
+                               (setf (benedict-message-id normalized) index)
+                               normalized)))))
    (t (list (benedict-vui-turn-list--normalize-message messages)))))
 
 (defun benedict-vui-turn-list--normalize-role (role)
@@ -68,7 +77,8 @@ Each normalized message includes a :nav-index for navigation properties."
   "Turn MESSAGES into grouped entries starting at each user message."
   (let (turns current)
     (dolist (message messages)
-      (let ((role (benedict-vui-turn-list--normalize-role (plist-get message :role))))
+      (let ((role (benedict-vui-turn-list--normalize-role
+                    (benedict-message-role message))))
         (if (eq role 'user)
             (progn
               (when current
@@ -83,21 +93,19 @@ Each normalized message includes a :nav-index for navigation properties."
 
 (defun benedict-vui-turn-list--message-id (message)
   "Return a stable identifier for MESSAGE when present."
-  (or (plist-get message :id)
-      (plist-get message :message-id)
-      (plist-get message :turn-id)
-      (plist-get message :uuid)))
+  (and (benedict-message-p message)
+       (benedict-message-id message)))
 
 (defun benedict-vui-turn-list--turn-message (turn)
   "Return the first message plist for TURN."
-  (if (and (listp turn) (keywordp (car turn)))
+  (if (benedict-message-p turn)
       turn
     (car turn)))
 
 (defun benedict-vui-turn-list--turn-id (turn index)
   "Return a stable identifier for TURN at INDEX."
   (let* ((message (benedict-vui-turn-list--turn-message turn))
-          (id (and (listp message) (benedict-vui-turn-list--message-id message))))
+         (id (and message (benedict-vui-turn-list--message-id message))))
     (or id
         (format "turn-%s"
                 (if (numberp index)
@@ -109,9 +117,9 @@ Each normalized message includes a :nav-index for navigation properties."
   (let* ((count (length messages))
          (last-message (car (last messages)))
          (id (and last-message (benedict-vui-turn-list--message-id last-message)))
-         (content (and last-message
-                       (or (plist-get last-message :display-content)
-                           (plist-get last-message :content))))
+        (content (and last-message
+                      (and (benedict-message-p last-message)
+                           (benedict-message-text last-message))))
          (content-length (and (stringp content) (length content))))
     (list count id content-length)))
 
@@ -126,7 +134,7 @@ Each normalized message includes a :nav-index for navigation properties."
 
 (defun benedict-vui-turn-list--render-turn (turn collapsed-blocks on-toggle-block)
   "Return a Vui node for TURN using COLLAPSED-BLOCKS and ON-TOGGLE-BLOCK."
-  (let* ((messages (if (and (listp turn) (keywordp (car turn)))
+  (let* ((messages (if (benedict-message-p turn)
                        (list turn)
                      turn))
          (nodes (delq nil

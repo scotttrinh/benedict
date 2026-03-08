@@ -9,8 +9,18 @@
 (require 'cl-lib)
 (require 'subr-x)
 (require 'vui)
+(require 'benedict-message)
 (require 'benedict-vui-content-block-list)
 (require 'benedict-vui-turn-header)
+
+(defun benedict-vui-turn--coerce-message (message)
+  "Return MESSAGE as a canonical entry when possible."
+  (cond
+   ((null message) nil)
+   ((benedict-message-p message) message)
+   ((listp message)
+    (benedict-message-from-data message))
+   (t nil)))
 
 (defun benedict-vui-turn--normalize-role (role)
   "Normalize ROLE into a symbol."
@@ -34,27 +44,23 @@
   "Return the role for MESSAGE or PROPS."
   (benedict-vui-turn--normalize-role
    (or (plist-get props :role)
-       (and message (plist-get message :role)))))
+       (and message (benedict-message-role message)))))
 
 (defun benedict-vui-turn--message-timestamp (message props)
   "Return the timestamp for MESSAGE or PROPS."
   (or (plist-get props :timestamp)
-      (and message (or (plist-get message :timestamp)
-                       (plist-get message :time)))))
+      (and message (benedict-message-timestamp message))))
 
 (defun benedict-vui-turn--message-metadata (message props)
   "Return metadata for MESSAGE or PROPS."
   (or (plist-get props :metadata)
-      (and message (plist-get message :metadata))))
+      (and message (benedict-message-metadata message))))
 
 (defun benedict-vui-turn--message-key (message props)
   "Return a navigation key for MESSAGE or PROPS."
   (or (plist-get props :message-key)
-      (and message (or (plist-get message :id)
-                       (plist-get message :message-id)
-                       (plist-get message :turn-id)
-                       (plist-get message :uuid)
-                       (plist-get message :nav-index)))))
+      (and message (or (benedict-message-id message)
+                       (plist-get props :nav-index)))))
 
 (defun benedict-vui-turn--face-for-role (role metadata)
   "Return a face for ROLE given METADATA."
@@ -122,32 +128,14 @@
    ((listp content) content)
    (t (list (list :type 'text :content (format "%s" content))))))
 
-(defun benedict-vui-turn--tool-result-block (message)
-  "Return a tool result block list for MESSAGE."
-  (let ((status (plist-get (plist-get message :metadata) :status)))
-    (list (list :type 'tool-result :result message :status status))))
-
 (defun benedict-vui-turn--build-blocks (message role)
   "Return block list for MESSAGE given ROLE."
   (cond
    ((null message) nil)
+   ((benedict-message-p message)
+    (benedict-message-blocks-for-display message))
    ((plist-member message :blocks) (plist-get message :blocks))
-   ((eq role 'tool) (benedict-vui-turn--tool-result-block message))
-   (t
-    (let* ((content (or (plist-get message :display-content)
-                        (plist-get message :content)))
-           (blocks (benedict-vui-turn--normalize-content-blocks content))
-           (thinking (plist-get message :thinking))
-           (tool-calls (plist-get message :tool-calls)))
-      (when thinking
-        (setq blocks (append blocks (list (list :type 'thinking
-                                                :thinking-data thinking)))))
-      (when tool-calls
-        (setq blocks (append blocks
-                             (mapcar (lambda (call)
-                                       (list :type 'tool-use :tool-call call))
-                                     tool-calls))))
-      blocks))))
+   (t nil)))
 
 (defun benedict-vui-turn--blocks (props)
   "Return content blocks for PROPS."
@@ -163,20 +151,16 @@
 
 (vui-defcomponent benedict-vui-turn (message blocks role timestamp metadata message-key collapsed-blocks on-toggle-block)
   :render
-  (let* ((actual-role (benedict-vui-turn--normalize-role
-                       (or role (and message (plist-get message :role)))))
+  (let* ((canonical-message (benedict-vui-turn--coerce-message message))
+         (actual-role (benedict-vui-turn--normalize-role
+                       (or role (and canonical-message (benedict-message-role canonical-message)))))
          (actual-timestamp (or timestamp
-                               (and message (or (plist-get message :timestamp)
-                                                (plist-get message :time)))))
-         (actual-metadata (or metadata (and message (plist-get message :metadata))))
+                               (and canonical-message (benedict-message-timestamp canonical-message))))
+         (actual-metadata (or metadata (and canonical-message (benedict-message-metadata canonical-message))))
          (actual-message-key (or message-key
-                                 (and message (or (plist-get message :id)
-                                                  (plist-get message :message-id)
-                                                  (plist-get message :turn-id)
-                                                  (plist-get message :uuid)
-                                                  (plist-get message :nav-index)))))
+                                 (and canonical-message (benedict-message-id canonical-message))))
          (face (benedict-vui-turn--face-for-role actual-role actual-metadata))
-         (actual-blocks (or blocks (benedict-vui-turn--build-blocks message actual-role)))
+         (actual-blocks (or blocks (benedict-vui-turn--build-blocks canonical-message actual-role)))
          (final-blocks (mapcar (lambda (block)
                                  (benedict-vui-turn--apply-face-to-block block face))
                                actual-blocks))

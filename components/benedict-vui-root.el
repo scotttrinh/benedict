@@ -8,6 +8,7 @@
 
 (require 'cl-lib)
 (require 'vui)
+(require 'benedict-message)
 (require 'benedict-session)
 (require 'benedict-vui-chat-header)
 (require 'benedict-vui-conversation-view)
@@ -25,9 +26,10 @@
   "Return a synthetic message for STREAMING payload."
   (when (and (listp streaming)
              (eq (plist-get streaming :status) 'active))
-    (list :role 'assistant
-          :content (plist-get streaming :content)
-          :tool-calls (plist-get streaming :tool-calls))))
+    (benedict-message-from-data
+     (list :role 'assistant
+           :content (plist-get streaming :content)
+           :tool-calls (plist-get streaming :tool-calls)))))
 
 (defun benedict-vui-root--append-streaming (conversation streaming)
   "Return CONVERSATION with STREAMING appended when active."
@@ -145,11 +147,11 @@ Returns a function that when called unsubscribes from events."
   "Handle session EVENT-TYPE with PAYLOAD, updating component state."
   (pcase event-type
     ('message-added
-     (let ((message (plist-get payload :message)))
-       (when message
+     (let ((entry (plist-get payload :entry)))
+       (when entry
          (vui-set-state :conversation
            (lambda (conv)
-             (append conv (list message)))))))
+             (append conv (list entry)))))))
     ('draft-started
      (vui-set-state :streaming
                     (list :status 'active
