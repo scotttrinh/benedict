@@ -18,6 +18,7 @@
 (require 'vui)
 (require 'benedict)
 (require 'benedict-context)
+(require 'benedict-instructions)
 (require 'benedict-message)
 (require 'benedict-tools)
 (require 'benedict-flywire)
@@ -341,11 +342,20 @@ Returns the session or nil if agent frame is disabled."
   "Configure the session with current buffer settings."
   (when-let ((session benedict-chat--session))
     (let* ((profile (benedict-chat-profiles--effective-profile))
+           (profile-text (and profile (symbol-name profile)))
            (provider (benedict-chat-profiles--resolve-provider profile))
            (model (benedict-chat-profiles--resolve-model
                    provider profile benedict-chat--compose-model-override))
            (tools (benedict-chat-profiles--resolve-tools profile))
-           (system (benedict-chat-profiles--system-messages profile))
+           (meta (benedict-session-meta session))
+           (selection (or (plist-get meta :instruction-selection)
+                          (benedict-instructions-bootstrap-session session profile-text)))
+           (system-content
+            (benedict-chat-profiles--merge-system-content
+             (benedict-chat-profiles--system-content profile)
+             (benedict-instructions-build-system-prompt selection)))
+           (system (when system-content
+                     (list (list :role 'system :content system-content))))
            (autonomy (benedict-chat-profiles--profile-autonomy profile))
            (verbosity (benedict-chat-profiles--profile-verbosity profile))
            (loop-config (list :max-turns (benedict-chat-profiles--effective-limit
@@ -612,8 +622,9 @@ When SESSION is non-nil, attach to it instead of creating a new one."
          (provider (benedict-chat-profiles--resolve-provider profile))
          (model (benedict-chat-profiles--resolve-model
                  provider profile benedict-chat--compose-model-override))
-         (existing-session (and (benedict-session-p session) session)))
-    ;; Create and attach session if needed.
+         (existing-session (and (benedict-session-p session) session))
+         (project-root (when (project-current)
+                         (project-root (project-current)))))
     (setq-local benedict-chat--session
                 (or existing-session
                     (benedict-session-create
@@ -621,11 +632,13 @@ When SESSION is non-nil, attach to it instead of creating a new one."
                      :profile profile
                      :provider provider
                      :model model
-                     :root (when (project-current)
-                             (project-root (project-current)))))))
-  (unless (and session (benedict-session-p session))
-    (benedict-chat--configure-session))
-  (benedict-session--add-frontend benedict-chat--session (current-buffer))
+                     :root project-root)))
+    (unless existing-session
+      (benedict-instructions-bootstrap-session
+       benedict-chat--session
+       (and benedict-chat-profile (symbol-name benedict-chat-profile)))
+      (benedict-chat--configure-session))
+    (benedict-session--add-frontend benedict-chat--session (current-buffer)))
   ;; Subscribe to session events
   (setq-local benedict-chat--session-subscription
               (benedict-chat--subscribe-to-session benedict-chat--session))

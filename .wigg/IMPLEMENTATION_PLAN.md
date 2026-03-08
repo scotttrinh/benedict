@@ -15,7 +15,7 @@ After this change, a developer should be able to open `*Benedict Chat*`, have th
 - [x] (2026-03-07 16:22Z) Add `benedict-harness.el`, attach harness state to sessions, route `benedict-tool-invoke` through harness authorization/effect recording, and cover the new tool-audit contract plus structured denial results in focused tool/loop tests.
 - [x] (2026-03-07 16:27Z) Finish the harness milestone by restoring a green `test/benedict-session-test.el` run under `nix run .#test -- test/benedict-tools-test.el test/benedict-session-test.el test/benedict-agent-loop-test.el`, then validate the denial transcript assertions from that file end-to-end.
 - [x] (2026-03-07 16:35Z) Add a provider-agnostic session store with save/load, branch metadata hooks, and replay into the runtime.
-- [ ] (YYYY-MM-DD HH:MMZ) Add instruction bootstrap that loads `AGENTS.md`, selected `SKILL.md` files, and `.wigg/specs/` into session startup context with progressive disclosure.
+- [x] (2026-03-08 15:43Z) Add instruction bootstrap that loads `AGENTS.md`, selected `SKILL.md` files, and `.wigg/specs/` into session startup context with progressive disclosure.
 - [ ] (YYYY-MM-DD HH:MMZ) Update the chat/VUI surface to render checkpoints, audit/tool results, and persistence-backed session metadata without relying on ephemeral minibuffer prompts.
 - [ ] (YYYY-MM-DD HH:MMZ) Prove the feature with focused ERT coverage and a manual fake-provider transcript round-trip.
 
@@ -36,6 +36,10 @@ The harness work exposed an existing instability in the current working tree: `n
 That instability was localized to the test file, not the runtime. Repairing the broken `ert-deftest` forms in `test/benedict-session-test.el` exposed a second issue: the updated harness emits both `authorization` and `effect` `tool-audit` entries on successful tool execution, so the session tests had to match the authorization-phase audit entry before asserting `:policy` and `:decision`.
 
 The persistence milestone exposed two remaining canonical-message edges in the current runtime. `benedict-message->provider-message` was dropping tool-result content after reload because tool messages can exist as tool-result blocks without a separate text block, and `benedict-chat--apply-request-result-extras` still treated assistant entries as mutable plists. Fixing both was required to make a saved fake-provider transcript dispatch correctly after reload.
+
+The instruction bootstrap milestone surfaced one environment-level constraint unrelated to the runtime itself: running Eask-backed test commands in parallel can deadlock on `.eask/.../recipes/propcheck` with `file-locked`. The milestone validations pass when run serially, so the recorded transcripts for this step use separate invocations instead of parallel test jobs.
+
+Skill selection needed a repo-local fallback stronger than frontmatter title matching alone. In this tree, the stable identifier for a skill is effectively its directory name (`agents/skills/impl`, `agents/skills/plan`, etc.), so the selector now falls back to the directory basename when profile-driven selection asks for `impl` or `plan`.
 
 ## Decision Log
 
@@ -59,8 +63,8 @@ The persistence milestone exposed two remaining canonical-message edges in the c
 - **Rationale:** Concrete Step 1 allows intentional local changes, and this run's task is to update the ExecPlan itself. Resetting or ignoring that file would violate the instruction to rely on the current tree and not rewrite history.
 - **Date/Author:** 2026-03-07 / Codex
 
-- **Decision:** Keep `benedict-session-messages` as a legacy plist mirror while making canonical `benedict-message` structs the runtime source of truth.
-- **Rationale:** Milestone 1 only requires the runtime contract refactor, not a repo-wide caller migration. A synchronized mirror preserves current UI/tests while `benedict-session--build-request`, loop logic, and future persistence code move onto canonical entries immediately.
+- **Decision:** Complete the canonical-message refactor in one breaking pass instead of preserving `benedict-session-messages` or other repository-internal compatibility mirrors.
+- **Rationale:** Repository-internal compatibility layers hide incomplete migrations by letting old callers keep passing through deprecated plist-shaped paths. For this codebase, it is preferable to accept temporary failing tests and fix callers methodically until the canonical entry API is the only supported runtime contract.
 - **Date/Author:** 2026-03-07 / Codex
 
 - **Decision:** Attach a `benedict-event` object inside the existing session hook payload instead of changing the hook arity in this milestone.
@@ -74,6 +78,10 @@ The persistence milestone exposed two remaining canonical-message edges in the c
 - **Decision:** Persist sessions as a directory containing `metadata.sexp` plus newline-delimited canonical entry forms in `transcript.sexp`.
 - **Rationale:** This keeps writes atomic and debuggable while preserving deterministic replay without needing a database or a monolithic unreadable blob. Metadata such as provider/model, loop state, harness audit log, and branch-related `meta` keys can evolve independently from transcript entries.
 - **Date/Author:** 2026-03-07 / Codex
+
+- **Decision:** Persist the selected instruction metadata, including loaded source bodies for selected files, inside `session.meta` and rebuild the effective system prompt from that selection during session configuration.
+- **Rationale:** Instruction bootstrap must survive save/load and later profile/model reconfiguration without rediscovering a different source set. Storing the progressive-disclosure selection on the session keeps discovery cheap, preserves the exact chosen sources, and lets the prompt be recomposed deterministically.
+- **Date/Author:** 2026-03-08 / Codex
 
 ## Artifacts and Notes
 
@@ -189,6 +197,47 @@ The persistence milestone exposed two remaining canonical-message edges in the c
     test/benedict-session-test.el: added round-trip coverage for provider/model metadata, harness audit persistence, and branch-related session metadata.
     test/benedict-chat-integration-test.el: added a fake-provider save/reload/send flow proving a restored session can dispatch again.
     ```
+  - `nix run .#test -- test/benedict-instructions-test.el`
+    ```text
+    warning: Git tree '/Users/scotttrinh/github.com/scotttrinh/benedict' has uncommitted changes
+    ✓ Checking local archives `local`... done!
+    ...
+
+    Ran 3 tests in 0.009 seconds
+    ```
+  - `nix run .#test -- test/benedict-chat-integration-test.el test/benedict-vui-root-test.el test/benedict-vui-conversation-view-test.el`
+    ```text
+    warning: Git tree '/Users/scotttrinh/github.com/scotttrinh/benedict' has uncommitted changes
+    ✓ Checking local archives `local`... done!
+    Type C-c C-c to compose, C-c C-s to prompt, g r retries, w copies last response.
+    Compose buffer ready. C-c C-c to send; C-c C-k to cancel.
+    Reactive regression saw event: message-added
+    Reactive regression saw event: state-changed
+    Reactive regression saw event: state-changed
+    Reactive regression saw event: draft-started
+    Reactive regression saw event: request-started
+    Benedict: sent prompt with context
+    Reactive regression saw event: draft-updated
+    Reactive regression saw event: draft-updated
+    Reactive regression saw event: state-changed
+    Reactive regression saw event: draft-finalized
+    Reactive regression saw event: message-added
+    Reactive regression saw event: request-completed
+    Reactive regression saw event: message-updated
+    ...
+    Type C-c C-c to compose, C-c C-s to prompt, g r retries, w copies last response.
+    .....................
+
+    Ran 24 tests in 1.653 seconds
+    ```
+  - File-scoped diff notes
+    ```text
+    benedict-instructions.el: added discovery, profile/task-based selection, prompt assembly, and session bootstrap metadata for AGENTS, local skills, and specs.
+    benedict-chat.el: bootstraps instruction selection for new sessions and merges the persisted instruction prompt into the effective system prompt before dispatch.
+    benedict-chat-profiles.el: added a helper to merge profile/system prompt fragments without emitting empty sections.
+    test/benedict-instructions-test.el: added focused discovery, selection, and session-bootstrap coverage using a temporary fixture repository.
+    test/benedict-chat-integration-test.el: added a real-repo new-chat assertion proving default startup includes AGENTS/spec sources and instruction text in the session system prompt.
+    ```
 
 ## Outcomes & Retrospective
 
@@ -222,7 +271,7 @@ Terms used in this plan:
 
 Use only the repository’s current stack plus standard Emacs Lisp libraries already aligned with the project: `cl-lib`, `subr-x`, `json`, `project`, `seq`, `map`, `lgr`, and the existing VUI components. Do not introduce a database dependency for the first milestone.
 
-Implementation rule: do not add backwards-compatibility shims, mirrored state, or transitional adapter layers for repository-internal call sites. When a contract changes, update all in-repo callers and tests to the new contract in the same milestone, and record any remaining breakage explicitly instead of masking it with compatibility code.
+Implementation rule: do not add backwards-compatibility shims, mirrored state, or transitional adapter layers for repository-internal call sites. When a contract changes, update all in-repo callers and tests to the new contract in the same milestone, and record any remaining breakage explicitly instead of masking it with compatibility code. Prefer a temporarily red test suite with a clear migration queue over a green suite that still passes through deprecated internal paths.
 
 At the end of this work, the following modules and functions should exist:
 
@@ -303,7 +352,27 @@ Must subscribe to structured events and render checkpoint/audit/session markers 
 
 ## Plan of Work (Milestones)
 
-Milestone 1 is the contract refactor. Add `benedict-message.el` and `benedict-event.el`, then refactor `benedict-session.el` so sessions append canonical entries instead of raw provider-shaped message plists. Keep compatibility shims only where tests need temporary bridging. Update request building so provider adapters receive translated provider-ready messages derived from canonical history. At the end of this milestone, `test/benedict-session-test.el` and `test/benedict-agent-loop-test.el` should pass using the new internal model, and no provider module should be responsible for canonical transcript storage.
+Milestone 1 is the contract refactor. Add `benedict-message.el` and `benedict-event.el`, then refactor `benedict-session.el` so sessions append canonical entries instead of raw provider-shaped message plists. Update all in-repo callers and tests in the same pass rather than preserving compatibility bridges. Update request building so provider adapters receive translated provider-ready messages derived from canonical history. At the end of this milestone, `test/benedict-session-test.el` and `test/benedict-agent-loop-test.el` should pass using the new internal model, no provider module should be responsible for canonical transcript storage, and no repository-owned UI/runtime path should require plist-shaped transcript entries.
+
+## Canonical Refactor Completion
+
+The canonical-message refactor is not complete until repository-internal code stops depending on deprecated plist-shaped transcript entries and legacy mirrored state. The remaining work should be treated as a single cleanup queue, not as justification for keeping compatibility layers alive indefinitely.
+
+Remaining work:
+
+- Remove `benedict-session-messages` as a mirrored plist history once all callers are switched to canonical `benedict-message` entries or dedicated accessors over `benedict-session-entries`.
+- Update chat logic and tests that still inspect session history as raw plists, especially the files under `test/benedict-chat-*.el`, to assert against canonical entries and canonical accessors instead.
+- Replace repository-internal `plist-get` access against transcript messages in UI code with `benedict-message` helpers or VUI-specific accessors, including tool-result and message-header rendering paths.
+- Audit session event payloads and standardize on canonical `:entry` payloads where the event represents transcript history, rather than emitting both old and new shapes.
+- Remove or tighten coercion helpers that currently accept both plists and canonical entries once all in-repo callers are migrated, so incorrect message shapes fail fast.
+- Re-run the focused chat, VUI, session, and provider test suites after each migration slice, accepting temporary failures during the migration instead of reintroducing compatibility paths to keep everything green.
+
+Completion criteria:
+
+- No repository-owned runtime, chat, or VUI module reads transcript messages via raw plist fields when a canonical accessor exists.
+- No repository-owned tests depend on `benedict-session-messages` or assume transcript history is stored as provider-shaped plists.
+- The only plist-shaped message handling that remains is at external boundaries such as provider adapters or wire-format serialization helpers.
+- Removing the compatibility mirror does not change behavior beyond the intended contract cleanup, and the full relevant test suite passes afterward.
 
 Milestone 2 is the harness boundary. Add `benedict-harness.el`, move permission resolution and denial metadata out of the middle of `benedict-tools.el`, and route all session-driven tool execution through the harness before the tool implementation runs. Encode scope as explicit paths, buffers, commands, and network rules; encode budgets as turn/time/token/tool caps. Represent denials and scope expansion requests as structured tool results or checkpoint entries, never as silent failures. At the end of this milestone, a denied tool call should still leave a recoverable, human-readable result in the session transcript and an audit event in the UI/test state.
 
@@ -459,3 +528,5 @@ Revision Note (2026-03-07 16:22Z): Split the harness milestone into the complete
 Revision Note (2026-03-07 16:27Z): Marked the remaining harness validation milestone complete after repairing the broken `test/benedict-session-test.el` forms, updating the session audit assertions to target the authorization-phase `tool-audit` entry, and recording the now-passing exact milestone command plus the session-test rerun that covers the denial transcript assertions.
 
 Revision Note (2026-03-07 16:35Z): Marked the persistence milestone complete after adding `benedict-store.el`, wiring explicit session save/load wrappers, fixing canonical replay for tool-result and assistant metadata updates, recording the passing save/reload test transcript, and noting the new on-disk session layout for future milestones.
+
+Revision Note (2026-03-08 15:43Z): Marked the instruction bootstrap milestone complete after adding `benedict-instructions.el`, wiring new-session bootstrap plus prompt recomposition into chat configuration, adding focused discovery/selection tests and a fresh-chat integration assertion, and recording the passing serial validation transcripts for the new module and the exact chat/VUI milestone command.

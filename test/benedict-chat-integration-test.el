@@ -51,6 +51,31 @@
                          (kill-buffer chat-buffer-name)
                          (funcall done)))))))
 
+(ert-deftest benedict-chat-integration-new-session-bootstraps-instructions ()
+  "A fresh chat session includes discovered instruction metadata and prompt text."
+  (let ((benedict-session--registry (make-hash-table :test 'equal))
+        (benedict-provider 'fake)
+        (benedict-chat-buffer-name "*Benedict Test Chat Bootstrap*"))
+    (with-current-buffer (get-buffer-create benedict-chat-buffer-name)
+      (unwind-protect
+          (progn
+            (benedict-chat-mode)
+            (benedict-chat--init-buffer)
+            (let* ((session benedict-chat--session)
+                   (meta (benedict-session-meta session))
+                   (sources (plist-get meta :instruction-sources))
+                   (system-prompt (car (benedict-session-system-prompt session)))
+                   (content (plist-get system-prompt :content)))
+              (should session)
+              (should (member "AGENTS.md" sources))
+              (should (member ".wigg/specs/01_overview.md" sources))
+              (should (member ".wigg/specs/02_architecture.md" sources))
+              (should (member "agents/skills/impl/SKILL.md" sources))
+              (should (string-match-p "Loaded sources:" content))
+              (should (string-match-p "Project commands" content))
+              (should (string-match-p "Architecture Specification" content))))
+        (kill-buffer (current-buffer))))))
+
 (ert-deftest-async benedict-chat-integration-chat-command-reactive-streaming-regression (done)
   "Chat command flow stays reactive while session emits lifecycle events."
   (benedict-test-with-bindings done

@@ -262,6 +262,16 @@ Resolution order: buffer override → profile :provider → global `benedict-pro
     (when parts
       (string-join (nreverse parts) "\n\n"))))
 
+(defun benedict-chat-profiles--merge-system-content (&rest parts)
+  "Merge non-empty system prompt PARTS into one string."
+  (let ((filtered nil))
+    (dolist (part parts)
+      (when (and (stringp part)
+                 (not (string-empty-p (string-trim part))))
+        (push (string-trim part) filtered)))
+    (when filtered
+      (string-join (nreverse filtered) "\n\n"))))
+
 (defun benedict-chat-profiles--system-messages (&optional profile)
   "Return a list of system messages for PROFILE."
   (when-let ((content (benedict-chat-profiles--system-content profile)))
