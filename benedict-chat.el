@@ -20,6 +20,7 @@
 (require 'benedict-context)
 (require 'benedict-instructions)
 (require 'benedict-message)
+(require 'benedict-store)
 (require 'benedict-tools)
 (require 'benedict-flywire)
 (require 'benedict-session)
@@ -196,7 +197,9 @@ See `benedict-session' for the in-memory session data structure.")
          (vui-component 'benedict-vui-root
            :session benedict-chat--session
            :register-actions #'benedict-chat--vui-register-actions
-           :on-provider-click #'benedict-chat-choose-model)
+           :on-provider-click #'benedict-chat-choose-model
+           :on-continue-checkpoint #'benedict-chat-continue-checkpoint
+           :on-stop-checkpoint #'benedict-chat-stop-checkpoint)
           (buffer-name))))
 
 ;; -------------------------------------------------------------------
@@ -466,6 +469,10 @@ When SKIP-CONTEXT is non-nil, do not append context slices."
   (let ((m (make-sparse-keymap)))
     (define-key m (kbd "C-c C-c") #'benedict-chat-compose-open)
     (define-key m (kbd "C-c C-s") #'benedict-chat-send-prompt)
+    (define-key m (kbd "C-c C-x C-s") #'benedict-chat-save-session)
+    (define-key m (kbd "C-c C-x C-f") #'benedict-chat-load-session)
+    (define-key m (kbd "C-c C-]") #'benedict-chat-continue-checkpoint)
+    (define-key m (kbd "C-c C-[") #'benedict-chat-stop-checkpoint)
     (define-key m (kbd "g l") #'benedict-chat-nav-jump-to-latest)
     (define-key m (kbd "g a") #'benedict-chat-nav-jump-to-last-assistant)
     (define-key m (kbd "g A") #'benedict-chat-nav-jump-to-last-assistant-with-tools)
@@ -506,6 +513,54 @@ When SKIP-CONTEXT is non-nil, do not append context slices."
     (benedict-session-stop benedict-chat--session))
   (message "Benedict: loop/request canceled by user"))
 
+(defun benedict-chat--current-session ()
+  "Return the active chat session or signal a user error."
+  (or benedict-chat--session
+      (user-error "No session attached")))
+
+(defun benedict-chat-save-session (&optional root)
+  "Persist the current chat session under ROOT and return the session path."
+  (interactive
+   (list (when current-prefix-arg
+           (read-directory-name "Save session root: "
+                                benedict-store-root nil nil))))
+  (let* ((session (benedict-chat--current-session))
+         (path (benedict-session-save session :root root)))
+    (benedict-chat--mount-ui)
+    (message "Benedict: session saved to %s" path)
+    path))
+
+(defun benedict-chat-load-session (path)
+  "Load a persisted session from PATH and open its chat buffer."
+  (interactive
+   (list (read-directory-name "Load session directory: "
+                              benedict-store-root nil t)))
+  (let* ((session (benedict-session-load path))
+         (buffer (benedict-chat--buffer-for-session session)))
+    (pop-to-buffer buffer)
+    (with-current-buffer buffer
+      (benedict-chat--sync-from-session session))
+    (message "Benedict: loaded session %s" (benedict-session-id session))
+    session))
+
+(defun benedict-chat-continue-checkpoint ()
+  "Continue the active session after a checkpoint."
+  (interactive)
+  (let ((session (benedict-chat--current-session)))
+    (unless (eq (benedict-session-state session) 'checkpoint)
+      (user-error "Session is not waiting at a checkpoint"))
+    (benedict-session-continue session)
+    (message "Benedict: checkpoint continued")))
+
+(defun benedict-chat-stop-checkpoint ()
+  "Stop the active session after a checkpoint."
+  (interactive)
+  (let ((session (benedict-chat--current-session)))
+    (unless (eq (benedict-session-state session) 'checkpoint)
+      (user-error "Session is not waiting at a checkpoint"))
+    (benedict-session-stop session)
+    (message "Benedict: checkpoint stopped")))
+
 ;;; Session Event Subscription
 
 (defun benedict-chat--subscribe-to-session (session)
@@ -532,22 +587,7 @@ Returns a function suitable for adding to `benedict-session-event-hook'."
      (benedict-chat--observe-state-changed
       (plist-get payload :old) (plist-get payload :new)))
     ('checkpoint-requested
-     (when-let ((session benedict-chat--session))
-       (let* ((reason (plist-get payload :reason))
-              (prompt (pcase reason
-                        ('turn-limit
-                         (format "Benedict has run %d autonomous steps. Continue? "
-                                 (plist-get payload :turn-count)))
-                        ('time-limit
-                         (format "Time limit (%.1fs) reached. Continue? "
-                                 (plist-get payload :limit)))
-                        ('token-limit
-                         (format "Token limit (%d) exceeded. Continue? "
-                                 (plist-get payload :limit)))
-                        (_ "Continue autonomous loop? "))))
-         (if (y-or-n-p prompt)
-             (benedict-session-continue session)
-           (benedict-session-stop session)))))
+     (message "Benedict: checkpoint requested; use the in-buffer controls or checkpoint commands"))
     ('request-completed
      (benedict-chat--observe-request-completed payload))
     ('loop-stopped
@@ -764,7 +804,7 @@ When multiple sessions exist, prompt for which one to open."
         (when-let ((session (cdr (assoc selected session-strings :test #'equal))))
           (let ((buf (benedict-chat--buffer-for-session session)))
             (pop-to-buffer buf))))))
-  (message "Type C-c C-c to compose, C-c C-s to prompt, g r retries, w copies last response.")))
+  (message "Type C-c C-c to compose, C-c C-s to prompt, C-c C-x C-s to save, C-c C-x C-f to load.")))
 
 (provide 'benedict-chat)
 ;;; benedict-chat.el ends here

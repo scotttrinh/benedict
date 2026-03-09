@@ -61,11 +61,13 @@
           (progn
             (benedict-chat-mode)
             (benedict-chat--init-buffer)
+            (vui-flush-sync)
             (let* ((session benedict-chat--session)
                    (meta (benedict-session-meta session))
                    (sources (plist-get meta :instruction-sources))
                    (system-prompt (car (benedict-session-system-prompt session)))
-                   (content (plist-get system-prompt :content)))
+                   (content (plist-get system-prompt :content))
+                   (buffer-text (buffer-string)))
               (should session)
               (should (member "AGENTS.md" sources))
               (should (member ".wigg/specs/01_overview.md" sources))
@@ -73,7 +75,9 @@
               (should (member "agents/skills/impl/SKILL.md" sources))
               (should (string-match-p "Loaded sources:" content))
               (should (string-match-p "Project commands" content))
-              (should (string-match-p "Architecture Specification" content))))
+              (should (string-match-p "Architecture Specification" content))
+              (should (string-match-p "Session Context" buffer-text))
+              (should (string-match-p "Instructions:" buffer-text))))
         (kill-buffer (current-buffer))))))
 
 (ert-deftest-async benedict-chat-integration-chat-command-reactive-streaming-regression (done)
@@ -191,7 +195,8 @@
        (benedict-provider-fake-latency-seconds 0.01))
     (let* ((store-root (make-temp-file "benedict-chat-store-" t))
            (chat-buffer nil)
-           (loaded nil))
+           (loaded nil)
+           (loaded-buffer nil))
       (save-window-excursion
         (benedict-chat)
         (setq chat-buffer (get-buffer benedict-chat-buffer-name)))
@@ -204,13 +209,17 @@
              (progn
                (with-current-buffer chat-buffer
                  (should (benedict-vui-test--wait-for-request-finished benedict-chat--session 2.0))
-                 (benedict-session-save benedict-chat--session :root store-root)
+                 (benedict-chat-save-session store-root)
                  (setq loaded
-                       (benedict-session-load
+                       (benedict-chat-load-session
                         (benedict-store-session-path
                          (benedict-session-id benedict-chat--session)
                          store-root)))
+                 (setq loaded-buffer (benedict-chat--buffer-for-session loaded))
                  (should (= 2 (length (benedict-session-entries-chronological loaded))))
+                 (with-current-buffer loaded-buffer
+                   (vui-flush-sync)
+                   (should (string-match-p "Saved to:" (buffer-string))))
                  (benedict-session-add-message loaded '(:role user :content "after reload"))
                  (benedict-session-dispatch loaded
                                             (benedict-session--build-request loaded)))
@@ -228,11 +237,15 @@
                                                   (benedict-message-text last-entry)))))
                     (when (buffer-live-p chat-buffer)
                       (kill-buffer chat-buffer))
+                    (when (buffer-live-p loaded-buffer)
+                      (kill-buffer loaded-buffer))
                     (delete-directory store-root t)
                     (funcall done)))))
            (error
             (when (buffer-live-p chat-buffer)
               (kill-buffer chat-buffer))
+            (when (buffer-live-p loaded-buffer)
+              (kill-buffer loaded-buffer))
             (delete-directory store-root t)
             (funcall done err))))))))
 

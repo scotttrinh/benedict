@@ -25,7 +25,9 @@ Binds `session' in BODY so tests can drive session events directly."
          (vui-component 'benedict-vui-root
                          :session session
                          :register-actions nil
-                         :on-provider-click nil)
+                         :on-provider-click nil
+                         :on-continue-checkpoint nil
+                         :on-stop-checkpoint nil)
         ,@body)))
 
 (defmacro with-mounted-vui-root-script (script &rest body)

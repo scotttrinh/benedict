@@ -16,7 +16,7 @@ After this change, a developer should be able to open `*Benedict Chat*`, have th
 - [x] (2026-03-07 16:27Z) Finish the harness milestone by restoring a green `test/benedict-session-test.el` run under `nix run .#test -- test/benedict-tools-test.el test/benedict-session-test.el test/benedict-agent-loop-test.el`, then validate the denial transcript assertions from that file end-to-end.
 - [x] (2026-03-07 16:35Z) Add a provider-agnostic session store with save/load, branch metadata hooks, and replay into the runtime.
 - [x] (2026-03-08 15:43Z) Add instruction bootstrap that loads `AGENTS.md`, selected `SKILL.md` files, and `.wigg/specs/` into session startup context with progressive disclosure.
-- [ ] (YYYY-MM-DD HH:MMZ) Update the chat/VUI surface to render checkpoints, audit/tool results, and persistence-backed session metadata without relying on ephemeral minibuffer prompts.
+- [x] (2026-03-09 16:19Z) Update the chat/VUI surface to render checkpoints, audit/tool results, and persistence-backed session metadata without relying on ephemeral minibuffer prompts.
 - [ ] (YYYY-MM-DD HH:MMZ) Prove the feature with focused ERT coverage and a manual fake-provider transcript round-trip.
 
 ## Surprises & Discoveries
@@ -40,6 +40,8 @@ The persistence milestone exposed two remaining canonical-message edges in the c
 The instruction bootstrap milestone surfaced one environment-level constraint unrelated to the runtime itself: running Eask-backed test commands in parallel can deadlock on `.eask/.../recipes/propcheck` with `file-locked`. The milestone validations pass when run serially, so the recorded transcripts for this step use separate invocations instead of parallel test jobs.
 
 Skill selection needed a repo-local fallback stronger than frontmatter title matching alone. In this tree, the stable identifier for a skill is effectively its directory name (`agents/skills/impl`, `agents/skills/plan`, etc.), so the selector now falls back to the directory basename when profile-driven selection asks for `impl` or `plan`.
+
+The new metadata panels exposed one VUI lifecycle subtlety in tests: session-context and saved-path text do not appear in `buffer-string` until the mounted root has flushed its async state updates. The runtime behavior was correct; the integration tests needed explicit `vui-flush-sync` or buffer selection on the loaded session before asserting rendered text.
 
 ## Decision Log
 
@@ -82,6 +84,10 @@ Skill selection needed a repo-local fallback stronger than frontmatter title mat
 - **Decision:** Persist the selected instruction metadata, including loaded source bodies for selected files, inside `session.meta` and rebuild the effective system prompt from that selection during session configuration.
 - **Rationale:** Instruction bootstrap must survive save/load and later profile/model reconfiguration without rediscovering a different source set. Storing the progressive-disclosure selection on the session keeps discovery cheap, preserves the exact chosen sources, and lets the prompt be recomposed deterministically.
 - **Date/Author:** 2026-03-08 / Codex
+
+- **Decision:** Surface checkpoint controls and session metadata as VUI blocks owned by `benedict-vui-root`, while keeping save/load/checkpoint actions as chat commands invoked from those blocks.
+- **Rationale:** The root component already subscribes to structured session events and is the narrowest place to render persistent checkpoint, audit, and persistence state without reintroducing minibuffer prompts or forcing leaf components to inspect session internals.
+- **Date/Author:** 2026-03-09 / Codex
 
 ## Artifacts and Notes
 
@@ -237,6 +243,41 @@ Skill selection needed a repo-local fallback stronger than frontmatter title mat
     benedict-chat-profiles.el: added a helper to merge profile/system prompt fragments without emitting empty sections.
     test/benedict-instructions-test.el: added focused discovery, selection, and session-bootstrap coverage using a temporary fixture repository.
     test/benedict-chat-integration-test.el: added a real-repo new-chat assertion proving default startup includes AGENTS/spec sources and instruction text in the session system prompt.
+    ```
+  - `nix run .#test -- test/benedict-chat-integration-test.el test/benedict-vui-root-test.el test/benedict-vui-conversation-view-test.el`
+    ```text
+    warning: Git tree '/Users/scotttrinh/github.com/scotttrinh/benedict' has uncommitted changes
+    ✓ Checking local archives `local`... done!
+    Type C-c C-c to compose, C-c C-s to prompt, C-c C-x C-s to save, C-c C-x C-f to load.
+    Compose buffer ready. C-c C-c to send; C-c C-k to cancel.
+    Reactive regression saw event: message-added
+    Reactive regression saw event: state-changed
+    Reactive regression saw event: state-changed
+    Reactive regression saw event: draft-started
+    Reactive regression saw event: request-started
+    Benedict: sent prompt with context
+    Reactive regression saw event: draft-updated
+    Reactive regression saw event: draft-updated
+    Reactive regression saw event: state-changed
+    Reactive regression saw event: draft-finalized
+    Reactive regression saw event: message-added
+    Reactive regression saw event: request-completed
+    Reactive regression saw event: message-updated
+    ...
+    Type C-c C-c to compose, C-c C-s to prompt, C-c C-x C-s to save, C-c C-x C-f to load.
+    Benedict: session saved to /var/folders/30/3dlmlzpx2gx5wqhr1s4ny6gw0000gn/T/benedict-chat-store-onRvfW/ses-20260309121945-19af6751
+    Benedict: loaded session ses-20260309121945-19af6751
+    ........................
+
+    Ran 27 tests in 1.757 seconds
+    ```
+  - File-scoped diff notes
+    ```text
+    benedict-chat.el: replaced `y-or-n-p` checkpoint prompts with explicit save/load/checkpoint commands and wired those commands into the mounted VUI root.
+    benedict-session.el: records session save metadata (`:store-path`, `:last-saved-at`) and emits a `session-saved` event so the UI can reflect persistence state immediately.
+    components/benedict-vui-root.el: now tracks checkpoint, audit-log, and session-info state from structured session events and renders them persistently alongside the conversation.
+    components/benedict-vui-checkpoint-block.el / benedict-vui-audit-log.el / benedict-vui-session-panel.el: added dedicated VUI panels for checkpoint controls, harness audit history, and loaded instruction/persistence metadata.
+    test/benedict-vui-root-test.el and test/benedict-chat-integration-test.el: added coverage for persistent checkpoint controls, visible audit/session metadata, and chat-level save/load rendering.
     ```
 
 ## Outcomes & Retrospective
@@ -480,6 +521,8 @@ nix run .#test -- test/benedict-session-test.el test/benedict-agent-loop-test.el
 also exits with status `0`, proving the core runtime, harness, tool path, and chat integration still work together.
 
 Revision Note (2026-03-07 15:43Z): Marked the initial audit milestone complete after running the baseline repo-state and targeted test commands, and recorded the resulting evidence and working-tree observation for the next implementation run.
+
+Revision Note (2026-03-09 16:19Z): Marked the UI integration milestone complete after replacing minibuffer checkpoint prompts with persistent VUI checkpoint/audit/session panels, adding chat save/load/checkpoint commands, and recording the focused milestone test transcript.
 
 Manual acceptance in Emacs must show the following behavior:
 

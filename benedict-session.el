@@ -14,6 +14,7 @@
 
 (autoload 'benedict-store-save-session "benedict-store" nil nil)
 (autoload 'benedict-store-load-session "benedict-store" nil nil)
+(autoload 'benedict-store-session-path "benedict-store" nil nil)
 
 (defvar benedict-session--logger (lgr-get-logger "benedict.session")
   "Logger for session events.")
@@ -172,12 +173,26 @@ Returns t if deleted, nil if not found."
 
 (cl-defun benedict-session-save (session &key root)
   "Persist SESSION to disk under ROOT and return the session directory path."
-  (benedict-session-touch session)
-  (benedict-store-save-session session :root root))
+  (let* ((saved-at (current-time))
+         (path (benedict-store-session-path (benedict-session-id session) root))
+         (meta (copy-tree (benedict-session-meta session))))
+    (setq meta (plist-put meta :store-path path))
+    (setq meta (plist-put meta :last-saved-at saved-at))
+    (setf (benedict-session-meta session) meta)
+    (benedict-session-touch session)
+    (benedict-store-save-session session :root root)
+    (benedict-session--emit session 'session-saved :path path :saved-at saved-at)
+    path))
 
 (cl-defun benedict-session-load (path &key root)
   "Load a persisted session from PATH or session id under ROOT."
-  (let ((session (benedict-store-load-session path :root root)))
+  (let* ((resolved-path (if (file-directory-p path)
+                            path
+                          (benedict-store-session-path path root)))
+         (session (benedict-store-load-session path :root root))
+         (meta (copy-tree (benedict-session-meta session))))
+    (setq meta (plist-put meta :store-path resolved-path))
+    (setf (benedict-session-meta session) meta)
     (puthash (benedict-session-id session) session benedict-session--registry)
     session))
 

@@ -8,10 +8,14 @@
 
 (require 'cl-lib)
 (require 'vui)
+(require 'benedict-harness)
 (require 'benedict-message)
 (require 'benedict-session)
+(require 'benedict-vui-audit-log)
 (require 'benedict-vui-chat-header)
+(require 'benedict-vui-checkpoint-block)
 (require 'benedict-vui-conversation-view)
+(require 'benedict-vui-session-panel)
 (require 'benedict-vui-status-bar)
 
 (defun benedict-vui-root--session-draft (session)
@@ -36,6 +40,21 @@
   (if (benedict-vui-root--streaming-message streaming)
       (append conversation (list (benedict-vui-root--streaming-message streaming)))
     conversation))
+
+(defun benedict-vui-root--session-info (session)
+  "Return displayable session metadata for SESSION."
+  (when session
+    (let* ((meta (copy-tree (benedict-session-meta session)))
+           (harness (benedict-session-harness session)))
+      (list :session-id (benedict-session-id session)
+            :title (benedict-session-title session)
+            :state (benedict-session-state session)
+            :root (benedict-session-root session)
+            :instruction-sources (copy-tree (plist-get meta :instruction-sources))
+            :store-path (plist-get meta :store-path)
+            :last-saved-at (plist-get meta :last-saved-at)
+            :audit-count (length (benedict-harness-audit-log harness))
+            :updated-at (benedict-session-updated-at session)))))
 
 (defun benedict-vui-root--toggle-collapsed-block (collapsed-blocks block-id &optional next)
   "Return COLLAPSED-BLOCKS updated for BLOCK-ID.
@@ -62,22 +81,37 @@ toggle based on current membership.  COLLAPSED-BLOCKS may be a list or hash tabl
           (if present current (cons block-id current))
         (cl-remove block-id current :test #'equal))))))
 
-(vui-defcomponent benedict-vui-root (session register-actions on-provider-click)
+(defun benedict-vui-root--collapsed-p (collapsed-blocks block-id)
+  "Return non-nil when BLOCK-ID is collapsed in COLLAPSED-BLOCKS."
+  (cond
+   ((hash-table-p collapsed-blocks) (gethash block-id collapsed-blocks))
+   ((listp collapsed-blocks) (member block-id collapsed-blocks))
+   (t nil)))
+
+(vui-defcomponent benedict-vui-root (session register-actions on-provider-click on-continue-checkpoint on-stop-checkpoint)
   "Root component owning all shared application state."
   :state ((conversation nil)
           (streaming nil)
           (provider 'openrouter)
           (model "claude-3-5-sonnet-20241022")
           (collapsed-blocks nil)
+          (session-info nil)
+          (checkpoint nil)
+          (audit-log nil)
           (error nil)
           (usage nil))
   :on-mount
   (let* ((initial-conversation (and session
-                                    (benedict-session-messages-chronological session)))
+                                    (benedict-session-entries-chronological session)))
          (initial-streaming (benedict-vui-root--session-draft session))
          (initial-provider (and session (benedict-session-provider session)))
          (initial-model (and session (benedict-session-model session)))
-         (initial-usage (and session (benedict-session-last-usage session))))
+         (initial-usage (and session (benedict-session-last-usage session)))
+         (initial-session-info (benedict-vui-root--session-info session))
+         (initial-audit-log (and session
+                                 (copy-tree
+                                  (benedict-harness-audit-log
+                                   (benedict-session-harness session))))))
     (vui-batch
       (when initial-conversation
         (vui-set-state :conversation initial-conversation))
@@ -88,7 +122,11 @@ toggle based on current membership.  COLLAPSED-BLOCKS may be a list or hash tabl
       (when initial-model
         (vui-set-state :model initial-model))
       (when initial-usage
-        (vui-set-state :usage initial-usage)))
+        (vui-set-state :usage initial-usage))
+      (when initial-session-info
+        (vui-set-state :session-info initial-session-info))
+      (when initial-audit-log
+        (vui-set-state :audit-log initial-audit-log)))
     (when session
       (let ((subscription (benedict-vui-root--subscribe-to-session session)))
         (lambda ()
@@ -104,13 +142,13 @@ toggle based on current membership.  COLLAPSED-BLOCKS may be a list or hash tabl
                              (lambda (current)
                                (benedict-vui-root--toggle-collapsed-block
                                 current block-id next)))))))
-      (vui-use-effect (register-actions toggle-block)
+    (vui-use-effect (register-actions toggle-block)
+      (when register-actions
+        (funcall register-actions
+                 (list :toggle-block toggle-block)))
+      (lambda ()
         (when register-actions
-          (funcall register-actions
-                   (list :toggle-block toggle-block)))
-        (lambda ()
-          (when register-actions
-            (funcall register-actions nil))))
+          (funcall register-actions nil))))
     (vui-vstack
      (vui-component 'benedict-vui-chat-header
        :provider provider
@@ -119,11 +157,27 @@ toggle based on current membership.  COLLAPSED-BLOCKS may be a list or hash tabl
                  (plist-get streaming :status))
        :title "Chat"
        :on-provider-click on-provider-click)
+     (vui-component 'benedict-vui-session-panel
+      :session-info session-info
+      :collapsed (benedict-vui-root--collapsed-p collapsed-blocks "session-panel")
+      :on-toggle (when toggle-block
+                   (lambda (next)
+                     (funcall toggle-block "session-panel" next))))
+     (vui-component 'benedict-vui-checkpoint-block
+      :checkpoint checkpoint
+      :on-continue on-continue-checkpoint
+      :on-stop on-stop-checkpoint)
       (vui-component 'benedict-vui-conversation-view
        :conversation render-conversation
        :streaming streaming
        :collapsed-blocks collapsed-blocks
        :on-toggle-block toggle-block)
+     (vui-component 'benedict-vui-audit-log
+      :entries audit-log
+      :collapsed (benedict-vui-root--collapsed-p collapsed-blocks "audit-panel")
+      :on-toggle (when toggle-block
+                   (lambda (next)
+                     (funcall toggle-block "audit-panel" next))))
      (vui-component 'benedict-vui-status-bar
       :usage current-usage
       :error error))))
@@ -133,7 +187,7 @@ toggle based on current membership.  COLLAPSED-BLOCKS may be a list or hash tabl
 Returns a function that when called unsubscribes from events."
   (let ((handler (vui-async-callback (sess event-type payload)
                    (when (eq sess session)
-                     (benedict-vui-root--handle-session-event event-type payload)))))
+                     (benedict-vui-root--handle-session-event sess event-type payload)))))
     (add-hook 'benedict-session-event-hook handler)
     (lambda ()
       (remove-hook 'benedict-session-event-hook handler))))
@@ -143,15 +197,16 @@ Returns a function that when called unsubscribes from events."
   (when subscription
     (funcall subscription)))
 
-(defun benedict-vui-root--handle-session-event (event-type payload)
-  "Handle session EVENT-TYPE with PAYLOAD, updating component state."
+(defun benedict-vui-root--handle-session-event (session event-type payload)
+  "Handle SESSION EVENT-TYPE with PAYLOAD, updating component state."
   (pcase event-type
     ('message-added
      (let ((entry (plist-get payload :entry)))
        (when entry
          (vui-set-state :conversation
            (lambda (conv)
-             (append conv (list entry)))))))
+             (append conv (list entry))))))
+     (vui-set-state :session-info (benedict-vui-root--session-info session)))
     ('draft-started
      (vui-set-state :streaming
                     (list :status 'active
@@ -175,18 +230,36 @@ Returns a function that when called unsubscribes from events."
                                          (list tool-call)))))))))
     ('draft-finalized
      (vui-set-state :streaming nil))
+    ('checkpoint-requested
+     (vui-set-state :checkpoint
+                    (list :reason (plist-get payload :reason)
+                          :turn-count (plist-get payload :turn-count)
+                          :elapsed (plist-get payload :elapsed)
+                          :total-tokens (plist-get payload :total-tokens)
+                          :limit (plist-get payload :limit))))
+    ('tool-audit
+     (when-let ((audit (plist-get payload :audit)))
+       (vui-set-state :audit-log
+                      (lambda (entries)
+                        (append entries (list audit))))))
     ('state-changed
      (let ((old-state (plist-get payload :old))
            (new-state (plist-get payload :new)))
+       (vui-set-state :session-info (benedict-vui-root--session-info session))
        (when (eq new-state 'error)
          (vui-set-state :error (format "Session error: %s -> %s" old-state new-state)))
+       (when (not (eq new-state 'checkpoint))
+         (vui-set-state :checkpoint nil))
        (when (and (memq old-state '(streaming running))
                   (eq new-state 'idle))
          (vui-set-state :error nil))))
+    ('session-saved
+     (vui-set-state :session-info (benedict-vui-root--session-info session)))
     ('request-completed
      (let ((success (plist-get payload :success))
            (error-payload (plist-get payload :error))
            (result (plist-get payload :result)))
+       (vui-set-state :session-info (benedict-vui-root--session-info session))
        (when success
          (when-let ((provider (plist-get result :provider)))
            (vui-set-state :provider provider))
