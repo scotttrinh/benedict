@@ -17,7 +17,7 @@ After this change, a developer should be able to open `*Benedict Chat*`, have th
 - [x] (2026-03-07 16:35Z) Add a provider-agnostic session store with save/load, branch metadata hooks, and replay into the runtime.
 - [x] (2026-03-08 15:43Z) Add instruction bootstrap that loads `AGENTS.md`, selected `SKILL.md` files, and `.wigg/specs/` into session startup context with progressive disclosure.
 - [x] (2026-03-09 16:19Z) Update the chat/VUI surface to render checkpoints, audit/tool results, and persistence-backed session metadata without relying on ephemeral minibuffer prompts.
-- [ ] (YYYY-MM-DD HH:MMZ) Prove the feature with focused ERT coverage and a manual fake-provider transcript round-trip.
+- [x] (2026-03-09 16:35Z) Prove the feature with focused ERT coverage, full lint/test validation, and a manual fake-provider transcript round-trip.
 
 ## Surprises & Discoveries
 
@@ -42,6 +42,10 @@ The instruction bootstrap milestone surfaced one environment-level constraint un
 Skill selection needed a repo-local fallback stronger than frontmatter title matching alone. In this tree, the stable identifier for a skill is effectively its directory name (`agents/skills/impl`, `agents/skills/plan`, etc.), so the selector now falls back to the directory basename when profile-driven selection asks for `impl` or `plan`.
 
 The new metadata panels exposed one VUI lifecycle subtlety in tests: session-context and saved-path text do not appear in `buffer-string` until the mounted root has flushed its async state updates. The runtime behavior was correct; the integration tests needed explicit `vui-flush-sync` or buffer selection on the loaded session before asserting rendered text.
+
+The final validation milestone exposed one last contract-cleanup gap in repository-owned tests. The full suite still had chat/session cases asserting against the removed `benedict-session-messages` accessor and the old `y-or-n-p` checkpoint prompt flow, so `nix run .#test` only went green after those tests were migrated to canonical `benedict-message` accessors and the explicit checkpoint commands.
+
+The chat-attached denial telemetry path did not need to duplicate the exact harness audit assertions already covered in `test/benedict-session-test.el`. The useful chat-level proof here is the structured denial result consumed by the UI/session layer (`:status denied`, `:error.code permission-denied`, `:error.decision predicate-deny`) plus the rendered tool-result text, while the authorization audit payload remains verified at the session layer.
 
 ## Decision Log
 
@@ -87,6 +91,14 @@ The new metadata panels exposed one VUI lifecycle subtlety in tests: session-con
 
 - **Decision:** Surface checkpoint controls and session metadata as VUI blocks owned by `benedict-vui-root`, while keeping save/load/checkpoint actions as chat commands invoked from those blocks.
 - **Rationale:** The root component already subscribes to structured session events and is the narrowest place to render persistent checkpoint, audit, and persistence state without reintroducing minibuffer prompts or forcing leaf components to inspect session internals.
+- **Date/Author:** 2026-03-09 / Codex
+
+- **Decision:** Treat the final validation milestone as a hard contract-cleanup gate and update repository-owned tests to canonical `benedict-message` assertions instead of reintroducing a `benedict-session-messages` compatibility shim.
+- **Rationale:** The ExecPlan explicitly requires repository-internal callers to migrate to canonical entries. Restoring a removed mirror just to make validation green would violate that constraint and leave the runtime/UI contract ambiguous.
+- **Date/Author:** 2026-03-09 / Codex
+
+- **Decision:** Add one acceptance-style fake-provider integration test that combines instruction bootstrap, visible persistence metadata, save/load, and a post-reload send in a single flow.
+- **Rationale:** The repository already had focused coverage for the individual pieces, but the final milestone called for proof of the whole round-trip. A single integration test makes that proof repeatable and mirrors the manual acceptance transcript closely.
 - **Date/Author:** 2026-03-09 / Codex
 
 ## Artifacts and Notes
@@ -279,10 +291,76 @@ The new metadata panels exposed one VUI lifecycle subtlety in tests: session-con
     components/benedict-vui-checkpoint-block.el / benedict-vui-audit-log.el / benedict-vui-session-panel.el: added dedicated VUI panels for checkpoint controls, harness audit history, and loaded instruction/persistence metadata.
     test/benedict-vui-root-test.el and test/benedict-chat-integration-test.el: added coverage for persistent checkpoint controls, visible audit/session metadata, and chat-level save/load rendering.
     ```
+  - `git commit -m "Complete validation cleanup for canonical chat runtime"`
+    ```text
+    [from-pi b72a3b9] Complete validation cleanup for canonical chat runtime
+     12 files changed, 193 insertions(+), 115 deletions(-)
+    ```
+  - `nix run .#lint`
+    ```text
+    ✓ Checking local archives `local`... done!
+    ...
+    (Total of 87 files have checked)
+    ```
+  - `nix run .#test -- test/benedict-agent-loop-test.el test/benedict-chat-logic-test.el test/benedict-chat-session-test.el test/benedict-chat-integration-test.el test/benedict-vui-root-e2e-test.el`
+    ```text
+    warning: Git tree '/Users/scotttrinh/github.com/scotttrinh/benedict' has uncommitted changes
+    ✓ Checking local archives `local`... done!
+    ...
+
+    Ran 56 tests in 7.543 seconds
+    ```
+  - `nix run .#test`
+    ```text
+    ✓ Checking local archives `local`... done!
+    ...
+    Ran 373 tests in 10.389 seconds
+    ```
+  - `nix develop -c emacs --batch ...` manual fake-provider round-trip
+    ```text
+    MANUAL_ACCEPTANCE
+    INIT_HAS_INSTRUCTIONS=290
+    LOAD_HAS_SAVED_PATH=168
+    LOAD_HAS_TOOL_BLOCK=466
+    LOAD_HAS_TOOL_RESULT=546
+    FINAL_ENTRIES=5
+    FINAL_BUFFER_SNIPPET:
+    FAK · fake-echo · Chat
+    [▼] Session Context
+    Session: ses-20260309123526-69377fa5
+    Title: *Benedict Manual Acceptance*
+    State: idle
+    Root: ~/github.com/scotttrinh/benedict/
+    Saved to: /tmp/nix-shell.QI1WTU/benedict-manual-store-PyoYSw/ses-20260309123526-69377fa5
+    Last saved: 2026-03-09 16:35:26Z
+    Instructions: agents/skills/impl/SKILL.md, AGENTS.md, .wigg/specs/01_overview.md, .wigg/specs/02_architecture.md
+    USER · 12:35:26
+    manual origin
+    ASSISTANT · 12:35:26
+    [▼] RUNNING Tool: read_file ...
+    Arguments:
+    (:path "README.org")
+    TOOL · 12:35:26
+    [▼] SUCCESS Result: read_file
+    manual tool output
+    USER · 12:35:26
+    manual reload
+    ASSISTANT · 12:35:26
+    Tool follow-up complete
+    ```
+  - File-scoped diff notes
+    ```text
+    test/benedict-chat-session-test.el / test/benedict-chat-logic-test.el / test/benedict-vui-root-e2e-test.el: migrated the remaining repository-owned chat assertions from raw plist transcript access to canonical `benedict-message` accessors and aligned denied-tool expectations with the harness contract.
+    test/benedict-agent-loop-test.el: replaced the removed prompt-based checkpoint assertions with the explicit `benedict-chat-continue-checkpoint` and `benedict-chat-stop-checkpoint` command paths.
+    test/benedict-chat-integration-test.el: added an acceptance-style fake-provider test that proves instruction bootstrap, visible persistence metadata, save/load, and post-reload dispatch in one flow.
+    benedict-chat.el / benedict-message.el / benedict-store.el: adjusted docstrings and wording issues so `nix run .#lint` passes cleanly after the validation cleanup.
+    ```
 
 ## Outcomes & Retrospective
 
-Placeholder for the final implementation summary, remaining gaps, production risks, and lessons learned after the feature is complete.
+The runtime target described by `.wigg/specs/` now has end-to-end proof in-tree. Canonical entries, harness authorization/effect recording, persistence, instruction bootstrap, and VUI rendering all passed the final repository validation (`nix run .#lint`, `nix run .#test`) on the current tree, and the final fake-provider acceptance run showed a saved/reloaded chat buffer still exposing instruction sources, tool/result blocks, and persistence metadata while accepting another prompt after reload.
+
+The main lesson from the last milestone is that validation had to enforce the contract cleanup promised earlier in the plan. The remaining risk was not runtime behavior but test drift: a handful of repository-owned chat tests still assumed raw plist transcript history or transient checkpoint prompts. Fixing those assertions was enough to make the suite line up with the implemented runtime contract without adding any new compatibility layer.
 
 ## Context and Orientation
 
@@ -573,3 +651,5 @@ Revision Note (2026-03-07 16:27Z): Marked the remaining harness validation miles
 Revision Note (2026-03-07 16:35Z): Marked the persistence milestone complete after adding `benedict-store.el`, wiring explicit session save/load wrappers, fixing canonical replay for tool-result and assistant metadata updates, recording the passing save/reload test transcript, and noting the new on-disk session layout for future milestones.
 
 Revision Note (2026-03-08 15:43Z): Marked the instruction bootstrap milestone complete after adding `benedict-instructions.el`, wiring new-session bootstrap plus prompt recomposition into chat configuration, adding focused discovery/selection tests and a fresh-chat integration assertion, and recording the passing serial validation transcripts for the new module and the exact chat/VUI milestone command.
+
+Revision Note (2026-03-09 16:35Z): Marked the final validation milestone complete after cleaning up the remaining repository-owned raw-plist and prompt-based checkpoint test assumptions, adding an acceptance-style fake-provider round-trip integration test, recording the passing full lint/test transcripts plus a batch Emacs manual acceptance transcript, and documenting the contract-cleanup decisions this validation pass forced.
