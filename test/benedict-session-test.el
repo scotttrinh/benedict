@@ -509,7 +509,7 @@
            :approval 'confirm)
           (set-default 'benedict-tool-permission-predicate
                        (lambda (_tool _args)
-                         (error "permission predicate blew up")))
+                         (error "Permission predicate blew up")))
           (cl-letf (((symbol-function 'benedict--prompt-for-approval)
                      (lambda (_spec _args)
                        (setq prompted t)

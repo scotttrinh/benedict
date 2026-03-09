@@ -13,7 +13,7 @@
 (require 'benedict-vui-root)
 
 (defun benedict-vui-root-test--emit-session-event (session event-type &rest payload)
-  "Emit EVENT-TYPE for SESSION with PAYLOAD and flush VUI updates."
+  "Emit EVENT-TYPE for SESSION with PAYLOAD and then flush VUI state."
   (run-hook-with-args
    'benedict-session-event-hook
    session

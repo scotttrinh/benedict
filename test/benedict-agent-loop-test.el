@@ -43,32 +43,9 @@
       (should-not (memq 'dispatch-needed events)))))
 
 (ert-deftest benedict-chat-checkpoint-accepts ()
-  "Chat handler continues session on checkpoint acceptance.
-Without provider/model configured, dispatch-needed is emitted and
-session returns to idle."
-  (let ((benedict-session--registry (make-hash-table :test 'equal))
-        (events nil)
-        (last-prompt nil))
-    (let ((session (benedict-session-create)))
-      (add-hook 'benedict-session-event-hook
-                (lambda (_s type _payload) (push type events)))
-      (with-temp-buffer
-        (setq-local benedict-chat--session session)
-        (benedict-session-set-state session 'checkpoint)
-        (cl-letf (((symbol-function 'y-or-n-p)
-                   (lambda (prompt)
-                     (setq last-prompt prompt)
-                     t)))
-          (benedict-chat--handle-session-event
-           'checkpoint-requested
-           '(:reason turn-limit :turn-count 3 :limit 3))))
-      (should (string-match-p "run 3 autonomous steps" last-prompt))
-      ;; Without provider/model, dispatch fails and session goes idle
-      (should (eq 'idle (benedict-session-state session)))
-      (should (memq 'dispatch-needed events)))))
-
-(ert-deftest benedict-chat-checkpoint-declines ()
-  "Chat handler stops session on checkpoint rejection."
+  "Checkpoint continuation uses the explicit chat command path.
+Without provider/model configured, `dispatch-needed' is emitted and the
+session returns to `idle'."
   (let ((benedict-session--registry (make-hash-table :test 'equal))
         (events nil))
     (let ((session (benedict-session-create)))
@@ -77,10 +54,22 @@ session returns to idle."
       (with-temp-buffer
         (setq-local benedict-chat--session session)
         (benedict-session-set-state session 'checkpoint)
-        (cl-letf (((symbol-function 'y-or-n-p) (lambda (_prompt) nil)))
-          (benedict-chat--handle-session-event
-           'checkpoint-requested
-           '(:reason token-limit :limit 100))))
+        (benedict-chat-continue-checkpoint))
+      ;; Without provider/model, dispatch fails and session goes idle
+      (should (eq 'idle (benedict-session-state session)))
+      (should (memq 'dispatch-needed events)))))
+
+(ert-deftest benedict-chat-checkpoint-declines ()
+  "Checkpoint stop uses the explicit chat command path."
+  (let ((benedict-session--registry (make-hash-table :test 'equal))
+        (events nil))
+    (let ((session (benedict-session-create)))
+      (add-hook 'benedict-session-event-hook
+                (lambda (_s type _payload) (push type events)))
+      (with-temp-buffer
+        (setq-local benedict-chat--session session)
+        (benedict-session-set-state session 'checkpoint)
+        (benedict-chat-stop-checkpoint))
       (should (eq 'idle (benedict-session-state session)))
       (should (memq 'loop-stopped events)))))
 

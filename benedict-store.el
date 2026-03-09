@@ -266,7 +266,7 @@
     (benedict-store--metadata->session metadata entries)))
 
 (cl-defun benedict-store-append-entry (session entry &key root)
-  "Persist SESSION after ENTRY was added, returning the session directory path."
+  "Persist SESSION after ENTRY was added under ROOT, returning the session directory path."
   (ignore entry)
   (benedict-store-save-session session :root root))
 

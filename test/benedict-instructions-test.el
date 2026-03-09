@@ -18,7 +18,7 @@
     (insert content)))
 
 (defun benedict-instructions-test--fixture-repo ()
-  "Create a temporary repository fixture for instruction tests."
+  "Create a temporary repository fixture to test instruction loading."
   (let ((root (make-temp-file "benedict-instructions-" t)))
     (benedict-instructions-test--write-file
      (expand-file-name "AGENTS.md" root)

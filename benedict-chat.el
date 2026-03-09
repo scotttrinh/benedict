@@ -384,7 +384,7 @@ Returns the session or nil if agent frame is disabled."
     (user-error "A provider request is already in flight")))
 
 (defun benedict-chat--apply-request-result-extras (buffer result)
-  "Apply RESULT metadata updates for the current session in BUFFER."
+  "Apply RESULT metadata update for the current session in BUFFER."
   (with-current-buffer buffer
     (let* ((session benedict-chat--session)
            (message (and session (benedict-chat-nav--find-last-assistant)))

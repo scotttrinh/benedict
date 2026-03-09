@@ -249,5 +249,80 @@
             (delete-directory store-root t)
             (funcall done err))))))))
 
+(ert-deftest-async benedict-chat-integration-acceptance-roundtrip (done)
+  "A fake-provider chat round-trip keeps bootstrap and persistence state visible."
+  (benedict-test-with-bindings done
+      ((benedict-session--registry (make-hash-table :test 'equal))
+       (benedict-provider 'fake)
+       (benedict-chat-buffer-name "*Benedict Acceptance Chat*")
+       (benedict-provider-fake-latency-seconds 0.01))
+    (let* ((store-root (make-temp-file "benedict-acceptance-store-" t))
+           (chat-buffer nil)
+           (loaded nil)
+           (loaded-buffer nil))
+      (save-window-excursion
+        (benedict-chat)
+        (setq chat-buffer (get-buffer benedict-chat-buffer-name)))
+      (with-current-buffer chat-buffer
+        (vui-flush-sync)
+        (let ((text (buffer-string)))
+          (should (string-match-p "Session Context" text))
+          (should (string-match-p "Instructions:" text))
+          (should (string-match-p "AGENTS.md" text))
+          (should (string-match-p "\\.wigg/specs/01_overview.md" text)))
+        (benedict-chat-send-prompt "acceptance origin"))
+      (run-at-time
+       0.5 nil
+       (lambda ()
+         (condition-case err
+             (progn
+               (with-current-buffer chat-buffer
+                 (should (benedict-vui-test--wait-for-request-finished benedict-chat--session 2.0))
+                 (benedict-chat-save-session store-root)
+                 (setq loaded
+                       (benedict-chat-load-session
+                        (benedict-store-session-path
+                         (benedict-session-id benedict-chat--session)
+                         store-root)))
+                 (setq loaded-buffer (benedict-chat--buffer-for-session loaded))
+                 (with-current-buffer loaded-buffer
+                   (vui-flush-sync)
+                   (let ((text (buffer-string)))
+                     (should (string-match-p "Saved to:" text))
+                     (should (string-match-p "Instructions:" text))
+                     (should (string-match-p "AGENTS.md" text))
+                     (should (string-match-p "acceptance origin" text))))
+                 (with-current-buffer loaded-buffer
+                   (benedict-chat-send-prompt "acceptance reload")))
+               (run-at-time
+                0.5 nil
+                (lambda ()
+                  (unwind-protect
+                      (progn
+                        (should (benedict-vui-test--wait-for-request-finished loaded 2.0))
+                        (with-current-buffer loaded-buffer
+                          (vui-flush-sync)
+                          (let ((text (buffer-string))
+                                (entries (benedict-session-entries-chronological loaded)))
+                            (should (= 4 (length entries)))
+                            (should (string-match-p "acceptance origin" text))
+                            (should (string-match-p "Fake echo: acceptance origin" text))
+                            (should (string-match-p "acceptance reload" text))
+                            (should (string-match-p "Fake echo: acceptance reload" text))
+                            (should (string-match-p "Saved to:" text)))))
+                    (when (buffer-live-p chat-buffer)
+                      (kill-buffer chat-buffer))
+                    (when (buffer-live-p loaded-buffer)
+                      (kill-buffer loaded-buffer))
+                    (delete-directory store-root t)
+                    (funcall done)))))
+           (error
+            (when (buffer-live-p chat-buffer)
+              (kill-buffer chat-buffer))
+            (when (buffer-live-p loaded-buffer)
+              (kill-buffer loaded-buffer))
+            (delete-directory store-root t)
+            (funcall done err))))))))
+
 (provide 'test/benedict-chat-integration-test)
 ;;; benedict-chat-integration-test.el ends here

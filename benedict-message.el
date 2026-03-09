@@ -35,7 +35,7 @@
         :arguments (plist-get tool-call :arguments)))
 
 (defun benedict-message--tool-result-block (tool-call-id name status content &optional details)
-  "Create a tool-result block."
+  "Create a tool-result block for TOOL-CALL-ID, NAME, STATUS, CONTENT, and DETAILS."
   (list :type 'tool-result
         :tool-call-id tool-call-id
         :name name
@@ -60,7 +60,7 @@
    :metadata metadata))
 
 (defun benedict-message-tool-result (tool-call-id name status content &optional details)
-  "Create a canonical tool result message."
+  "Create a canonical tool result message for TOOL-CALL-ID, NAME, STATUS, CONTENT, and DETAILS."
   (benedict-message-create
    :kind 'message
    :role 'tool

@@ -4,6 +4,7 @@
 (require 'ert)
 (require 'ert-async)
 (require 'benedict-chat)
+(require 'benedict-message)
 (require 'benedict-chat-profiles)
 (require 'benedict-provider-fake)
 (require 'benedict-test-helpers)
@@ -111,17 +112,17 @@
                 (with-current-buffer chat
                   (let* ((profile (benedict-chat-profiles--effective-profile))
                          (messages (when benedict-chat--session
-                                     (benedict-session-messages benedict-chat--session)))
+                                     (benedict-session-entries benedict-chat--session)))
                          (user (cl-find-if (lambda (msg)
-                                             (eq (plist-get msg :role) 'user))
+                                             (eq (benedict-message-role msg) 'user))
                                            messages)))
                     (should handle)
                     (should messages)
                     (should user)
-                    (should (string-match-p "Context:" (plist-get user :content)))
+                    (should (string-match-p "Context:" (benedict-message-text user)))
                     (should (string-match-p (regexp-quote (format "<<%s>>" handle))
-                                            (plist-get user :content)))
-                    (should (string-match-p "Compose region text" (plist-get user :content))))))
+                                            (benedict-message-text user)))
+                    (should (string-match-p "Compose region text" (benedict-message-text user))))))
             (when (buffer-live-p chat)
               (kill-buffer chat))
             (when (buffer-live-p source)
@@ -209,13 +210,13 @@
                      ;; Check history from session
                       (let* ((tool-message
                               (cl-find-if (lambda (message)
-                                            (eq (plist-get message :role) 'tool))
+                                            (eq (benedict-message-role message) 'tool))
                                           (when benedict-chat--session
-                                            (benedict-session-messages benedict-chat--session)))))
+                                            (benedict-session-entries benedict-chat--session)))))
                         (should tool-message)
-                        (should (equal (plist-get tool-message :tool-call-id) "call-123"))
+                        (should (equal (benedict-message-tool-result-id tool-message) "call-123"))
                         ;; We check that history recorded the result, ignoring exact string formatting
-                        (should (string-match-p "matches" (plist-get tool-message :content)))))
+                        (should (string-match-p "matches" (benedict-message-text tool-message)))))
                  (error (setq err e)))
              (when (buffer-live-p buffer)
                (kill-buffer buffer)))
@@ -253,11 +254,11 @@
                    (with-current-buffer buffer
                      (let* ((tool-message
                              (cl-find-if (lambda (message)
-                                           (eq (plist-get message :role) 'tool))
+                                           (eq (benedict-message-role message) 'tool))
                                          (when benedict-chat--session
-                                           (benedict-session-messages benedict-chat--session))))
-                            (content (and tool-message (plist-get tool-message :content)))
-                            (metadata (and tool-message (plist-get tool-message :metadata)))
+                                           (benedict-session-entries benedict-chat--session))))
+                            (content (and tool-message (benedict-message-text tool-message)))
+                            (metadata (and tool-message (benedict-message-metadata tool-message)))
                             (request (benedict-session--build-request benedict-chat--session))
                             (tool-entry
                              (cl-find-if (lambda (message)
@@ -321,22 +322,22 @@
                                           (benedict-session-messages-chronological benedict-chat--session)))
                            (tool-message
                             (cl-find-if (lambda (message)
-                                          (eq (plist-get message :role) 'tool))
+                                          (eq (benedict-message-role message) 'tool))
                                         messages))
-                           (tool-metadata (and tool-message (plist-get tool-message :metadata)))
+                           (tool-metadata (and tool-message (benedict-message-metadata tool-message)))
                            (tool-error (and tool-metadata (plist-get tool-metadata :error)))
                            (assistant-messages
                             (cl-remove-if-not (lambda (message)
-                                                (eq (plist-get message :role) 'assistant))
+                                                (eq (benedict-message-role message) 'assistant))
                                               messages))
                            (latest-assistant (car (last assistant-messages))))
                       (should tool-message)
-                      (should (eq 'failure (plist-get tool-metadata :status)))
+                      (should (eq 'denied (plist-get tool-metadata :status)))
                       (should (eq 'permission-denied (plist-get tool-error :code)))
-                      (should (string-match-p "Tool denied:" (plist-get tool-message :content)))
+                      (should (string-match-p "Tool denied:" (benedict-message-text tool-message)))
                       (should latest-assistant)
                       (should (string-match-p "Recovered after permission denial"
-                                              (plist-get latest-assistant :content)))))
+                                              (benedict-message-text latest-assistant)))))
                 (error (setq err e)))
             (when (buffer-live-p buffer)
               (kill-buffer buffer)))

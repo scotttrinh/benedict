@@ -15,10 +15,19 @@
   (add-to-list 'load-path repo))
 
 (require 'benedict-chat)
+(require 'benedict-message)
 (require 'benedict-session)
 (require 'benedict-provider-fake)
 (require 'benedict-test-helpers)
 (require 'test/benedict-vui-test-utils)
+
+(defun benedict-chat-session-test--entries (session)
+  "Return SESSION entries in reverse-chronological order."
+  (benedict-session-entries session))
+
+(defun benedict-chat-session-test--history (session)
+  "Return SESSION entries in chronological order."
+  (benedict-session-messages-chronological session))
 
 ;;; Buffer-Session Binding Tests
 
@@ -80,10 +89,10 @@
       ;; Add a message to the session directly.
       (benedict-session-add-message benedict-chat--session
                                     '(:role user :content "Hello"))
-      (should (= 1 (length (benedict-session-messages benedict-chat--session))))
-      (let ((msg (car (benedict-session-messages benedict-chat--session))))
-        (should (string= "Hello" (plist-get msg :content)))
-        (should (plist-get msg :id))))))
+      (should (= 1 (length (benedict-chat-session-test--entries benedict-chat--session))))
+      (let ((msg (car (benedict-chat-session-test--entries benedict-chat--session))))
+        (should (string= "Hello" (benedict-message-text msg)))
+        (should (benedict-message-id msg))))))
 
 ;;; Streaming Tests (Phase 2b)
 
@@ -113,7 +122,7 @@
                        (should (eq 'idle (benedict-session-state session)))
                        (should-not (benedict-session-draft session))
                        ;; Should have user + assistant messages
-                       (should (>= (length (benedict-session-messages session)) 2))
+                       (should (>= (length (benedict-chat-session-test--entries session)) 2))
                        (funcall done)))))))
 
 (ert-deftest-async benedict-chat-session-test-headless-streaming (done)
@@ -136,7 +145,7 @@
       (run-at-time 0.1 nil
                    (lambda ()
                      (should (eq 'idle (benedict-session-state session)))
-                     (should (>= (length (benedict-session-messages session)) 2))
+                     (should (>= (length (benedict-chat-session-test--entries session)) 2))
                      (funcall done))))))
 
 (ert-deftest benedict-chat-session-test-error-sets-session-state ()
@@ -165,7 +174,7 @@
       (dotimes (i n)
         (benedict-session-add-message benedict-chat--session
                                       `(:role user :content ,(format "msg %d" i))))
-      (propcheck-should (= n (length (benedict-session-messages benedict-chat--session)))))))
+      (propcheck-should (= n (length (benedict-chat-session-test--entries benedict-chat--session)))))))
 
 ;;; Routing Tests (Phase 3)
 
@@ -228,10 +237,10 @@
         (should (eq benedict-chat--session session))
         (should benedict-chat--vui-mount)
         ;; Verify session still has the messages
-        (should (= 2 (length (benedict-session-messages session))))
-        (let ((messages (benedict-session-messages-chronological session)))
-          (should (equal "Hello" (plist-get (nth 0 messages) :content)))
-          (should (equal "Hi there" (plist-get (nth 1 messages) :content))))))))
+        (should (= 2 (length (benedict-chat-session-test--entries session))))
+        (let ((messages (benedict-chat-session-test--history session)))
+          (should (equal "Hello" (benedict-message-text (nth 0 messages))))
+          (should (equal "Hi there" (benedict-message-text (nth 1 messages)))))))))
 
 (ert-deftest benedict-chat-session-test-attach-renders-history ()
   "Attaching to a session mounts VUI with its messages."
@@ -243,9 +252,9 @@
         (with-current-buffer buf
           (should (eq benedict-chat--session session))
           (should benedict-chat--vui-mount)
-          (let ((messages (benedict-session-messages-chronological session)))
-            (should (equal "Hello" (plist-get (nth 0 messages) :content)))
-            (should (equal "Hi there" (plist-get (nth 1 messages) :content)))))
+          (let ((messages (benedict-chat-session-test--history session)))
+            (should (equal "Hello" (benedict-message-text (nth 0 messages))))
+            (should (equal "Hi there" (benedict-message-text (nth 1 messages))))))
         (kill-buffer buf)))))
 
 (ert-deftest-async benedict-chat-session-test-attach-during-streaming (done)
@@ -269,24 +278,26 @@
       (run-at-time 0.05 nil
                    (lambda ()
                      (let ((buf (benedict-chat--buffer-for-session session)))
-                        (with-current-buffer buf
-                          (should (eq benedict-chat--session session))
-                          (should benedict-chat--vui-mount))
-                        (let ((draft (benedict-session-draft session)))
-                          (should draft)
-                          (should (string-match-p "Part1"
-                                                  (plist-get draft :content))))
-                        ;; Wait for completion
-                        (run-at-time 0.1 nil
-                                     (lambda ()
-                                      (let ((messages (benedict-session-messages session)))
-                                        (should (>= (length messages) 2))
-                                        (let ((assistant-msg (car messages)))
-                                          (should (eq 'assistant (plist-get assistant-msg :role)))
-                                          (should (string-match-p "Part3"
-                                                                  (plist-get assistant-msg :content)))))
-                                       (kill-buffer buf)
-                                       (funcall done)))))))))
+                       (with-current-buffer buf
+                         (should (eq benedict-chat--session session))
+                         (should benedict-chat--vui-mount))
+                       (let ((draft (benedict-session-draft session)))
+                         (should draft)
+                         (should (string-match-p "Part1"
+                                                 (plist-get draft :content))))
+                       ;; Wait for completion.
+                       (run-at-time 0.1 nil
+                                    (lambda ()
+                                      (unwind-protect
+                                          (let ((messages (benedict-chat-session-test--entries session)))
+                                            (should (>= (length messages) 2))
+                                            (let ((assistant-msg (car messages)))
+                                              (should (eq 'assistant (benedict-message-role assistant-msg)))
+                                              (should (string-match-p "Part3"
+                                                                      (benedict-message-text assistant-msg)))))
+                                        (when (buffer-live-p buf)
+                                          (kill-buffer buf))
+                                        (funcall done))))))))))
 
 (ert-deftest benedict-chat-session-test-multi-buffer-same-session ()
   "Multiple buffers can view the same session state."
@@ -312,9 +323,9 @@
         (with-current-buffer buf2
           (should (eq benedict-chat--session session))
           (should benedict-chat--vui-mount))
-        (let ((messages (benedict-session-messages-chronological session)))
+        (let ((messages (benedict-chat-session-test--history session)))
           (should (= 2 (length messages)))
-          (should (equal "Second" (plist-get (nth 1 messages) :content))))
+          (should (equal "Second" (benedict-message-text (nth 1 messages)))))
         (kill-buffer buf2)
         (kill-buffer buf1)))))
 
@@ -346,22 +357,22 @@
                    (lambda ()
                      ;; Session should have recorded the tool call in the message
                      (should (eq 'idle (benedict-session-state session)))
-                     (should (>= (length (benedict-session-messages session)) 2))
-                     (let* ((messages (benedict-session-messages session))
+                     (should (>= (length (benedict-chat-session-test--entries session)) 2))
+                     (let* ((messages (benedict-chat-session-test--entries session))
                             (assistant-msg
                              (cl-find-if (lambda (message)
-                                           (eq 'assistant (plist-get message :role)))
+                                           (eq 'assistant (benedict-message-role message)))
                                          messages))
                             (tool-msg
                              (cl-find-if (lambda (message)
-                                           (eq 'tool (plist-get message :role)))
+                                           (eq 'tool (benedict-message-role message)))
                                          messages)))
                        (should assistant-msg)
                        (should tool-msg)
                        ;; Tool calls are recorded in session
-                       (should (plist-get assistant-msg :tool-calls))
+                       (should (benedict-message-tool-calls assistant-msg))
                        ;; Verify tool call structure
-                       (let ((tool-calls (plist-get assistant-msg :tool-calls)))
+                       (let ((tool-calls (benedict-message-tool-calls assistant-msg)))
                          (should (= 1 (length tool-calls)))
                          (should (string= "call1" (plist-get (car tool-calls) :id)))))
                       (funcall done))))))
@@ -386,13 +397,14 @@
                (tool-message (benedict-session--format-tool-result
                               (plist-get result :tool-id)
                               (plist-get result :call-id)
+                              (plist-get result :status)
                               (plist-get result :output)
-                              (plist-get result :error)))
-               (decision-event (cl-find 'tool-permission-decision events :key #'car)))
-          (should (eq 'failure (plist-get result :status)))
-          (should decision-event)
-          (should (eq 'predicate-deny (plist-get (cdr decision-event) :decision)))
-          (should (eq 'deny (plist-get (cdr decision-event) :policy)))
+                              (plist-get result :error))))
+          (should (eq 'denied (plist-get result :status)))
+          (should (eq 'permission-denied
+                      (plist-get (plist-get result :error) :code)))
+          (should (eq 'predicate-deny
+                      (plist-get (plist-get result :error) :decision)))
           (should (string-match-p "Tool denied:" (plist-get tool-message :content))))))))
 
 (ert-deftest-async benedict-chat-session-test-reattach-midstream (done)
@@ -425,13 +437,13 @@
       (run-at-time 0.15 nil
                    (lambda ()
                      (should (eq 'idle (benedict-session-state session)))
-                     ;; Message should be finalized
-                     (let ((messages (benedict-session-messages session)))
+                     ;; Message should be finalized.
+                     (let ((messages (benedict-chat-session-test--entries session)))
                        (should (>= (length messages) 2))
                        (let ((assistant-msg (car messages)))
-                         (should (eq 'assistant (plist-get assistant-msg :role)))
+                         (should (eq 'assistant (benedict-message-role assistant-msg)))
                          (should (string-match-p "Part1 Part2 Part3"
-                                                  (plist-get assistant-msg :content)))))
+                                                 (benedict-message-text assistant-msg)))))
                      (funcall done))))))
 
 (ert-deftest benedict-chat-session-test-error-captured-headless ()
@@ -489,14 +501,14 @@
           (should (benedict-vui-test--wait-for-request-finished session 2.0))
           (vui-flush-sync)
           (let* ((text (buffer-string))
-                 (messages (benedict-session-messages-chronological session))
+                 (messages (benedict-chat-session-test--history session))
                  (assistant-msg (nth 1 messages)))
             (should (string-match-p "Part1 Part2 Part3" text))
             (should-not (string-match-p "\\bACTIVE\\b" text))
-            (should (eq (plist-get assistant-msg :role) 'assistant))
+            (should (eq (benedict-message-role assistant-msg) 'assistant))
             (benedict-vui-test--assert-text-properties-for
              "Part1 Part2 Part3"
-             :message-key (plist-get assistant-msg :id)
+             :message-key (benedict-message-id assistant-msg)
              :region-kind 'body)))
         (kill-buffer buf)
         (funcall done)))))
@@ -623,9 +635,9 @@
           (vui-flush-sync)
           (let* ((text (buffer-string))
                  (assistant-msg (cl-find-if (lambda (message)
-                                              (eq (plist-get message :role) 'assistant))
-                                            (benedict-session-messages session)))
-                 (metadata (and assistant-msg (plist-get assistant-msg :metadata))))
+                                              (eq (benedict-message-role message) 'assistant))
+                                            (benedict-chat-session-test--entries session)))
+                 (metadata (and assistant-msg (benedict-message-metadata assistant-msg))))
             (should assistant-msg)
             (should (equal "anthropic/claude-fake" (plist-get metadata :model)))
             (should (plist-get metadata :usage))

@@ -202,7 +202,7 @@
   (let ((decision (benedict-harness-authorize-tool-call
                    (benedict-harness-create
                     :permission-predicate (lambda (_tool _args)
-                                            (error "boom")))
+                                            (error "Boom")))
                    '(:id project-search)
                    '(:query "foo")
                    nil)))
