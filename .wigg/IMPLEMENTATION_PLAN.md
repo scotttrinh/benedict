@@ -143,6 +143,7 @@ Concrete tasks:
   - invariant/property
   - focused unit
   - low-value structural
+- done: replaced the standalone low-value context propcheck file with canonical message normalization, structured tool-result persistence, and session save/load round-trip properties so property coverage now protects transcript contracts instead of compose formatting trivia
 - keep and expand tests that cover:
   - provider override through real dispatch
   - session save/load/replay
@@ -281,8 +282,9 @@ The best first batch is:
 - 2026-03-15: removed the legacy single-message fallback from `components/benedict-vui-turn.el` so the turn component only renders canonical turn data; trimmed legacy-only turn tests and kept coverage on active/completed turn behavior plus missing-prompt fallback.
 - 2026-03-15: promoted turn navigation and execution-summary assertions into mounted root e2e coverage, then deleted duplicate turn/turn-list render tests that only rechecked prompt/activity/detail ordering below the canonical path.
 - 2026-03-15: removed the unused `benedict-vui-conversation-view--render` compatibility alias and cut conversation-view wrapper tests down to turn-list passthrough plus active/malformed spinner boundaries; root e2e remains the mainline streaming/render contract.
+- 2026-03-15: replaced the dedicated context propcheck trivia with higher-value transcript invariants covering canonical message normalization, structured tool-result store round-trips, and session persistence/build-request round-trips.
 - Decision: provider-facing replay still sends canonical tool-result text content only; UI/persistence-only metadata remains on canonical transcript blocks and metadata.
-- Next slice: continue the VUI/root test audit by trimming low-value root layout/session-event assertions or converting them into fewer mounted session flows, then shift to property coverage for session/persistence round-trips.
+- Next slice: continue the VUI/root test audit by trimming low-value root layout/session-event assertions or collapsing them into fewer mounted session flows now that the persistence/property slice is covered.
 
 This batch improves correctness, test value, and documentation accuracy with minimal feature expansion.
 
