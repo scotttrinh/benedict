@@ -287,9 +287,10 @@ The best first batch is:
 - 2026-03-15: trimmed the chat-header/provider-badge/status-bar test matrices down to helper invariants plus the few wrapper-specific behaviors not already covered by mounted root flows, removing another pocket of VUI inventory testing without weakening header/status regressions.
 - 2026-03-15: removed the dead `benedict-vui-turn-header` wrapper that no runtime path used, then refocused the remaining `streaming-indicator`/`turn-section` tests on timer lifecycle and navigation-property propagation instead of duplicate render snapshots.
 - 2026-03-15: reconciled README/spec/package metadata with the current implementation: top-level package metadata now targets Emacs 29.1, docs now describe `env -> file -> auth-source` credential lookup, Gemini as non-streaming, and the mounted VUI turn renderer instead of the retired marker/sentinel rendering story.
+- 2026-03-15: moved tool invocation setup onto the session runtime, stopped `benedict-chat--init-buffer` from mutating shared global state, and added chat/session regressions that preserve explicit session-local tool runtimes across init and reattach flows.
 - Decision: provider-facing replay still sends canonical tool-result text content only; UI/persistence-only metadata remains on canonical transcript blocks and metadata.
 - Decision: keep helper-level tests only when they protect local behavior that mounted root flows do not cover; otherwise prefer the canonical root/turn integration tests.
-- Next slice: move to Workstream 5 and tighten the runtime/frontend boundary around tool invocation setup so session execution stops depending on hidden global mutation.
+- Next slice: continue Workstream 5 by tightening other runtime/frontend seams, with the strongest candidate being explicit handling of UI-only session state so headless/session persistence paths stop carrying frontend-adjacent runtime fields by accident.
 
 This batch improves correctness, test value, and documentation accuracy with minimal feature expansion.
 

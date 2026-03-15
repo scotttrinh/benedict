@@ -681,7 +681,6 @@ The session persists independently and can be reattached later."
 (defun benedict-chat--init-buffer (&optional session)
   "Initialize buffer-local state for Benedict chat.
 When SESSION is non-nil, attach to it instead of creating a new one."
-  (setq benedict-session-tool-invoke-fn #'benedict-tool-invoke)
   (setq-local benedict-chat--buffer (current-buffer))
   (setq-local benedict-chat--context-slices nil)
   (setq-local benedict-chat--compose-buffer nil)
@@ -706,7 +705,11 @@ When SESSION is non-nil, attach to it instead of creating a new one."
                      :profile profile
                      :provider provider
                      :model model
-                     :root project-root)))
+                     :root project-root
+                     :tool-invoke-fn #'benedict-tool-invoke)))
+    (unless (benedict-session-tool-invoke-fn benedict-chat--session)
+      (setf (benedict-session-tool-invoke-fn benedict-chat--session)
+            #'benedict-tool-invoke))
     (unless existing-session
       (benedict-instructions-bootstrap-session
        benedict-chat--session

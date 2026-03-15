@@ -363,10 +363,10 @@
 (ert-deftest benedict-session-test-invoke-tool-success ()
   "Tool invocation records result and emits events."
   (let ((benedict-session--registry (make-hash-table :test 'equal))
-        (benedict-session-tool-invoke-fn (lambda (id _args)
-                                           (format "Result for %s" id)))
         (events nil))
-    (let ((session (benedict-session-create)))
+    (let ((session (benedict-session-create
+                    :tool-invoke-fn (lambda (id _args)
+                                      (format "Result for %s" id)))))
       (add-hook 'benedict-session-event-hook
                 (lambda (_s type payload) (push (cons type payload) events)))
       (let ((result (benedict-session--invoke-tool
@@ -379,10 +379,10 @@
 (ert-deftest benedict-session-test-invoke-tool-failure ()
   "Tool failure is captured and emitted."
   (let ((benedict-session--registry (make-hash-table :test 'equal))
-        (benedict-session-tool-invoke-fn (lambda (_id _args)
-                                           (error "Tool failed")))
         (events nil))
-    (let ((session (benedict-session-create)))
+    (let ((session (benedict-session-create
+                    :tool-invoke-fn (lambda (_id _args)
+                                      (error "Tool failed")))))
       (add-hook 'benedict-session-event-hook
                 (lambda (_s type payload) (push (cons type payload) events)))
       (let ((result (benedict-session--invoke-tool
@@ -394,13 +394,13 @@
 (ert-deftest benedict-session-test-invoke-tool-permission-denied ()
   "Permission denials are captured as structured failures."
   (let ((benedict-session--registry (make-hash-table :test 'equal))
-        (benedict-session-tool-invoke-fn
-         (lambda (_id _args &rest _options)
-           '(:status denied
-             :error (:message "Denied by policy"
-                     :code permission-denied))))
         (events nil))
-    (let ((session (benedict-session-create)))
+    (let ((session (benedict-session-create
+                    :tool-invoke-fn
+                    (lambda (_id _args &rest _options)
+                      '(:status denied
+                        :error (:message "Denied by policy"
+                                :code permission-denied))))))
       (add-hook 'benedict-session-event-hook
                 (lambda (_s type payload) (push (cons type payload) events)))
       (let* ((result (benedict-session--invoke-tool
@@ -416,8 +416,7 @@
          (events nil)
          (old-default (default-value 'benedict-tool-permission-predicate))
          (benedict-session--registry (make-hash-table :test 'equal))
-         (benedict-session-event-hook nil)
-         (benedict-session-tool-invoke-fn #'benedict-tool-invoke))
+         (benedict-session-event-hook nil))
     (unwind-protect
         (progn
           (benedict-tools-register
@@ -426,7 +425,7 @@
            :approval 'confirm)
           (set-default 'benedict-tool-permission-predicate
                        (lambda (_tool _args) t))
-          (let ((session (benedict-session-create)))
+          (let ((session (benedict-session-create :tool-invoke-fn #'benedict-tool-invoke)))
             (add-hook 'benedict-session-event-hook
                       (lambda (_s type payload)
                         (push (cons type payload) events)))
@@ -456,8 +455,7 @@
          (events nil)
          (old-default (default-value 'benedict-tool-permission-predicate))
          (benedict-session--registry (make-hash-table :test 'equal))
-         (benedict-session-event-hook nil)
-         (benedict-session-tool-invoke-fn #'benedict-tool-invoke))
+         (benedict-session-event-hook nil))
     (unwind-protect
         (progn
           (benedict-tools-register
@@ -466,7 +464,7 @@
            :approval 'auto)
           (set-default 'benedict-tool-permission-predicate
                        (lambda (_tool _args) nil))
-          (let ((session (benedict-session-create)))
+          (let ((session (benedict-session-create :tool-invoke-fn #'benedict-tool-invoke)))
             (add-hook 'benedict-session-event-hook
                       (lambda (_s type payload)
                         (push (cons type payload) events)))
@@ -498,8 +496,7 @@
          (events nil)
          (old-default (default-value 'benedict-tool-permission-predicate))
          (benedict-session--registry (make-hash-table :test 'equal))
-         (benedict-session-event-hook nil)
-         (benedict-session-tool-invoke-fn #'benedict-tool-invoke))
+         (benedict-session-event-hook nil))
     (unwind-protect
         (progn
           (benedict-tools-register
@@ -509,7 +506,7 @@
           (set-default 'benedict-tool-permission-predicate
                        (lambda (_tool _args)
                          (error "Permission predicate blew up")))
-          (let ((session (benedict-session-create))
+          (let ((session (benedict-session-create :tool-invoke-fn #'benedict-tool-invoke))
                 (frontend (generate-new-buffer " *benedict-session-approval*")))
             (unwind-protect
                 (progn
@@ -542,10 +539,10 @@
 
 (ert-deftest benedict-session-test-process-tool-calls ()
   "Processing multiple tool calls records all results."
-  (let ((benedict-session--registry (make-hash-table :test 'equal))
-        (benedict-session-tool-invoke-fn (lambda (id _args)
-                                           (format "Output from %s" id))))
-    (let ((session (benedict-session-create)))
+  (let ((benedict-session--registry (make-hash-table :test 'equal)))
+    (let ((session (benedict-session-create
+                    :tool-invoke-fn (lambda (id _args)
+                                      (format "Output from %s" id)))))
       (benedict-session--process-tool-calls
        session
        '((:id "call-1" :name tool_a :arguments nil)
@@ -556,13 +553,13 @@
 
 (ert-deftest benedict-session-test-process-tool-calls-records-denial-message ()
   "Denied tool calls still leave a readable transcript entry."
-  (let ((benedict-session--registry (make-hash-table :test 'equal))
-        (benedict-session-tool-invoke-fn
-         (lambda (_id _args &rest _options)
-           '(:status denied
-             :error (:message "Denied by policy"
-                     :code permission-denied)))))
-    (let ((session (benedict-session-create)))
+  (let ((benedict-session--registry (make-hash-table :test 'equal)))
+    (let ((session (benedict-session-create
+                    :tool-invoke-fn
+                    (lambda (_id _args &rest _options)
+                      '(:status denied
+                        :error (:message "Denied by policy"
+                                :code permission-denied))))))
       (benedict-session--process-tool-calls
        session
        '((:id "call-1" :name project-search :arguments (:query "needle"))))
@@ -575,16 +572,16 @@
 
 (ert-deftest benedict-session-test-process-tool-calls-preserves-structured-success-result ()
   "Successful tool calls retain structured metadata for persistence and UI."
-  (let ((benedict-session--registry (make-hash-table :test 'equal))
-        (benedict-session-tool-invoke-fn
-         (lambda (_id _args &rest _options)
-           '(:status success
-             :output (:content "Project summary"
-                      :ui (:header "Project search — \"needle\""
-                           :body "Showing 1 result")
-                      :effects ((:kind read :path "README.org"))
-                      :data (:matches ((:file "README.org"))))))))
-    (let ((session (benedict-session-create)))
+  (let ((benedict-session--registry (make-hash-table :test 'equal)))
+    (let ((session (benedict-session-create
+                    :tool-invoke-fn
+                    (lambda (_id _args &rest _options)
+                      '(:status success
+                        :output (:content "Project summary"
+                                 :ui (:header "Project search — \"needle\""
+                                      :body "Showing 1 result")
+                                 :effects ((:kind read :path "README.org"))
+                                 :data (:matches ((:file "README.org")))))))))
       (benedict-session--process-tool-calls
        session
        '((:id "call-1" :name project-search :arguments (:query "needle"))))
@@ -601,9 +598,9 @@
 
 (ert-deftest benedict-session-test-process-tool-calls-records-scope-denial-without-approval ()
   "Out-of-scope tool calls record a denial and never enter approval-pending state."
-  (let ((benedict-session--registry (make-hash-table :test 'equal))
-        (benedict-session-tool-invoke-fn #'benedict-tool-invoke))
+  (let ((benedict-session--registry (make-hash-table :test 'equal)))
     (let* ((session (benedict-session-create
+                     :tool-invoke-fn #'benedict-tool-invoke
                      :root "/tmp/project"
                      :harness (benedict-harness-create
                                :scope '(:paths ("/tmp/project"))
@@ -627,14 +624,14 @@
 
 (ert-deftest benedict-session-test-process-tool-calls-stops-for-approval ()
   "Approval-required tool calls stop the loop and store pending approval state."
-  (let ((benedict-session--registry (make-hash-table :test 'equal))
-        (benedict-session-tool-invoke-fn
-         (lambda (tool-id _args &rest _options)
-           (if (eq tool-id 'tool_a)
-               '(:status pending
-                 :approval (:tool-id tool_a :approval confirm :args (:foo "bar")))
-             '(:status success :output "ok")))))
-    (let ((session (benedict-session-create))
+  (let ((benedict-session--registry (make-hash-table :test 'equal)))
+    (let ((session (benedict-session-create
+                    :tool-invoke-fn
+                    (lambda (tool-id _args &rest _options)
+                      (if (eq tool-id 'tool_a)
+                          '(:status pending
+                            :approval (:tool-id tool_a :approval confirm :args (:foo "bar")))
+                        '(:status success :output "ok")))))
           (frontend (generate-new-buffer " *benedict-session-approval*")))
       (unwind-protect
           (progn
@@ -655,14 +652,14 @@
 
 (ert-deftest benedict-session-test-approve-pending-tool-records-result ()
   "Approving a pending tool executes it and clears the pending state."
-  (let ((benedict-session--registry (make-hash-table :test 'equal))
-        (benedict-session-tool-invoke-fn
-         (lambda (_tool-id _args &rest options)
-           (if (plist-get options :skip-approval)
-               '(:status success :output "approved output")
-             '(:status pending
-               :approval (:tool-id tool_a :approval confirm :args (:foo "bar")))))))
-    (let ((session (benedict-session-create))
+  (let ((benedict-session--registry (make-hash-table :test 'equal)))
+    (let ((session (benedict-session-create
+                    :tool-invoke-fn
+                    (lambda (_tool-id _args &rest options)
+                      (if (plist-get options :skip-approval)
+                          '(:status success :output "approved output")
+                        '(:status pending
+                          :approval (:tool-id tool_a :approval confirm :args (:foo "bar")))))))
           (frontend (generate-new-buffer " *benedict-session-approval*")))
       (unwind-protect
           (progn
@@ -682,12 +679,12 @@
 
 (ert-deftest benedict-session-test-deny-pending-tool-records-result ()
   "Denying a pending tool records a denied result and clears the pending state."
-  (let ((benedict-session--registry (make-hash-table :test 'equal))
-        (benedict-session-tool-invoke-fn
-         (lambda (_tool-id _args &rest _options)
-           '(:status pending
-             :approval (:tool-id tool_a :approval confirm :args (:foo "bar"))))))
-    (let ((session (benedict-session-create))
+  (let ((benedict-session--registry (make-hash-table :test 'equal)))
+    (let ((session (benedict-session-create
+                    :tool-invoke-fn
+                    (lambda (_tool-id _args &rest _options)
+                      '(:status pending
+                        :approval (:tool-id tool_a :approval confirm :args (:foo "bar"))))))
           (frontend (generate-new-buffer " *benedict-session-approval*")))
       (unwind-protect
           (progn
@@ -708,10 +705,10 @@
 (ert-deftest benedict-session-test-tool-event-ordering ()
   "Tool events fire after request completion and preserve message order."
   (let ((benedict-session--registry (make-hash-table :test 'equal))
-        (benedict-session-tool-invoke-fn (lambda (_id _args) "OK"))
         (events nil)
         (captured-callbacks nil))
-    (let ((session (benedict-session-create)))
+    (let ((session (benedict-session-create
+                    :tool-invoke-fn (lambda (_id _args) "OK"))))
       (add-hook 'benedict-session-event-hook
                 (lambda (_s type payload) (push (cons type payload) events)))
       (let ((mock-dispatch

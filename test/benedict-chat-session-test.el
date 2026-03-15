@@ -40,8 +40,21 @@
       (benedict-chat--init-buffer)
       (should benedict-chat--session)
       (should (benedict-session-p benedict-chat--session))
+      (should (eq (benedict-session-tool-invoke-fn benedict-chat--session)
+                  #'benedict-tool-invoke))
       (should (memq (current-buffer)
                     (benedict-session-frontends benedict-chat--session))))))
+
+(ert-deftest benedict-chat-session-test-init-preserves-existing-session-tool-invoker ()
+  "Attaching an existing session does not overwrite its tool runtime."
+  (let ((benedict-session--registry (make-hash-table :test 'equal)))
+    (let* ((custom-invoke (lambda (_tool-id _arguments) "custom"))
+           (session (benedict-session-create :tool-invoke-fn custom-invoke)))
+      (with-temp-buffer
+        (benedict-chat-mode)
+        (benedict-chat--init-buffer session)
+        (should (eq benedict-chat--session session))
+        (should (eq (benedict-session-tool-invoke-fn session) custom-invoke))))))
 
 (ert-deftest benedict-chat-session-test-buffer-kill-detaches ()
   "Killing buffer detaches from session but doesn't destroy session."
@@ -424,8 +437,7 @@
   "Chat-attached sessions expose permission decision telemetry events."
   (let ((benedict-session--registry (make-hash-table :test 'equal))
         (events nil)
-        (benedict-session-event-hook nil)
-        (benedict-session-tool-invoke-fn #'benedict-tool-invoke))
+        (benedict-session-event-hook nil))
     (with-temp-buffer
       (benedict-chat-mode)
       (benedict-chat--init-buffer)
@@ -454,8 +466,7 @@
   "Chat-attached sessions expose scope denials as audit events, not approvals."
   (let ((benedict-session--registry (make-hash-table :test 'equal))
         (events nil)
-        (benedict-session-event-hook nil)
-        (benedict-session-tool-invoke-fn #'benedict-tool-invoke))
+        (benedict-session-event-hook nil))
     (with-temp-buffer
       (benedict-chat-mode)
       (benedict-chat--init-buffer)
@@ -610,10 +621,10 @@
       (with-temp-buffer
         (benedict-chat-mode)
         (benedict-chat--init-buffer)
-        (setq benedict-session-tool-invoke-fn
+        (setq session benedict-chat--session)
+        (setf (benedict-session-tool-invoke-fn session)
               (lambda (_tool-id _arguments)
                 "headless tool output"))
-        (setq session benedict-chat--session)
         (benedict-chat--send-text "keep running"))
       (should (benedict-vui-test--wait-for-request-finished session 2.0))
       (let ((buf (benedict-chat--buffer-for-session session)))
@@ -650,10 +661,10 @@
       (with-current-buffer buf
         (benedict-chat-mode)
         (benedict-chat--init-buffer)
-        (setq benedict-session-tool-invoke-fn
-              (lambda (_tool-id _arguments)
-                "tool output"))
         (let ((session benedict-chat--session))
+          (setf (benedict-session-tool-invoke-fn session)
+                (lambda (_tool-id _arguments)
+                  "tool output"))
           (benedict-chat--send-text "run tool")
           (should
            (benedict-vui-test--wait-until
@@ -684,7 +695,6 @@
   (benedict-test-with-bindings done
       ((benedict-session--registry (make-hash-table :test 'equal))
        (benedict-provider 'fake)
-       (benedict-session-tool-invoke-fn #'benedict-tool-invoke)
        (benedict-provider-fake-script
         (list (list :type 'success
                     :content "Search complete"
@@ -707,6 +717,7 @@
         (benedict-chat-mode)
         (benedict-chat--init-buffer)
         (let ((session benedict-chat--session))
+          (setf (benedict-session-tool-invoke-fn session) #'benedict-tool-invoke)
           (benedict-chat--send-text "search the project")
           (should (benedict-vui-test--wait-for-request-finished session 2.0))
           (vui-flush-sync)
@@ -733,13 +744,13 @@
           (benedict-test-with-bindings done
               ((benedict-session--registry (make-hash-table :test 'equal))
                (benedict-provider 'fake)
-               (benedict-session-tool-invoke-fn #'benedict-tool-invoke)
                (benedict-provider-fake-script nil))
             (let ((buf (generate-new-buffer "*benedict-chat-approval-ui*")))
               (with-current-buffer buf
                 (benedict-chat-mode)
                 (benedict-chat--init-buffer)
                 (let ((session benedict-chat--session))
+                  (setf (benedict-session-tool-invoke-fn session) #'benedict-tool-invoke)
                   (setq benedict-provider-fake-script
                         (list (list :type 'success
                                     :content ""
@@ -797,7 +808,6 @@
   (benedict-test-with-bindings done
       ((benedict-session--registry (make-hash-table :test 'equal))
        (benedict-provider 'fake)
-       (benedict-session-tool-invoke-fn #'benedict-tool-invoke)
        (benedict-provider-fake-script
         (list (list :type 'success
                     :content ""
@@ -809,6 +819,7 @@
         (benedict-chat-mode)
         (benedict-chat--init-buffer)
         (let ((session benedict-chat--session))
+          (setf (benedict-session-tool-invoke-fn session) #'benedict-tool-invoke)
           (benedict-chat--send-text "run out-of-scope tool")
           (should (benedict-vui-test--wait-for-request-finished session 2.0))
           (vui-flush-sync)

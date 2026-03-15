@@ -18,9 +18,9 @@
 (ert-deftest benedict-loop-step-dispatches-on-tool-calls ()
   "Loop step dispatches when tool calls are present."
   (let ((benedict-session--registry (make-hash-table :test 'equal))
-        (benedict-session-tool-invoke-fn (lambda (_id _args) "ok"))
         (events nil))
-    (let ((session (benedict-session-create)))
+    (let ((session (benedict-session-create
+                    :tool-invoke-fn (lambda (_id _args) "ok"))))
       (add-hook 'benedict-session-event-hook
                 (lambda (_s type _payload) (push type events)))
       (benedict-session-add-message

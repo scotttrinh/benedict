@@ -93,11 +93,11 @@
                     :content "Tooling done"
                     :tool-calls (list (list :id "call-1"
                                             :name 'read_file
-                                            :arguments '(:path "README.md"))))))
-       (benedict-session-tool-invoke-fn
-        (lambda (_tool-id _arguments)
-          "mock tool output")))
+                                            :arguments '(:path "README.md")))))))
     (with-mounted-vui-root
+      (setf (benedict-session-tool-invoke-fn session)
+            (lambda (_tool-id _arguments)
+              "mock tool output"))
       (benedict-vui-root-e2e-test--dispatch session "run tool")
       (should (benedict-vui-test--wait-for-request-finished session 2.0))
       (vui-flush-sync)
@@ -128,11 +128,11 @@
                     :thinking "Reasoning details"
                     :tool-calls (list (list :id "call-1"
                                             :name 'read_file
-                                            :arguments '(:path "README.md"))))))
-       (benedict-session-tool-invoke-fn
-        (lambda (_tool-id _arguments)
-          "mock tool output")))
+                                            :arguments '(:path "README.md")))))))
     (with-mounted-vui-root
+      (setf (benedict-session-tool-invoke-fn session)
+            (lambda (_tool-id _arguments)
+              "mock tool output"))
       (benedict-vui-root-e2e-test--dispatch session "Inspect README")
       (let ((prompt-id (benedict-message-id
                         (car (benedict-vui-root-e2e-test--messages session)))))

@@ -29,7 +29,7 @@
   (state 'idle) draft pending-question inflight last-error last-request
   root provider model profile meta
   tools system-prompt autonomy verbosity
-  harness
+  harness tool-invoke-fn
   flywire-session attached-frontends
   ;; Telemetry fields
   (accumulated-usage nil)    ; plist: :prompt :completion :total :cost
@@ -56,7 +56,8 @@
           (substring (md5 (format "%s%s" (random) (current-time))) 0 8)))
 
 (cl-defun benedict-session-create (&key id title root provider model profile meta
-                                        tools system-prompt autonomy verbosity harness)
+                                        tools system-prompt autonomy verbosity harness
+                                        tool-invoke-fn)
   "Create and register a new session with TITLE.
 
 Optional keyword arguments:
@@ -71,7 +72,8 @@ Optional keyword arguments:
   :system-prompt - List of system messages
   :autonomy - Autonomy level symbol
   :verbosity - Verbosity level symbol
-  :harness - Attached tool harness"
+  :harness - Attached tool harness
+  :tool-invoke-fn - Runtime tool invocation function"
   (let* ((now (current-time))
          (session-id (or id (benedict-session--generate-id)))
          (initial-harness
@@ -91,9 +93,10 @@ Optional keyword arguments:
                    :meta meta
                    :tools tools
                    :system-prompt system-prompt
-                    :autonomy autonomy
+                   :autonomy autonomy
                    :verbosity verbosity
-                   :harness initial-harness)))
+                   :harness initial-harness
+                   :tool-invoke-fn tool-invoke-fn)))
     (puthash session-id session benedict-session--registry)
     session))
 
@@ -559,11 +562,6 @@ Events emitted:
 
 ;;; Tool Execution
 
-(defvar benedict-session-tool-invoke-fn nil
-  "Function to invoke tools.  Set by tool module.
-Called as (funcall fn TOOL-ID ARGUMENTS &rest OPTIONS).
-Implementations may ignore OPTIONS.  Return tool output or signal error.")
-
 (defun benedict-session--tool-invoke-supports-options-p (fn)
   "Return non-nil when FN can accept optional keyword arguments."
   (when fn
@@ -572,6 +570,12 @@ Implementations may ignore OPTIONS.  Return tool output or signal error.")
           (and (integerp (cdr arity))
                (>= (cdr arity) 3))))))
 
+(defun benedict-session--resolve-tool-invoke-fn (session)
+  "Return the configured tool invoke function for SESSION."
+  (or (benedict-session-tool-invoke-fn session)
+      (and (fboundp 'benedict-tool-invoke)
+           #'benedict-tool-invoke)))
+
 (defun benedict-session--invoke-tool (session tool-call &optional skip-approval)
   "Execute TOOL-CALL plist for SESSION.
 Return plist (:status :output :error).  Emit tool-started and tool-completed events."
@@ -579,6 +583,7 @@ Return plist (:status :output :error).  Emit tool-started and tool-completed eve
                       (plist-get tool-call :tool)))
          (call-id (plist-get tool-call :id))
          (arguments (plist-get tool-call :arguments))
+         (tool-invoke-fn (benedict-session--resolve-tool-invoke-fn session))
          (status 'success)
          (output nil)
          (error-info nil))
@@ -587,15 +592,15 @@ Return plist (:status :output :error).  Emit tool-started and tool-completed eve
                             :tool-id tool-id)
     (lgr-log benedict-session--logger lgr-level-debug "Invoking tool %s" tool-id)
     (condition-case err
-        (if benedict-session-tool-invoke-fn
+        (if tool-invoke-fn
             (let ((raw-result
-                   (if (benedict-session--tool-invoke-supports-options-p benedict-session-tool-invoke-fn)
-                       (funcall benedict-session-tool-invoke-fn
+                   (if (benedict-session--tool-invoke-supports-options-p tool-invoke-fn)
+                       (funcall tool-invoke-fn
                                 tool-id arguments
                                 :session session
                                 :harness (benedict-session-harness session)
                                 :skip-approval skip-approval)
-                     (funcall benedict-session-tool-invoke-fn tool-id arguments))))
+                     (funcall tool-invoke-fn tool-id arguments))))
               (if (and (listp raw-result) (plist-member raw-result :status))
                   (progn
                     (setq status (plist-get raw-result :status))
