@@ -283,8 +283,9 @@ The best first batch is:
 - 2026-03-15: promoted turn navigation and execution-summary assertions into mounted root e2e coverage, then deleted duplicate turn/turn-list render tests that only rechecked prompt/activity/detail ordering below the canonical path.
 - 2026-03-15: removed the unused `benedict-vui-conversation-view--render` compatibility alias and cut conversation-view wrapper tests down to turn-list passthrough plus active/malformed spinner boundaries; root e2e remains the mainline streaming/render contract.
 - 2026-03-15: replaced the dedicated context propcheck trivia with higher-value transcript invariants covering canonical message normalization, structured tool-result store round-trips, and session persistence/build-request round-trips.
+- 2026-03-15: collapsed `benedict-vui-root-test.el` from per-event layout trivia into a smaller root-only wiring slice; mounted root e2e remains the primary render lifecycle contract while unit coverage now stays focused on root controls, session metadata wiring, audit wiring, and collapsed-block helpers.
 - Decision: provider-facing replay still sends canonical tool-result text content only; UI/persistence-only metadata remains on canonical transcript blocks and metadata.
-- Next slice: continue the VUI/root test audit by trimming low-value root layout/session-event assertions or collapsing them into fewer mounted session flows now that the persistence/property slice is covered.
+- Next slice: continue test portfolio reshaping by pruning other VUI/unit inventory tests that duplicate mounted session flows, starting with wrapper/helper files whose behavior is already covered by root e2e and child component tests.
 
 This batch improves correctness, test value, and documentation accuracy with minimal feature expansion.
 
