@@ -18,6 +18,7 @@
 (require 'benedict-message)
 (require 'benedict-session)
 (require 'benedict-provider-fake)
+(require 'benedict-tools)
 (require 'benedict-test-helpers)
 (require 'test/benedict-vui-test-utils)
 
@@ -675,6 +676,119 @@
             (should (string-match-p "Result: bash" text))
             (should (string-match-p "SUCCESS" text))
             (should (string-match-p "tool output" text))))
+        (kill-buffer buf)
+        (funcall done)))))
+
+(ert-deftest-async benedict-chat-session-test-ui-approval-request-resumes-after-approve (done)
+  "Approval-required tools pause in chat UI and resume after approval."
+  (let ((tool-id 'benedict-chat-session-test-confirm-tool))
+    (unwind-protect
+        (progn
+          (benedict-tools-register
+           :id tool-id
+           :fn (lambda (&rest _args)
+                 "approved output")
+           :approval 'confirm
+           :doc "Test approval tool.")
+          (benedict-test-with-bindings done
+              ((benedict-session--registry (make-hash-table :test 'equal))
+               (benedict-provider 'fake)
+               (benedict-session-tool-invoke-fn #'benedict-tool-invoke)
+               (benedict-provider-fake-script nil))
+            (let ((buf (generate-new-buffer "*benedict-chat-approval-ui*")))
+              (with-current-buffer buf
+                (benedict-chat-mode)
+                (benedict-chat--init-buffer)
+                (let ((session benedict-chat--session))
+                  (setq benedict-provider-fake-script
+                        (list (list :type 'success
+                                    :content ""
+                                    :tool-calls (list (list :id "call-approve"
+                                                            :name tool-id
+                                                            :arguments '(:value "demo"))))
+                              (list :type 'success
+                                    :content "approval recovered"
+                                    :delay 0.01)))
+                  (benedict-chat--send-text "run approval tool")
+                  (should
+                   (benedict-vui-test--wait-until
+                    (lambda ()
+                      (vui-flush-sync)
+                      (let ((text (buffer-string)))
+                        (and (eq (benedict-session-state session) 'approval-pending)
+                             (benedict-session-approval-pending-p session)
+                             (string-match-p "Approval request:" text)
+                             (string-match-p "Approve" text)
+                             (string-match-p "AWAITING APPROVAL" text))))
+                    :timeout 2.0))
+                  (benedict-vui-test--click-button-labeled "Approve")
+                  (should
+                   (benedict-vui-test--wait-until
+                    (lambda ()
+                      (vui-flush-sync)
+                      (let ((history (benedict-chat-session-test--history session)))
+                        (and (eq 'idle (benedict-session-state session))
+                             (= 4 (length history))
+                             (string-match-p "approval recovered" (buffer-string)))))
+                    :timeout 2.0))
+                  (let* ((text (buffer-string))
+                         (history (benedict-chat-session-test--history session))
+                         (tool-message (cl-find-if (lambda (message)
+                                                     (eq (benedict-message-role message) 'tool))
+                                                   history))
+                         (assistant (car (last history))))
+                    (should-not (benedict-session-approval-pending-p session))
+                    (should (eq 'idle (benedict-session-state session)))
+                    (should tool-message)
+                    (should (eq 'success (benedict-message-status tool-message)))
+                    (should (string-match-p "approved output"
+                                            (benedict-message-text tool-message)))
+                    (should (eq 'assistant (benedict-message-role assistant)))
+                    (should (string-match-p "approval recovered"
+                                            (benedict-message-text assistant)))
+                    (should-not (string-match-p "Approval request:" text))
+                    (should (string-match-p "approval recovered" text))))
+                (kill-buffer buf)
+                (funcall done)))))
+      (remhash tool-id benedict--tools))))
+
+(ert-deftest-async benedict-chat-session-test-ui-scope-denial-stays-in-band (done)
+  "Scope denials stay in-band and never enter approval-pending UI state."
+  (benedict-test-with-bindings done
+      ((benedict-session--registry (make-hash-table :test 'equal))
+       (benedict-provider 'fake)
+       (benedict-session-tool-invoke-fn #'benedict-tool-invoke)
+       (benedict-provider-fake-script
+        (list (list :type 'success
+                    :content ""
+                    :tool-calls (list (list :id "call-scope-ui"
+                                            :name 'read-file
+                                            :arguments '(:path "../elsewhere.txt")))))))
+    (let ((buf (generate-new-buffer "*benedict-chat-scope-ui*")))
+      (with-current-buffer buf
+        (benedict-chat-mode)
+        (benedict-chat--init-buffer)
+        (let ((session benedict-chat--session))
+          (benedict-chat--send-text "run out-of-scope tool")
+          (should (benedict-vui-test--wait-for-request-finished session 2.0))
+          (vui-flush-sync)
+          (let* ((text (buffer-string))
+                 (history (benedict-chat-session-test--history session))
+                 (tool-message (cl-find-if (lambda (message)
+                                             (eq (benedict-message-role message) 'tool))
+                                           history))
+                 (details (and tool-message
+                               (benedict-message-tool-result-details tool-message))))
+            (should-not (benedict-session-approval-pending-p session))
+            (should (eq 'idle (benedict-session-state session)))
+            (should tool-message)
+            (should (eq 'denied (benedict-message-status tool-message)))
+            (should (eq 'scope-expansion-required
+                        (plist-get details :code)))
+            (should (equal '(:paths ("../elsewhere.txt"))
+                           (plist-get details :scope-request)))
+            (should-not (string-match-p "Approval request:" text))
+            (should (string-match-p "Tool requires scope expansion:" text))))
         (kill-buffer buf)
         (funcall done)))))
 

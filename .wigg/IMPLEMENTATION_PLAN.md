@@ -274,7 +274,8 @@ The best first batch is:
 
 - 2026-03-15: provider dispatch and abort now honor per-request/per-handle provider metadata, closing the silent fallback to global `benedict-provider`.
 - 2026-03-15: added regression coverage at two levels: provider helper dispatch/abort and chat-session send path with a provider override.
-- Next slice: reconcile approval/scope-expansion behavior between harness specs and the current deny-with-structured-result implementation before touching README wording.
+- 2026-03-15: added chat/UI regressions for the implemented harness split: approval-required tools enter `approval-pending` and resume cleanly after in-buffer approval, while scope denials stay in-band as structured tool results without surfacing approval UI.
+- Next slice: audit session event and tool-result metadata so UI, persistence, and runtime consume the same contract before touching README wording.
 
 This batch improves correctness, test value, and documentation accuracy with minimal feature expansion.
 
