@@ -89,9 +89,7 @@ Concrete tasks:
 
 - done: provider dispatch/abort now resolve against request/handle provider metadata instead of global process state
 - done: regression coverage now proves provider override is honored by the real chat send path, not only by resolution helpers
-- explicitly decide the scope-expansion behavior for v0.1:
-  - if the current approved direction is "scope expansion approval is part of the current system", finish the approval flow
-  - otherwise narrow the spec text and README so they describe the present deny-with-structured-result behavior
+- done: v0.1 scope expansion is narrowed to the implemented deny-with-structured-result path; specs/README now describe audit-backed structured denials instead of a separate approval UI
 - audit session events and request/result metadata so the VUI, persistence, and runtime are all consuming the same contract
 
 Acceptance criteria:
@@ -99,6 +97,10 @@ Acceptance criteria:
 - per-session provider/model configuration is exercised in end-to-end tests
 - there is no silent fallback to unrelated global provider state
 - harness approval behavior is described consistently across code, tests, and docs
+
+Current note:
+
+- scope denials are part of the harness/tool-result contract today; only per-tool approval requests enter `approval-pending`
 
 ### Workstream 2: Finish Near-Complete Transitions
 
@@ -229,7 +231,7 @@ This phase should end with explicit decisions on:
 Implement the minimum code changes needed to make existing contracts true:
 
 - provider dispatch/abort complete
-- approval/scope handling decision
+- done: approval/scope handling decision narrowed to structured scope denials
 - event/request/result cleanup where required
 
 Add end-to-end tests before removing old scaffolding.

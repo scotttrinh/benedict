@@ -449,6 +449,44 @@
                       (plist-get (plist-get result :error) :decision)))
           (should (string-match-p "Tool denied:" (plist-get tool-message :content))))))))
 
+(ert-deftest benedict-chat-session-test-scope-denial-telemetry-visible ()
+  "Chat-attached sessions expose scope denials as audit events, not approvals."
+  (let ((benedict-session--registry (make-hash-table :test 'equal))
+        (events nil)
+        (benedict-session-event-hook nil)
+        (benedict-session-tool-invoke-fn #'benedict-tool-invoke))
+    (with-temp-buffer
+      (benedict-chat-mode)
+      (benedict-chat--init-buffer)
+      (let* ((session benedict-chat--session)
+             (result nil)
+             (audits nil))
+        (add-hook 'benedict-session-event-hook
+                  (lambda (_s type payload)
+                    (push (cons type payload) events)))
+        (setq result
+              (benedict-session--invoke-tool
+               session
+               '(:id "call-scope" :name read-file :arguments (:path "../elsewhere.txt"))))
+        (setq audits
+              (mapcar (lambda (event) (plist-get (cdr event) :audit))
+                      (cl-remove-if-not
+                       (lambda (event) (eq 'tool-audit (car event)))
+                       events)))
+        (should (eq 'denied (plist-get result :status)))
+        (should-not (benedict-session-approval-pending-p session))
+        (should (eq 'scope-expansion-required
+                    (plist-get (plist-get result :error) :code)))
+        (should (cl-find-if
+                 (lambda (audit)
+                   (eq 'scope-expansion (plist-get audit :phase)))
+                 audits))
+        (should (cl-find-if
+                 (lambda (audit)
+                   (and (eq 'authorization (plist-get audit :phase))
+                        (eq 'scope-path-denied (plist-get audit :decision))))
+                 audits))))))
+
 (ert-deftest-async benedict-chat-session-test-reattach-midstream (done)
   "Reattaching mid-stream shows accumulated content."
   (benedict-test-with-bindings done

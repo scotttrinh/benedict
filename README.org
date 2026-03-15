@@ -164,7 +164,7 @@ The snippet below is an annotated, copy‑pasteable Doom Emacs setup. Drop it in
 * Core Ideas
 - Chat buffers with streaming responses, markdown/code rendering, and Magit-inspired section folding.
 - Region/defun/buffer/project-aware actions: ask, explain, transform, refactor.
-- Tool calls map to Elisp capabilities with approval policies and diff previews.
+- Tool calls map to Elisp capabilities with approval policies, scope checks, and diff previews.
 - Project & git context: project.el, ripgrep, Magit integration.
 - Provider‑agnostic: OpenRouter, Ollama, Vercel, Gemini (OAuth + API key, non-streaming), and local endpoints via a shared interface.
 - Loop and autonomy safeguards: repetition detection, turn limits, and timing budget.
@@ -219,6 +219,7 @@ Example: registering a tool (sketch)
 * Security & Privacy
 - Keys via auth-source or env vars; never written to disk; masked in logs.
 - Approval policies: auto (read-only), confirm (writes), always (high-risk like `exec-elisp`).
+- Harness scope denials are returned as structured tool results and audit entries; they do not currently open a separate scope-expansion approval prompt.
 - Diff previews for file changes via `propose-edit`.
 - Provenance: structured logs of all tool calls and outcomes.
 
@@ -231,7 +232,9 @@ Predicate contract:
 - Inputs: =tool= (symbol), =args= (normalized plist with keyword keys).
 - Return =t= to allow, =nil= to deny.
 - If no predicate is configured, or if the predicate errors/returns a non-boolean,
-  Benedict falls back to the existing interactive approval flow.
+  Benedict falls back to the existing interactive approval flow for per-tool approvals.
+- Out-of-scope calls are denied with structured =scope-expansion-required=
+  metadata instead of entering that approval flow.
 
 Minimal =.dir-locals.el= recipe:
 #+begin_src elisp

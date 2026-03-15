@@ -91,8 +91,8 @@ When a limit is reached, the loop enters the **`checkpoint`** state.
       - `t`: allow.
       - `nil`: deny with structured result.
       - no predicate configured: use interactive approval fallback.
-    - If the agent requests a privileged effect (scope expansion), prompt the user to approve *the scope change*.
-      - If user denies scope expansion: feed back a structured "scope denied" tool result so the model can recover.
+    - If the agent requests a privileged effect outside the current scope, deny it and return a structured scope result.
+      - The harness should also record the attempted scope expansion in audit metadata so UI/persistence can surface it later.
 4.  **Invocation:**
     - Run the tool function (potentially in `flywire` sandbox).
     - Capture `stdout`/`return value` or `error`.

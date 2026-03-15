@@ -16,10 +16,10 @@ Scope is represented as a declarative object that the harness can enforce and th
 - commands: allowed interactive commands (when running in an agent frame)
 - network: allowed endpoints, or "none"
 
-The harness must support scope expansion requests:
-- the agent can request an expanded scope with a reason
-- the user approves or denies the scope expansion
-- denial must be represented as a structured result the model can react to
+In the current v0.1 implementation, out-of-scope tool calls are denied immediately:
+- the harness records the requested scope expansion with a reason in the audit log
+- the tool call returns a structured `scope-expansion-required` result the model can react to
+- there is no separate scope-expansion approval UI yet
 
 ### 1.2 Budgets
 

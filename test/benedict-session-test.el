@@ -573,6 +573,32 @@
         (should (string-match-p "Tool denied:" (benedict-message-text entry)))
         (should (eq 'permission-denied (plist-get details :code)))))))
 
+(ert-deftest benedict-session-test-process-tool-calls-records-scope-denial-without-approval ()
+  "Out-of-scope tool calls record a denial and never enter approval-pending state."
+  (let ((benedict-session--registry (make-hash-table :test 'equal))
+        (benedict-session-tool-invoke-fn #'benedict-tool-invoke))
+    (let* ((session (benedict-session-create
+                     :root "/tmp/project"
+                     :harness (benedict-harness-create
+                               :scope '(:paths ("/tmp/project"))
+                               :permission-predicate (lambda (_tool _args) t))))
+           (result (benedict-session--process-tool-calls
+                    session
+                    '((:id "call-1"
+                       :name read-file
+                       :arguments (:path "../elsewhere.txt")))))
+           (entry (car (benedict-session-entries session)))
+           (details (benedict-message-tool-result-details entry)))
+      (should (eq 'complete (plist-get result :status)))
+      (should-not (benedict-session-approval-pending-p session))
+      (should (eq 'tool (benedict-message-role entry)))
+      (should (eq 'denied (benedict-message-status entry)))
+      (should (eq 'scope-expansion-required (plist-get details :code)))
+      (should (equal '(:paths ("../elsewhere.txt"))
+                     (plist-get details :scope-request)))
+      (should (string-match-p "Tool requires scope expansion:"
+                              (benedict-message-text entry))))))
+
 (ert-deftest benedict-session-test-process-tool-calls-stops-for-approval ()
   "Approval-required tool calls stop the loop and store pending approval state."
   (let ((benedict-session--registry (make-hash-table :test 'equal))

@@ -152,7 +152,7 @@ Provider-specific cleanup belongs in step 2, not in the persisted transcript.
     - Apply scope/budget policy before tool execution.
     - Record auditable events for tool calls and side effects.
     - Normalize permission denials and scope denials into structured results the model can recover from.
-    - Distinguish routine allowed work from privileged scope expansion.
+    - Distinguish routine allowed work from out-of-scope requests that are currently denied with structured metadata.
 
 ### 2.8 Isolation (`benedict-flywire.el`)
 - **Role:** UI and execution isolation.
@@ -215,7 +215,7 @@ Provider-specific cleanup belongs in step 2, not in the persisted transcript.
 3.  **Tool Execution:**
     - Provider finishes with a `tool_calls` payload.
     - Agent core parses call.
-    - Harness checks scope/budgets/effects policy (may require scope expansion).
+    - Harness checks scope/budgets/effects policy and records denied scope expansions in audit metadata.
     - Tool runtime invokes Tool (via `benedict-tools` or extension-registered tools).
     - Tool runs (potentially in `flywire` context).
     - Tool returns normalized result (text/json/actions/metadata/effects summary).
