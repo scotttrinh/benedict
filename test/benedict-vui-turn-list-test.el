@@ -170,5 +170,35 @@
     (should (equal (plist-get summary :tool-names) '("bash")))
     (should (plist-get summary :has-thinking))))
 
+(ert-deftest benedict-vui-turn-list-mount-active-turn-uses-prompt-activity-layout ()
+  "Mounted active turns keep the prompt attached to live assistant work."
+  (with-mounted-vui-component
+      (vui-component 'benedict-vui-turn-list
+                     :conversation (list (list :id "u1" :role 'user :content "Question one"))
+                     :streaming '(:status active
+                               :content "Draft answer"
+                               :thinking "Working"
+                               :tool-calls ((:id "call-1" :name "bash" :arguments "pwd")))
+                     :collapsed-blocks nil
+                     :on-toggle-block #'ignore)
+    (let* ((text (buffer-string))
+           (prompt-pos (string-match "Prompt" text))
+           (question-pos (string-match "Question one" text))
+           (activity-pos (string-match "Activity" text))
+           (tool-pos (string-match "Tool: bash" text))
+           (draft-label-pos (string-match "Draft answer" text))
+           (draft-text-pos (string-match "Draft answer" text (1+ draft-label-pos))))
+      (should prompt-pos)
+      (should question-pos)
+      (should activity-pos)
+      (should tool-pos)
+      (should draft-label-pos)
+      (should draft-text-pos)
+      (should (< prompt-pos question-pos))
+      (should (< question-pos activity-pos))
+      (should (< activity-pos tool-pos))
+      (should (< tool-pos draft-label-pos))
+      (should (< draft-label-pos draft-text-pos)))))
+
 (provide 'test/benedict-vui-turn-list-test)
 ;;; benedict-vui-turn-list-test.el ends here

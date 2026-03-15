@@ -137,7 +137,7 @@
         (should-not (string-match-p "[0-9][0-9]:[0-9][0-9]:[0-9][0-9]" text))))))
 
 (ert-deftest benedict-vui-turn-renders-derived-turn-message-list ()
-  "Turn component accepts explicit turn records from the conversation layer."
+  "Active turn records render prompt, activity, and draft in order."
   (with-mounted-vui-component
       (vui-component 'benedict-vui-turn
                      :turn (list :id "u1"
@@ -155,13 +155,50 @@
                                                        :thinking "Working"
                                                        :tool-calls (list
                                                                     (list :id "call-1"
-                                                                          :name "bash"
-                                                                          :arguments "pwd"))))))
+                                                                         :name "bash"
+                                                                         :arguments "pwd"))))))
+    (let* ((text (buffer-string))
+           (prompt-pos (string-match "Prompt" text))
+           (question-pos (string-match "Question" text))
+           (activity-pos (string-match "Activity" text))
+           (thinking-pos (string-match "THINKING" text))
+           (tool-pos (string-match "Tool: bash" text))
+           (draft-label-pos (string-match "Draft answer" text))
+           (draft-text-pos (string-match "Draft answer" text (1+ draft-label-pos))))
+      (should prompt-pos)
+      (should question-pos)
+      (should activity-pos)
+      (should thinking-pos)
+      (should tool-pos)
+      (should draft-label-pos)
+      (should draft-text-pos)
+      (should (< prompt-pos question-pos))
+      (should (< question-pos activity-pos))
+      (should (< activity-pos thinking-pos))
+      (should (< thinking-pos draft-label-pos))
+      (should (< draft-label-pos draft-text-pos)))))
+
+(ert-deftest benedict-vui-turn-active-turn-without-execution-renders-working-state ()
+  "Active turns without execution blocks still render a working activity lane."
+  (with-mounted-vui-component
+      (vui-component 'benedict-vui-turn
+                     :turn (list :id "u1"
+                                 :prompt-text "Question"
+                                 :active t
+                                 :streaming t
+                                 :completed nil
+                                 :historical nil
+                                 :has-execution-blocks nil
+                                 :execution-expanded nil
+                                 :execution-summary nil
+                                 :messages (list (list :id "u1" :role 'user :content "Question")
+                                                 (list :role 'assistant
+                                                       :content "Draft answer"))))
     (let ((text (buffer-string)))
-      (should (string-match-p "Question" text))
-      (should (string-match-p "Draft answer" text))
-      (should (string-match-p "THINKING" text))
-      (should (string-match-p "Tool: bash" text)))))
+      (should (string-match-p "Prompt" text))
+      (should (string-match-p "Activity" text))
+      (should (string-match-p "Waiting for assistant output." text))
+      (should (string-match-p "Draft answer" text)))))
 
 (provide 'test/benedict-vui-turn-test)
 ;;; benedict-vui-turn-test.el ends here
