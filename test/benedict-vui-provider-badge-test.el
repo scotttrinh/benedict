@@ -35,22 +35,6 @@
   (should (equal (benedict-vui-provider-badge--format-model 'gpt-4)
                  "gpt-4")))
 
-(ert-deftest benedict-vui-provider-badge-render-test ()
-  "Provider badge renders formatted provider and model."
-  (with-mounted-vui-component
-      (vui-component 'benedict-vui-provider-badge
-                     :provider 'anthropic
-                     :model "claude-3-opus"
-                     :on-click nil)
-    (let ((content (buffer-string)))
-      (should (string-match-p "ANT" content))
-      (should (string-match-p "·" content))
-      (should (string-match-p "claude-3-opus" content)))
-    (goto-char (point-min))
-    (let* ((text (buffer-string))
-           (provider-face (get-text-property 0 'face text)))
-      (should (eq provider-face 'benedict-chat-header-provider)))))
-
 (ert-deftest benedict-vui-provider-badge-invokes-click-handler ()
   "Provider label is clickable when on-click callback is provided."
   (let ((clicked 0))
