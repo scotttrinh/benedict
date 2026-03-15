@@ -209,9 +209,11 @@ COLLAPSED-BLOCKS and ON-TOGGLE-BLOCK are forwarded to the block list."
   (let ((prompt-message
          (benedict-vui-turn--coerce-message (plist-get turn :prompt-message))))
     (or (and prompt-message
-             (benedict-vui-turn--user-message-p prompt-message)
+             (or (benedict-vui-turn--user-message-p prompt-message)
+                 (null (cl-find-if #'benedict-vui-turn--user-message-p messages)))
              prompt-message)
-        (cl-find-if #'benedict-vui-turn--user-message-p messages))))
+        (cl-find-if #'benedict-vui-turn--user-message-p messages)
+        (car messages))))
 
 (defun benedict-vui-turn--turn-outcome-message (turn messages)
   "Return outcome message for TURN using canonical MESSAGES as fallback."
@@ -223,15 +225,24 @@ COLLAPSED-BLOCKS and ON-TOGGLE-BLOCK are forwarded to the block list."
   (when-let ((canonical-message (benedict-vui-turn--coerce-message message)))
     (benedict-vui-turn--blocks (list :message canonical-message))))
 
+(defun benedict-vui-turn--message-text (message)
+  "Return text content for MESSAGE, or nil."
+  (when-let ((canonical-message (benedict-vui-turn--coerce-message message)))
+    (benedict-message-text canonical-message)))
+
 (defun benedict-vui-turn--text-block-predicate (block)
   "Return non-nil when BLOCK is text-like for draft/outcome display."
-  (eq (benedict-vui-turn--block-type block) 'text))
+  (memq (benedict-vui-turn--block-type block) '(text code)))
+
+(defun benedict-vui-turn--execution-block-predicate (block)
+  "Return non-nil when BLOCK is execution detail."
+  (memq (benedict-vui-turn--block-type block) '(thinking tool-use tool-result)))
 
 (defun benedict-vui-turn--activity-blocks (messages)
   "Return non-text execution blocks drawn from MESSAGES."
   (apply #'append
          (mapcar (lambda (message)
-                   (cl-remove-if #'benedict-vui-turn--text-block-predicate
+                   (cl-remove-if-not #'benedict-vui-turn--execution-block-predicate
                                  (benedict-vui-turn--message-display-blocks message)))
                  messages)))
 
@@ -239,6 +250,61 @@ COLLAPSED-BLOCKS and ON-TOGGLE-BLOCK are forwarded to the block list."
   "Return text blocks from MESSAGE for in-progress draft rendering."
   (cl-remove-if-not #'benedict-vui-turn--text-block-predicate
                     (benedict-vui-turn--message-display-blocks message)))
+
+(defun benedict-vui-turn--outcome-blocks (message)
+  "Return primary answer blocks from MESSAGE."
+  (cl-remove-if-not #'benedict-vui-turn--text-block-predicate
+                    (benedict-vui-turn--message-display-blocks message)))
+
+(defun benedict-vui-turn--execution-summary-items (summary)
+  "Return compact display strings for execution SUMMARY."
+  (let (items)
+    (when-let ((tool-count (plist-get summary :tool-count)))
+      (when (> tool-count 0)
+        (push (format "%d tool%s" tool-count (if (= tool-count 1) "" "s"))
+              items)))
+    (when-let ((tool-names (plist-get summary :tool-names)))
+      (when tool-names
+        (push (mapconcat #'identity tool-names ", ") items)))
+    (when-let ((error-count (plist-get summary :error-count)))
+      (when (> error-count 0)
+        (push (format "%d error%s" error-count (if (= error-count 1) "" "s"))
+              items)))
+    (when-let ((warning-count (plist-get summary :warning-count)))
+      (when (> warning-count 0)
+        (push (format "%d warning%s" warning-count (if (= warning-count 1) "" "s"))
+              items)))
+    (when (plist-get summary :has-thinking)
+      (push "thinking" items))
+    (when (plist-get summary :has-approvals)
+      (push "approval" items))
+    (nreverse items)))
+
+(defun benedict-vui-turn--execution-summary-node (turn expanded on-toggle)
+  "Return summary node for TURN using EXPANDED and ON-TOGGLE."
+  (let* ((summary (plist-get turn :execution-summary))
+         (items (benedict-vui-turn--execution-summary-items summary))
+         (highlights (plist-get summary :highlights))
+         (children (list (benedict-vui-turn--section-label 'assistant "Execution"))))
+    (when items
+      (setq children
+            (append children
+                    (list (vui-text (mapconcat #'identity items " | ")
+                                    :face 'benedict-chat-header-time)))))
+    (when highlights
+      (setq children
+            (append children
+                    (list (vui-text (mapconcat #'identity highlights " | ")
+                                    :face (if (plist-get summary :has-errors)
+                                              'benedict-chat-error
+                                            'benedict-chat-header-time))))))
+    (setq children
+          (append children
+                  (list (vui-button (if expanded "Hide details" "Show details")
+                                    :on-click (lambda (&rest _)
+                                                (when (functionp on-toggle)
+                                                  (funcall on-toggle (not expanded))))))))
+    (apply #'vui-vstack children)))
 
 (defun benedict-vui-turn--section-label (status title &optional detail)
   "Return a section label node using STATUS, TITLE, and optional DETAIL."
@@ -271,7 +337,7 @@ COLLAPSED-BLOCKS and ON-TOGGLE-BLOCK are forwarded to the block list."
 
 COLLAPSED-BLOCKS and ON-TOGGLE-BLOCK are forwarded to rendered content blocks."
   (let* ((messages (benedict-vui-turn--messages-from-turn turn))
-         (prompt-message (benedict-vui-turn--turn-prompt-message turn messages))
+         (prompt-message (cl-find-if #'benedict-vui-turn--user-message-p messages))
          (outcome-message (benedict-vui-turn--turn-outcome-message turn messages))
          (non-prompt-messages (if prompt-message
                                   (delq prompt-message (copy-sequence messages))
@@ -300,6 +366,54 @@ COLLAPSED-BLOCKS and ON-TOGGLE-BLOCK are forwarded to rendered content blocks."
                        draft-blocks draft-message-key collapsed-blocks on-toggle-block))))))
     (apply #'vui-vstack children)))
 
+(defun benedict-vui-turn--completed-turn-node
+    (turn collapsed-blocks on-toggle-block execution-expanded on-toggle-execution)
+  "Return completed turn layout for TURN.
+
+COLLAPSED-BLOCKS and ON-TOGGLE-BLOCK are forwarded to block rendering.
+EXECUTION-EXPANDED and ON-TOGGLE-EXECUTION control turn-level detail visibility."
+  (let* ((messages (benedict-vui-turn--messages-from-turn turn))
+         (prompt-message (benedict-vui-turn--turn-prompt-message turn messages))
+         (outcome-message (benedict-vui-turn--turn-outcome-message turn messages))
+         (outcome-blocks (benedict-vui-turn--outcome-blocks outcome-message))
+         (detail-messages (if prompt-message
+                              (delq prompt-message (copy-sequence messages))
+                            messages))
+         (execution-blocks (benedict-vui-turn--activity-blocks detail-messages))
+         (outcome-message-key (and outcome-message (benedict-message-id outcome-message)))
+         (children (list
+                    (benedict-vui-turn--prompt-header-node
+                     prompt-message
+                     (plist-get turn :prompt-text)))))
+    (when outcome-blocks
+      (setq children
+            (append children
+                    (list
+                     (vui-vstack
+                      (benedict-vui-turn--section-label 'assistant "Answer")
+                      (benedict-vui-turn--content-node
+                       outcome-blocks outcome-message-key nil nil))))))
+    (when execution-blocks
+      (setq children
+            (append children
+                    (list (benedict-vui-turn--execution-summary-node
+                           turn execution-expanded on-toggle-execution))))
+      (when execution-expanded
+        (setq children
+              (append children
+                      (list
+                       (vui-vstack
+                        (benedict-vui-turn--section-label 'assistant "Execution details")
+                        (benedict-vui-turn--content-node
+                         execution-blocks outcome-message-key
+                         collapsed-blocks on-toggle-block)))))))
+    (unless outcome-blocks
+      (setq children
+            (append children
+                    (list (vui-text (propertize "No final assistant answer."
+                                                'face 'benedict-chat-header-time))))))
+    (apply #'vui-vstack children)))
+
 (defun benedict-vui-turn--legacy-node
     (message blocks role timestamp metadata message-key collapsed-blocks on-toggle-block)
   "Render the pre-turn-model node using MESSAGE, BLOCKS, ROLE, TIMESTAMP, METADATA, MESSAGE-KEY, COLLAPSED-BLOCKS, and ON-TOGGLE-BLOCK."
@@ -325,18 +439,22 @@ COLLAPSED-BLOCKS and ON-TOGGLE-BLOCK are forwarded to rendered content blocks."
 
 (vui-defcomponent benedict-vui-turn
     (turn message blocks role timestamp metadata message-key collapsed-blocks on-toggle-block)
+  :state ((execution-expanded nil))
   :render
   (let ((turn-messages (and (listp turn)
                             (benedict-vui-turn--messages-from-turn turn))))
     (if turn-messages
-        (if (plist-get turn :active)
-            (benedict-vui-turn--active-turn-node
-             turn collapsed-blocks on-toggle-block)
-          (apply #'vui-vstack
-                 (mapcar (lambda (turn-message)
-                           (benedict-vui-turn--message-node
-                            turn-message collapsed-blocks on-toggle-block))
-                         turn-messages)))
+        (let* ((default-expanded (plist-get turn :execution-expanded))
+               (expanded (if (plist-member --props-- :turn)
+                             (or execution-expanded default-expanded)
+                           execution-expanded))
+               (toggle-execution (lambda (next)
+                                   (vui-set-state :execution-expanded next))))
+          (if (plist-get turn :active)
+              (benedict-vui-turn--active-turn-node
+               turn collapsed-blocks on-toggle-block)
+            (benedict-vui-turn--completed-turn-node
+             turn collapsed-blocks on-toggle-block expanded toggle-execution)))
       (benedict-vui-turn--legacy-node
        message blocks role timestamp metadata message-key
        collapsed-blocks on-toggle-block))))

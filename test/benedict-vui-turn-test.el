@@ -200,5 +200,99 @@
       (should (string-match-p "Waiting for assistant output." text))
       (should (string-match-p "Draft answer" text)))))
 
+(ert-deftest benedict-vui-turn-completed-turn-promotes-answer-and-collapses-details ()
+  "Completed turns show the final answer first and hide execution detail by default."
+  (with-mounted-vui-component
+      (vui-component 'benedict-vui-turn
+                     :turn (list :id "u1"
+                                 :prompt-text "Question"
+                                 :active nil
+                                 :streaming nil
+                                 :completed t
+                                 :historical t
+                                 :has-execution-blocks t
+                                 :execution-expanded nil
+                                 :execution-summary '(:tool-count 1
+                                                     :tool-names ("bash")
+                                                     :error-count 1
+                                                     :warning-count 0
+                                                     :has-thinking t
+                                                     :has-errors t
+                                                     :has-approvals nil
+                                                     :highlights ("bash: Tool error: boom"))
+                                 :messages (list (list :id "u1" :role 'user :content "Question")
+                                                 (list :id "a1"
+                                                       :role 'assistant
+                                                       :content "Final answer"
+                                                       :thinking "Reasoning"
+                                                       :tool-calls (list
+                                                                    (list :id "call-1"
+                                                                          :name "bash"
+                                                                          :arguments "pwd")))
+                                                 (list :id "t1"
+                                                       :role 'tool
+                                                       :tool-call-id "call-1"
+                                                       :name "bash"
+                                                       :content "Tool error: boom"
+                                                       :metadata '(:status failure
+                                                                  :error (:message "boom"))))))
+    (let* ((text (buffer-string))
+           (prompt-pos (string-match "Prompt" text))
+           (answer-pos (string-match "Answer" text))
+           (final-pos (string-match "Final answer" text))
+           (execution-pos (string-match "Execution" text))
+           (summary-pos (string-match "1 tool" text))
+           (highlight-pos (string-match "bash: Tool error: boom" text)))
+      (should prompt-pos)
+      (should answer-pos)
+      (should final-pos)
+      (should execution-pos)
+      (should summary-pos)
+      (should highlight-pos)
+      (should (< prompt-pos answer-pos))
+      (should (< answer-pos final-pos))
+      (should (< final-pos execution-pos))
+      (should-not (string-match-p "Execution details" text))
+      (should-not (string-match-p "Tool: bash" text))
+      (let ((case-fold-search nil))
+        (should-not (string-match-p "THINKING" text)))
+      (should (string-match-p "Show details" text)))))
+
+(ert-deftest benedict-vui-turn-completed-turn-expands-execution-details-when-enabled ()
+  "Completed turns render execution blocks when expansion is enabled at turn scope."
+  (with-mounted-vui-component
+      (vui-component 'benedict-vui-turn
+                     :turn (list :id "u1"
+                                 :prompt-text "Question"
+                                 :active nil
+                                 :streaming nil
+                                 :completed t
+                                 :historical t
+                                 :has-execution-blocks t
+                                 :execution-expanded t
+                                 :execution-summary '(:tool-count 1
+                                                     :tool-names ("bash")
+                                                     :error-count 0
+                                                     :warning-count 0
+                                                     :has-thinking t
+                                                     :has-errors nil
+                                                     :has-approvals t
+                                                     :highlights nil)
+                                 :messages (list (list :id "u1" :role 'user :content "Question")
+                                                 (list :id "a1"
+                                                       :role 'assistant
+                                                       :content "Final answer"
+                                                       :thinking "Reasoning"
+                                                       :tool-calls (list
+                                                                    (list :id "call-1"
+                                                                          :name "bash"
+                                                                          :arguments "pwd"
+                                                                          :status 'awaiting-approval))))))
+    (let ((text (buffer-string)))
+      (should (string-match-p "Execution details" text))
+      (should (string-match-p "THINKING" text))
+      (should (string-match-p "Tool: bash" text))
+      (should (string-match-p "Hide details" text)))))
+
 (provide 'test/benedict-vui-turn-test)
 ;;; benedict-vui-turn-test.el ends here

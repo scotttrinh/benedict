@@ -107,12 +107,17 @@ Each normalized message is a canonical entry."
   (when (benedict-message-p message)
     (benedict-message-text message)))
 
+(defun benedict-vui-turn-list--message-display-blocks (message)
+  "Return display blocks for MESSAGE."
+  (when (benedict-message-p message)
+    (benedict-message-blocks-for-display message)))
+
 (defun benedict-vui-turn-list--message-has-execution-blocks-p (message)
   "Return non-nil when MESSAGE has non-text display blocks."
   (and (benedict-message-p message)
        (cl-some (lambda (block)
                   (not (eq (plist-get block :type) 'text)))
-                (benedict-message-blocks-for-display message))))
+                (benedict-vui-turn-list--message-display-blocks message))))
 
 (defun benedict-vui-turn-list--assistant-message-p (message)
   "Return non-nil when MESSAGE is an assistant entry."
@@ -142,39 +147,141 @@ Each normalized message is a canonical entry."
   "Return the final assistant outcome message for turn MESSAGES."
   (car (last (cl-remove-if-not #'benedict-vui-turn-list--assistant-message-p messages))))
 
+(defun benedict-vui-turn-list--normalize-status (status)
+  "Return STATUS coerced into a canonical symbol."
+  (cond
+   ((null status) nil)
+   ((keywordp status) (intern (substring (symbol-name status) 1)))
+   ((symbolp status) status)
+   ((stringp status) (intern (downcase status)))
+   (t nil)))
+
+(defun benedict-vui-turn-list--display-blocks (messages)
+  "Return flattened display blocks across MESSAGES."
+  (apply #'append
+         (mapcar #'benedict-vui-turn-list--message-display-blocks messages)))
+
+(defun benedict-vui-turn-list--status-error-p (status)
+  "Return non-nil when STATUS should count as an error."
+  (memq (benedict-vui-turn-list--normalize-status status)
+        '(failure denied error)))
+
+(defun benedict-vui-turn-list--status-warning-p (status)
+  "Return non-nil when STATUS should count as a warning."
+  (memq (benedict-vui-turn-list--normalize-status status)
+        '(warning warn)))
+
+(defun benedict-vui-turn-list--status-approval-p (status)
+  "Return non-nil when STATUS indicates approval involvement."
+  (eq (benedict-vui-turn-list--normalize-status status)
+      'awaiting-approval))
+
+(defun benedict-vui-turn-list--tool-name-from-block (block)
+  "Return tool name from display BLOCK, or nil."
+  (let ((name
+         (pcase (plist-get block :type)
+           ('tool-use (plist-get (plist-get block :tool-call) :name))
+           ('tool-result (plist-get (plist-get block :result) :name))
+           (_ nil))))
+    (cond
+     ((null name) nil)
+     ((symbolp name) (symbol-name name))
+     ((stringp name) name)
+     (t (format "%s" name)))))
+
+(defun benedict-vui-turn-list--tool-status-from-block (block)
+  "Return tool status from display BLOCK, or nil."
+  (pcase (plist-get block :type)
+    ('tool-use (or (plist-get block :status)
+                   (plist-get (plist-get block :tool-call) :status)))
+    ('tool-result (or (plist-get block :status)
+                      (plist-get (plist-get block :result) :status)))
+    (_ nil)))
+
+(defun benedict-vui-turn-list--tool-result-summary-snippet (block)
+  "Return a compact summary snippet for tool-result BLOCK, or nil."
+  (let* ((result (plist-get block :result))
+         (status (benedict-vui-turn-list--tool-status-from-block block))
+         (content (string-trim (or (plist-get result :content) "")))
+         (tool-name (or (plist-get result :name) "tool")))
+    (when (or (benedict-vui-turn-list--status-error-p status)
+              (benedict-vui-turn-list--status-warning-p status))
+      (format "%s: %s"
+              tool-name
+              (if (string-empty-p content)
+                  (symbol-name (or (benedict-vui-turn-list--normalize-status status)
+                                   'unknown))
+                (truncate-string-to-width content 80 nil nil t))))))
+
+(defun benedict-vui-turn-list--turn-tool-summary (messages)
+  "Return tool summary data derived from MESSAGES."
+  (let ((blocks (benedict-vui-turn-list--display-blocks messages))
+        (tool-count 0)
+        names
+        (error-count 0)
+        (warning-count 0)
+        (approval-count 0)
+        highlights)
+    (dolist (block blocks)
+      (when-let ((tool-name (benedict-vui-turn-list--tool-name-from-block block)))
+        (when (eq (plist-get block :type) 'tool-use)
+          (setq tool-count (1+ tool-count)))
+        (push tool-name names))
+      (let ((status (benedict-vui-turn-list--tool-status-from-block block)))
+        (when (benedict-vui-turn-list--status-error-p status)
+          (setq error-count (1+ error-count)))
+        (when (benedict-vui-turn-list--status-warning-p status)
+          (setq warning-count (1+ warning-count)))
+        (when (benedict-vui-turn-list--status-approval-p status)
+          (setq approval-count (1+ approval-count))))
+      (when-let ((snippet (benedict-vui-turn-list--tool-result-summary-snippet block)))
+        (push snippet highlights)))
+    (list :tool-count tool-count
+          :tool-names (delete-dups (delq nil (nreverse names)))
+          :error-count error-count
+          :warning-count warning-count
+          :approval-count approval-count
+          :highlights (delete-dups (nreverse highlights)))))
+
 (defun benedict-vui-turn-list--turn-tool-names (messages)
   "Return tool names observed across turn MESSAGES."
-  (let (names)
-    (dolist (message messages)
-      (dolist (block (and (benedict-message-p message)
-                          (benedict-message-blocks-for-display message)))
-        (pcase (plist-get block :type)
-          ('tool-use
-           (push (plist-get (plist-get block :tool-call) :name) names))
-          ('tool-result
-           (push (plist-get (plist-get block :result) :name) names)))))
-    (delete-dups (delq nil (nreverse names)))))
+  (plist-get (benedict-vui-turn-list--turn-tool-summary messages) :tool-names))
 
 (defun benedict-vui-turn-list--turn-error-count (messages)
   "Return the number of error-marked messages in MESSAGES."
-  (cl-count-if (lambda (message)
-                 (plist-get (benedict-message-metadata message) :error))
-               messages))
+  (+ (cl-count-if (lambda (message)
+                    (and (not (eq (benedict-message-role message) 'tool))
+                         (plist-get (benedict-message-metadata message) :error)))
+                  messages)
+     (plist-get (benedict-vui-turn-list--turn-tool-summary messages) :error-count)))
+
+(defun benedict-vui-turn-list--turn-warning-count (messages)
+  "Return warning count observed in tool execution blocks for MESSAGES."
+  (plist-get (benedict-vui-turn-list--turn-tool-summary messages) :warning-count))
+
+(defun benedict-vui-turn-list--turn-has-approvals-p (messages)
+  "Return non-nil when MESSAGES include approval-related execution."
+  (> (plist-get (benedict-vui-turn-list--turn-tool-summary messages) :approval-count) 0))
 
 (defun benedict-vui-turn-list--execution-summary (messages)
   "Return summarized execution metadata for turn MESSAGES."
-  (let* ((tool-names (benedict-vui-turn-list--turn-tool-names messages))
-         (tool-count (length tool-names))
+  (let* ((tool-summary (benedict-vui-turn-list--turn-tool-summary messages))
+         (tool-names (plist-get tool-summary :tool-names))
+         (tool-count (plist-get tool-summary :tool-count))
          (error-count (benedict-vui-turn-list--turn-error-count messages))
+         (warning-count (benedict-vui-turn-list--turn-warning-count messages))
          (has-thinking (cl-some (lambda (message)
                                   (benedict-message-thinking message))
                                 messages)))
     (list :tool-count tool-count
           :tool-names tool-names
           :error-count error-count
+          :warning-count warning-count
           :has-thinking has-thinking
           :has-errors (> error-count 0)
-          :has-approvals nil)))
+          :has-warnings (> warning-count 0)
+          :has-approvals (benedict-vui-turn-list--turn-has-approvals-p messages)
+          :highlights (plist-get tool-summary :highlights))))
 
 (defun benedict-vui-turn-list--turn-has-execution-blocks-p (messages)
   "Return non-nil when MESSAGES contain execution detail."
