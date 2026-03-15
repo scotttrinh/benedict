@@ -53,6 +53,7 @@ The system is composed of several loosely coupled modules:
     - The "face" of the assistant.
     - Renders the runtime/session state into an Emacs buffer.
     - Handles user input, streaming updates, queued messages, and rich rendering.
+    - Presents the transcript as turn-oriented work records rather than a flat stream of peer messages.
     - Must consume the core event stream rather than reaching into runtime internals.
 
 4.  **Provider Layer (`benedict-provider.el`):**
@@ -114,6 +115,7 @@ The differentiator is Emacs-native work:
 - compile/xref/imenu/project integration
 - Org as planning and memory substrate
 - action-bearing tool results that jump to files, buffers, hunks, or captures
+- turn-centric chat UI where prompts, execution detail, and outcomes have a clear visual hierarchy
 - richer interaction than a terminal can provide, without abandoning text-first UX
 
 ## 5. Packaging & Delivery

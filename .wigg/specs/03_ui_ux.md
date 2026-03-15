@@ -25,9 +25,10 @@ BenedictRoot
 ├── ConversationView
 │   └── TurnList (vui-list with stable turn-id keys)
 │       └── Turn
-│           ├── TurnHeader (role badge, timestamp)
-│           └── ContentBlockList
-│               ├── TextBlock
+│           ├── PromptHeader
+│           ├── TurnOutcome
+│           ├── ExecutionSummary
+│           └── ExecutionDetailGroup
 │               ├── ThinkingBlock (collapsible)
 │               ├── ToolUseBlock (collapsible)
 │               ├── ToolResultBlock (collapsible)
@@ -39,6 +40,8 @@ BenedictRoot
 └── StatusBar
     └── TokenCount, CostEstimate, ErrorMessages
 ```
+
+The important modeling choice is that the transcript is turn-first, not message-first. A user prompt and the assistant work it triggers are rendered as one visual group. Intermediate execution detail exists to support the answer, not to compete with it.
 
 ### 1.2 State, Effects, and Async
 
@@ -74,9 +77,11 @@ The `BenedictRoot` component owns all shared application state:
  :streaming          ; (:status pending|active|complete|error
                      ;  :turn-id current-turn-id
                      ;  :content accumulated-streaming-content)
+ :active-turn-id     ; Current turn being worked on, if any
  :provider           ; :anthropic | :openai | :bedrock | :openrouter
  :model              ; "claude-sonnet-4-20250514" etc.
  :collapsed-blocks   ; Set of block-ids that are collapsed
+ :collapsed-turn-details ; Set of turn-ids whose execution details are collapsed
  :queued-messages    ; pending steering/follow-up messages
  :session-branch     ; current branch/session identity
  :error)             ; Current error state or nil
@@ -102,6 +107,14 @@ Values computed from state are calculated on-the-fly, not stored:
   ...)
 ```
 
+Important turn-derived values should be computed centrally:
+
+- prompt header text for the turn
+- active/completed/historical turn state
+- final assistant outcome block for the turn
+- execution summary for collapsed historical display
+- which execution blocks must remain visible because they signal errors or approvals
+
 ---
 
 ## 3. Chat Buffer Design
@@ -112,9 +125,16 @@ The Chat Buffer is the primary interface, rendered as a vui.el component tree.
 
 - **Header**: Provider/Model badge, status indicator, session title
 - **Conversation Stream**: `vui-list` of turns with stable keys
+- **Turn Group**: each turn is rendered as a coherent exchange:
+  - prompt header
+  - live activity lane while active
+  - final assistant outcome as the dominant block when complete
+  - collapsed execution summary plus expandable execution details for historical turns
 - **Compose Area**: Controlled `vui-field` at buffer bottom with context indicators and queue controls
   - Keybindings for submit/history are set up by parent buffer, not by component render
 - **Session Controls**: branch/resume state, queued-message indicator, checkpoint actions
+
+The active turn should approximate a sticky prompt without requiring literal sticky layout. In practice this means the current prompt remains visually persistent at the top of the active turn, and may optionally be mirrored in a lightweight session header while streaming.
 
 ### 3.2 Visual Elements
 
@@ -122,6 +142,21 @@ The Chat Buffer is the primary interface, rendered as a vui.el component tree.
 - **USER**: `benedict-user-face` (bold, keyword-like)
 - **ASSISTANT**: `benedict-assistant-face` (doc-style)
 - **SYSTEM**: `benedict-system-face` (shadow/dimmed)
+
+#### Turn Hierarchy
+
+Turns should use a stronger visual hierarchy than individual message blocks:
+
+- **Prompt Header**: subtle surface treatment, compact metadata, clearly attached to the assistant work below it
+- **Outcome Card**: the visually dominant block for completed turns
+- **Execution Summary**: compact metadata row for hidden intermediate activity
+- **Execution Details**: muted, collapsible supporting evidence such as thinking and tool results
+
+Spacing should reinforce this hierarchy:
+
+- more separation between turns than between blocks within a turn
+- more padding around the final outcome than around execution details
+- execution blocks should feel subordinate to both prompt and outcome
 
 #### Badges
 Rendered as `vui-box` components with appropriate faces:
@@ -149,7 +184,18 @@ Rendered as `vui-box` components with appropriate faces:
 
 ### 3.3 Collapsible Sections
 
-Thinking blocks, tool calls, and tool results use a compound component pattern:
+Thinking blocks, tool calls, and tool results remain first-class blocks, but historical turns should collapse most of this detail by default once the turn is complete.
+
+The default completed-turn reading order is:
+
+1. prompt header
+2. final assistant outcome
+3. execution summary
+4. expandable execution details
+
+Execution details should auto-collapse on turn completion, while failed or otherwise high-signal tool information may stay represented in the summary state.
+
+A compound component pattern is still appropriate for the detail group:
 
 ```elisp
 (vui-defcomponent collapsible-block (props state)
@@ -172,7 +218,16 @@ Additional first-class block types:
 - subagent activity summaries
 - persistence markers (branch summary, compaction summary)
 
-### 3.4 Interactive Elements
+### 3.4 Active Turn Behavior
+
+The active turn should read as "assistant working on this prompt."
+
+- The current user message is promoted into a persistent prompt header.
+- Streaming thinking/tool/status blocks appear in an activity lane beneath the prompt.
+- Partial assistant prose may appear in an in-progress answer region, but should not visually outrank the final outcome state.
+- Tool/thinking/status blocks should not appear as peer chat messages during this phase.
+
+### 3.5 Interactive Elements
 
 #### Buttons
 ```elisp
@@ -180,7 +235,7 @@ Additional first-class block types:
   :on-click (lambda () (benedict--show-model-selector)))
 ```
 
- #### Keybindings
+#### Keybindings
 Keybindings are registered in `benedict-mode-map` and dispatch actions to a root component:
 
 | Key       | Action                        |
@@ -193,6 +248,8 @@ Keybindings are registered in `benedict-mode-map` and dispatch actions to a root
 | `w`       | Copy last response            |
 | `n` / `p` | Next/Prev turn                |
 | `TAB`     | Toggle block collapse         |
+
+Turn-level navigation should be preferred over raw block-by-block navigation for the main transcript. Collapsed execution detail must remain keyboard-discoverable, but it should not dominate the navigation model.
 
 ##### Keybinding Pattern Guidelines
 

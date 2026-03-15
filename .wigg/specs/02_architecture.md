@@ -118,7 +118,9 @@ Provider-specific cleanup belongs in step 2, not in the persisted transcript.
 - **Mechanism:** VUI component tree plus stable keys/identifiers for typed blocks.
 - **Features:**
     - Markdown/code rendering for typed assistant text blocks.
+    - Turn-centric rendering that groups a user prompt with the assistant work it triggered.
     - Distinct renderers for thinking, tool calls, tool results, checkpoints, queued messages, and subagent blocks.
+    - Outcome-first completed turns where the final assistant answer is the primary block and execution detail is collapsed by default.
     - Action-bearing tool result UIs (open file, jump to hunk, apply patch, visit Org node, rerun command).
 
 ### 2.5 Provider Layer (`benedict-provider.el`)
@@ -208,7 +210,7 @@ Provider-specific cleanup belongs in step 2, not in the persisted transcript.
     - Provider callbacks trigger agent core streaming handlers.
     - Agent core updates internal Draft/partial assistant message.
     - Agent core emits message update events.
-    - Chat UI receives events, updates buffer via typed block renderers.
+    - Chat UI receives events and updates the active turn so the current prompt remains visually persistent while execution detail streams beneath it.
 
 3.  **Tool Execution:**
     - Provider finishes with a `tool_calls` payload.
@@ -225,4 +227,5 @@ Provider-specific cleanup belongs in step 2, not in the persisted transcript.
     - Provider finishes with content (no tools) or Loop decides to stop.
     - Agent core transitions to `idle`.
     - Final message committed to history.
+    - Chat UI promotes the final assistant outcome and collapses most intermediate execution detail into a summary view.
     - Session store persists completion metadata.
