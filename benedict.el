@@ -88,6 +88,31 @@
   "Face for usage/cost labels in message headers."
   :group 'benedict-chat)
 
+(defface benedict-chat-turn-prompt-header
+  '((t :inherit (region benedict-chat-header) :extend t :weight semi-bold))
+  "Face for prompt header regions in turn-centric chat buffers."
+  :group 'benedict-chat)
+
+(defface benedict-chat-turn-active
+  '((t :inherit (mode-line-inactive shadow) :extend t))
+  "Face for active turn regions while the assistant is still working."
+  :group 'benedict-chat)
+
+(defface benedict-chat-turn-outcome
+  '((t :inherit (fringe benedict-chat-assistant) :extend t))
+  "Face for final assistant outcome regions in completed turns."
+  :group 'benedict-chat)
+
+(defface benedict-chat-turn-summary
+  '((t :inherit (mode-line-inactive benedict-chat-header-time) :extend t))
+  "Face for compact execution summary regions."
+  :group 'benedict-chat)
+
+(defface benedict-chat-turn-detail
+  '((t :inherit (fringe shadow) :extend t))
+  "Face for expanded execution detail regions."
+  :group 'benedict-chat)
+
 (defface benedict-chat-user
   '((t :inherit (font-lock-keyword-face bold)))
   "Face for user role labels in chat buffers.")

@@ -17,6 +17,15 @@
    ((listp actual) (memq expected actual))
    (t nil)))
 
+(defun benedict-vui-turn-test--assert-face-at-match (needle face &optional start)
+  "Assert NEEDLE text includes FACE, searching from START when provided."
+  (let* ((text (buffer-string))
+         (pos (string-match needle text start))
+         (actual (and pos (get-text-property pos 'face text))))
+    (should pos)
+    (should (benedict-vui-turn-test--face-member-p actual face))
+    pos))
+
 (ert-deftest benedict-vui-turn-mount-user-renders-badge-and-user-styling ()
   "Turn mounts user messages with USER badge and user face text."
   (with-mounted-vui-component
@@ -176,7 +185,16 @@
       (should (< question-pos activity-pos))
       (should (< activity-pos thinking-pos))
       (should (< thinking-pos draft-label-pos))
-      (should (< draft-label-pos draft-text-pos)))))
+      (should (< draft-label-pos draft-text-pos))
+      (should (benedict-vui-turn-test--face-member-p
+               (get-text-property prompt-pos 'face text)
+               'benedict-chat-turn-prompt-header))
+      (should (benedict-vui-turn-test--face-member-p
+               (get-text-property activity-pos 'face text)
+               'benedict-chat-turn-active))
+      (should (benedict-vui-turn-test--face-member-p
+               (get-text-property draft-text-pos 'face text)
+               'benedict-chat-turn-active)))))
 
 (ert-deftest benedict-vui-turn-active-turn-without-execution-renders-working-state ()
   "Active turns without execution blocks still render a working activity lane."
@@ -198,7 +216,10 @@
       (should (string-match-p "Prompt" text))
       (should (string-match-p "Activity" text))
       (should (string-match-p "Waiting for assistant output." text))
-      (should (string-match-p "Draft answer" text)))))
+      (should (string-match-p "Draft answer" text))
+      (benedict-vui-turn-test--assert-face-at-match
+       "Waiting for assistant output."
+       'benedict-chat-turn-active))))
 
 (ert-deftest benedict-vui-turn-completed-turn-promotes-answer-and-collapses-details ()
   "Completed turns show the final answer first and hide execution detail by default."
@@ -255,8 +276,59 @@
       (should-not (string-match-p "Execution details" text))
       (should-not (string-match-p "Tool: bash" text))
       (let ((case-fold-search nil))
-        (should-not (string-match-p "THINKING" text)))
-      (should (string-match-p "Show details" text)))))
+      (should-not (string-match-p "THINKING" text)))
+      (should (string-match-p "Show details" text))
+      (should (benedict-vui-turn-test--face-member-p
+               (get-text-property prompt-pos 'face text)
+               'benedict-chat-turn-prompt-header))
+      (should (benedict-vui-turn-test--face-member-p
+               (get-text-property answer-pos 'face text)
+               'benedict-chat-turn-outcome))
+      (should (benedict-vui-turn-test--face-member-p
+               (get-text-property final-pos 'face text)
+               'benedict-chat-turn-outcome))
+      (should (benedict-vui-turn-test--face-member-p
+               (get-text-property execution-pos 'face text)
+               'benedict-chat-turn-summary))
+      (should (benedict-vui-turn-test--face-member-p
+               (get-text-property summary-pos 'face text)
+               'benedict-chat-turn-summary))
+      (should (benedict-vui-turn-test--face-member-p
+               (get-text-property highlight-pos 'face text)
+               'benedict-chat-turn-summary)))))
+
+(ert-deftest benedict-vui-turn-expanded-execution-details-use-detail-face ()
+  "Expanded execution detail regions keep turn-level detail styling."
+  (with-mounted-vui-component
+      (vui-component 'benedict-vui-turn
+                     :turn (list :id "u1"
+                                 :prompt-text "Question"
+                                 :active nil
+                                 :streaming nil
+                                 :completed t
+                                 :historical t
+                                 :has-execution-blocks t
+                                 :execution-expanded t
+                                 :execution-summary '(:tool-count 1
+                                                     :tool-names ("bash")
+                                                     :has-thinking t)
+                                 :messages (list (list :id "u1" :role 'user :content "Question")
+                                                 (list :id "a1"
+                                                       :role 'assistant
+                                                       :content "Final answer"
+                                                       :thinking "Reasoning"
+                                                       :tool-calls (list
+                                                                    (list :id "call-1"
+                                                                          :name "bash"
+                                                                          :arguments "pwd"))))))
+    (let* ((text (buffer-string))
+           (details-pos (string-match "Execution details" text))
+           (thinking-pos (string-match "THINKING" text)))
+      (should details-pos)
+      (should thinking-pos)
+      (should (benedict-vui-turn-test--face-member-p
+               (get-text-property details-pos 'face text)
+               'benedict-chat-turn-detail)))))
 
 (ert-deftest benedict-vui-turn-completed-turn-expands-execution-details-when-enabled ()
   "Completed turns render execution blocks when expansion is enabled at turn scope."
