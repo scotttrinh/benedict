@@ -10,8 +10,9 @@
 (require 'subr-x)
 (require 'vui)
 (require 'benedict-message)
-(require 'benedict-vui-badge)
 (require 'benedict-vui-content-block-list)
+(require 'benedict-vui-execution-summary)
+(require 'benedict-vui-turn-section)
 (require 'benedict-vui-turn-header)
 
 (defun benedict-vui-turn--coerce-message (message)
@@ -177,33 +178,6 @@
               (benedict-vui-turn--apply-face-to-block block face))
             blocks)))
 
-(defun benedict-vui-turn--message-node (message collapsed-blocks on-toggle-block)
-  "Return a rendered node for MESSAGE.
-
-COLLAPSED-BLOCKS and ON-TOGGLE-BLOCK are forwarded to the block list."
-  (let* ((canonical-message (benedict-vui-turn--coerce-message message))
-         (actual-role (benedict-vui-turn--normalize-role
-                       (and canonical-message
-                            (benedict-message-role canonical-message))))
-         (actual-timestamp (and canonical-message
-                                (benedict-message-timestamp canonical-message)))
-         (actual-metadata (and canonical-message
-                               (benedict-message-metadata canonical-message)))
-         (actual-message-key (and canonical-message
-                                  (benedict-message-id canonical-message)))
-         (face (benedict-vui-turn--face-for-role actual-role actual-metadata))
-         (actual-blocks (benedict-vui-turn--build-blocks canonical-message actual-role))
-         (final-blocks (mapcar (lambda (block)
-                                 (benedict-vui-turn--apply-face-to-block block face))
-                               actual-blocks))
-         (header (vui-component 'benedict-vui-turn-header
-                                :role actual-role
-                                :timestamp actual-timestamp
-                                :metadata actual-metadata))
-         (content (benedict-vui-turn--content-node
-                   final-blocks actual-message-key collapsed-blocks on-toggle-block)))
-    (vui-vstack header content)))
-
 (defun benedict-vui-turn--content-node (blocks message-key collapsed-blocks on-toggle-block)
   "Return a rendered content node for BLOCKS using MESSAGE-KEY.
 
@@ -307,69 +281,26 @@ COLLAPSED-BLOCKS and ON-TOGGLE-BLOCK are forwarded to the block list."
       (push "approval" items))
     (nreverse items)))
 
-(defun benedict-vui-turn--execution-summary-node (turn expanded on-toggle)
-  "Return summary node for TURN using EXPANDED and ON-TOGGLE."
-  (let* ((summary (plist-get turn :execution-summary))
-         (items (benedict-vui-turn--execution-summary-items summary))
-         (highlights (plist-get summary :highlights))
-         (children (list (benedict-vui-turn--section-label
-                          'assistant "Execution" nil 'benedict-chat-turn-summary))))
-    (when items
-      (setq children
-            (append children
-                    (list (vui-text (mapconcat #'identity items " | ")
-                                    :face '(benedict-chat-turn-summary
-                                            benedict-chat-header-time))))))
-    (when highlights
-      (setq children
-            (append children
-                    (list (vui-text (mapconcat #'identity highlights " | ")
-                                    :face (if (plist-get summary :has-errors)
-                                              '(benedict-chat-turn-summary
-                                                benedict-chat-error)
-                                            '(benedict-chat-turn-summary
-                                              benedict-chat-header-time)))))))
-    (setq children
-          (append children
-                  (list (vui-button (if expanded "Hide details" "Show details")
-                                    :on-click (lambda (&rest _)
-                                                (when (functionp on-toggle)
-                                                  (funcall on-toggle (not expanded))))))))
-    (apply #'vui-vstack (append (list :spacing 1) children))))
-
-(defun benedict-vui-turn--section-label (status title &optional detail face)
-  "Return a section label node using STATUS, TITLE, optional DETAIL, and FACE."
-  (let ((children (list (vui-component 'benedict-vui-badge :status status)
-                        (vui-text (propertize title 'face (or face 'benedict-chat-header))))))
-    (when detail
-      (setq children (append children
-                             (list (vui-text "·"
-                                             :face (if face
-                                                       (list face 'benedict-chat-header-separator)
-                                                     'benedict-chat-header-separator))
-                                   (vui-text (propertize detail
-                                                         'face (if face
-                                                                   (list face 'benedict-chat-header-time)
-                                                                 'benedict-chat-header-time)))))))
-    (apply #'vui-hstack children)))
-
 (defun benedict-vui-turn--prompt-header-node (prompt-message prompt-text)
   "Return a dedicated prompt header node for PROMPT-MESSAGE and PROMPT-TEXT."
   (let* ((message-key (and prompt-message (benedict-message-id prompt-message)))
          (content (or prompt-text (benedict-vui-turn--message-text prompt-message) ""))
-         (children (list (benedict-vui-turn--section-label
-                          'user "Prompt" nil 'benedict-chat-turn-prompt-header))))
-    (when (and (stringp content)
-               (not (string-empty-p content)))
-      (setq children (append children
-                             (list (vui-component 'benedict-vui-content-block-list
-                                                  :blocks (benedict-vui-turn--blocks-with-region-face
-                                                           (list (list :type 'text :content content))
-                                                           'benedict-chat-turn-prompt-header)
-                                                  :collapsed-blocks nil
-                                                  :message-key message-key
-                                                  :on-toggle-block nil)))))
-    (apply #'vui-vstack (append (list :spacing 1) children))))
+         (content-node
+          (when (and (stringp content)
+                     (not (string-empty-p content)))
+            (vui-component 'benedict-vui-content-block-list
+                           :blocks (benedict-vui-turn--blocks-with-region-face
+                                    (list (list :type 'text :content content))
+                                    'benedict-chat-turn-prompt-header)
+                           :collapsed-blocks nil
+                           :message-key message-key
+                           :on-toggle-block nil))))
+    (vui-component 'benedict-vui-turn-section
+                   :status 'user
+                   :title "Prompt"
+                   :detail nil
+                   :face 'benedict-chat-turn-prompt-header
+                   :content content-node)))
 
 (defun benedict-vui-turn--active-turn-node (turn collapsed-blocks on-toggle-block)
   "Return active turn layout for TURN.
@@ -388,32 +319,40 @@ COLLAPSED-BLOCKS and ON-TOGGLE-BLOCK are forwarded to rendered content blocks."
                     (benedict-vui-turn--prompt-header-node
                      prompt-message
                      (plist-get turn :prompt-text))
-                    (vui-vstack
-                     :spacing 1
-                     (benedict-vui-turn--section-label
-                      'assistant "Activity" "Working" 'benedict-chat-turn-active)
-                     (if activity-blocks
-                         (benedict-vui-turn--content-node
-                          (benedict-vui-turn--blocks-with-region-face
-                           activity-blocks
-                           'benedict-chat-turn-detail)
-                          draft-message-key collapsed-blocks on-toggle-block)
-                       (vui-text (propertize "Waiting for assistant output."
-                                             'face '(benedict-chat-turn-active
-                                                     benedict-chat-header-time))))))))
+                    (vui-component 'benedict-vui-turn-section
+                                   :status 'assistant
+                                   :title "Activity"
+                                   :detail "Working"
+                                   :face 'benedict-chat-turn-active
+                                   :content (if activity-blocks
+                                                (benedict-vui-turn--content-node
+                                                 (benedict-vui-turn--blocks-with-region-face
+                                                  activity-blocks
+                                                  'benedict-chat-turn-detail)
+                                                 draft-message-key
+                                                 collapsed-blocks
+                                                 on-toggle-block)
+                                              (vui-text
+                                               (propertize
+                                                "Waiting for assistant output."
+                                                'face '(benedict-chat-turn-active
+                                                        benedict-chat-header-time))))))))
     (when draft-blocks
       (setq children
             (append children
                     (list
-                     (vui-vstack
-                      :spacing 1
-                      (benedict-vui-turn--section-label
-                       'assistant "Draft answer" nil 'benedict-chat-turn-active)
-                      (benedict-vui-turn--content-node
-                       (benedict-vui-turn--blocks-with-region-face
-                        draft-blocks
-                        'benedict-chat-turn-active)
-                       draft-message-key collapsed-blocks on-toggle-block))))))
+                     (vui-component 'benedict-vui-turn-section
+                                    :status 'assistant
+                                    :title "Draft answer"
+                                    :detail nil
+                                    :face 'benedict-chat-turn-active
+                                    :content (benedict-vui-turn--content-node
+                                              (benedict-vui-turn--blocks-with-region-face
+                                               draft-blocks
+                                               'benedict-chat-turn-active)
+                                              draft-message-key
+                                              collapsed-blocks
+                                              on-toggle-block))))))
     (apply #'vui-vstack (append (list :spacing 1) children))))
 
 (defun benedict-vui-turn--completed-turn-node
@@ -439,34 +378,41 @@ EXECUTION-EXPANDED and ON-TOGGLE-EXECUTION control turn-level detail visibility.
       (setq children
             (append children
                     (list
-                     (vui-vstack
-                      :spacing 1
-                      (benedict-vui-turn--section-label
-                       'assistant "Answer" nil 'benedict-chat-turn-outcome)
-                      (benedict-vui-turn--content-node
-                       (benedict-vui-turn--blocks-with-region-face
-                        outcome-blocks
-                        'benedict-chat-turn-outcome)
-                       outcome-message-key nil nil))))))
+                     (vui-component 'benedict-vui-turn-section
+                                    :status 'assistant
+                                    :title "Answer"
+                                    :detail nil
+                                    :face 'benedict-chat-turn-outcome
+                                    :content (benedict-vui-turn--content-node
+                                              (benedict-vui-turn--blocks-with-region-face
+                                               outcome-blocks
+                                               'benedict-chat-turn-outcome)
+                                              outcome-message-key nil nil))))))
     (when execution-blocks
       (setq children
             (append children
-                    (list (benedict-vui-turn--execution-summary-node
-                           turn execution-expanded on-toggle-execution))))
+                    (list (vui-component 'benedict-vui-execution-summary
+                                         :items (benedict-vui-turn--execution-summary-items
+                                                 (plist-get turn :execution-summary))
+                                         :summary (plist-get turn :execution-summary)
+                                         :expanded execution-expanded
+                                         :on-toggle on-toggle-execution))))
       (when execution-expanded
         (setq children
               (append children
                       (list
-                       (vui-vstack
-                        :spacing 1
-                        (benedict-vui-turn--section-label
-                         'assistant "Execution details" nil 'benedict-chat-turn-detail)
-                        (benedict-vui-turn--content-node
-                         (benedict-vui-turn--blocks-with-region-face
-                          execution-blocks
-                          'benedict-chat-turn-detail)
-                         outcome-message-key
-                         collapsed-blocks on-toggle-block)))))))
+                       (vui-component 'benedict-vui-turn-section
+                                      :status 'assistant
+                                      :title "Execution details"
+                                      :detail nil
+                                      :face 'benedict-chat-turn-detail
+                                      :content (benedict-vui-turn--content-node
+                                                (benedict-vui-turn--blocks-with-region-face
+                                                 execution-blocks
+                                                 'benedict-chat-turn-detail)
+                                                outcome-message-key
+                                                collapsed-blocks
+                                                on-toggle-block)))))))
     (unless outcome-blocks
       (setq children
             (append children
