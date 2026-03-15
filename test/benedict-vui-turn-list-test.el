@@ -5,52 +5,11 @@
 
 ;;; Code:
 
-(require 'cl-lib)
 (require 'ert)
 (require 'subr-x)
 (require 'vui)
 (require 'test/benedict-vui-test-utils)
 (require 'benedict-vui-turn-list)
-
-(defun benedict-vui-turn-list-test--count-matches (text pattern)
-  "Count non-overlapping occurrences of PATTERN in TEXT."
-  (let ((start 0)
-        (count 0))
-    (while (string-match pattern text start)
-      (setq count (1+ count)
-            start (match-end 0)))
-    count))
-
-(ert-deftest benedict-vui-turn-list-mount-groups-and-orders-turns ()
-  "Mounted turn list preserves grouped turn ordering in output."
-  (with-mounted-vui-component
-      (vui-component 'benedict-vui-turn-list
-                     :conversation (list (list :role 'assistant :content "Lead reply")
-                                         (list :id "u1" :role 'user :content "Question one")
-                                         (list :id "a1" :role 'assistant :content "Answer one")
-                                         (list :role 'assistant :content "Second followup")
-                                         (list :id "u2" :role 'user :content "Question two")
-                                         (list :id "a2" :role 'assistant :content "Answer two"))
-                     :streaming nil
-                     :collapsed-blocks nil
-                     :on-toggle-block #'ignore)
-    (let* ((text (buffer-string))
-           (lead-pos (string-match "Lead reply" text))
-           (q1-pos (string-match "Question one" text))
-           (a1-followup-pos (string-match "Second followup" text))
-           (q2-pos (string-match "Question two" text))
-           (a2-pos (string-match "Answer two" text)))
-      (should lead-pos)
-      (should q1-pos)
-      (should a1-followup-pos)
-      (should q2-pos)
-      (should a2-pos)
-      (should (< lead-pos q1-pos))
-      (should (< q1-pos a1-followup-pos))
-      (should (< a1-followup-pos q2-pos))
-      (should (< q2-pos a2-pos))
-      (should (= (benedict-vui-turn-list-test--count-matches text "USER") 3))
-      (should (>= (benedict-vui-turn-list-test--count-matches text "ASSISTANT") 3)))))
 
 (ert-deftest benedict-vui-turn-list-mount-streaming-prefers-display-content-and-synthetic-key ()
   "Mounted streaming message uses display content and nav-index fallback key."
@@ -175,68 +134,6 @@
     (should (plist-get turn :has-execution-blocks))
     (should (equal (plist-get summary :tool-names) '("bash")))
     (should (plist-get summary :has-thinking))))
-
-(ert-deftest benedict-vui-turn-list-mount-active-turn-uses-prompt-activity-layout ()
-  "Mounted active turns keep the prompt attached to live assistant work."
-  (with-mounted-vui-component
-      (vui-component 'benedict-vui-turn-list
-                     :conversation (list (list :id "u1" :role 'user :content "Question one"))
-                     :streaming '(:status active
-                               :content "Draft answer"
-                               :thinking "Working"
-                               :tool-calls ((:id "call-1" :name "bash" :arguments "pwd")))
-                     :collapsed-blocks nil
-                     :on-toggle-block #'ignore)
-    (let* ((text (buffer-string))
-           (prompt-pos (string-match "Prompt" text))
-           (question-pos (string-match "Question one" text))
-           (activity-pos (string-match "Activity" text))
-           (tool-pos (string-match "Tool: bash" text))
-           (draft-label-pos (string-match "Draft answer" text))
-           (draft-text-pos (string-match "Draft answer" text (1+ draft-label-pos))))
-      (should prompt-pos)
-      (should question-pos)
-      (should activity-pos)
-      (should tool-pos)
-      (should draft-label-pos)
-      (should draft-text-pos)
-      (should (< prompt-pos question-pos))
-      (should (< question-pos activity-pos))
-      (should (< activity-pos tool-pos))
-      (should (< tool-pos draft-label-pos))
-      (should (< draft-label-pos draft-text-pos)))))
-
-(ert-deftest benedict-vui-turn-list-mount-completed-turn-collapses-execution-detail ()
-  "Mounted completed turns prefer the answer card and summary over raw detail."
-  (with-mounted-vui-component
-      (vui-component 'benedict-vui-turn-list
-                     :conversation (list (list :id "u1" :role 'user :content "Question one")
-                                         (list :id "a1" :role 'assistant
-                                               :content "Answer one"
-                                               :thinking "Reasoning"
-                                               :tool-calls (list (list :id "call-1"
-                                                                       :name "bash"
-                                                                       :arguments "pwd")))
-                                         (list :id "t1" :role 'tool
-                                               :tool-call-id "call-1"
-                                               :name "bash"
-                                               :content "Tool error: boom"
-                                               :metadata '(:status failure
-                                                          :error (:message "boom"))))
-                     :streaming nil
-                     :collapsed-blocks nil
-                     :on-toggle-block #'ignore)
-    (let ((text (buffer-string)))
-      (should (string-match-p "Prompt" text))
-      (should (string-match-p "Answer" text))
-      (should (string-match-p "Answer one" text))
-      (should (string-match-p "Execution" text))
-      (should (string-match-p "1 tool" text))
-      (should (string-match-p "bash: Tool error: boom" text))
-      (let ((case-fold-search nil))
-        (should-not (string-match-p "THINKING" text)))
-      (should-not (string-match-p "Tool: bash" text))
-      (should-not (string-match-p "Result: bash" text)))))
 
 (provide 'test/benedict-vui-turn-list-test)
 ;;; benedict-vui-turn-list-test.el ends here

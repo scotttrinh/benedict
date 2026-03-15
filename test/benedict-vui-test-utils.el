@@ -143,5 +143,28 @@ control which properties are asserted."
        :region-kind region-kind)
       pos)))
 
+(cl-defun benedict-vui-test--assert-turn-properties-for
+    (needle &key turn-id turn-target message-key)
+  "Assert turn-scoped text properties at NEEDLE's first match.
+
+TURN-ID checks `benedict-turn-id'.
+TURN-TARGET checks `benedict-turn-target'.
+MESSAGE-KEY checks `benedict-message-key'."
+  (save-excursion
+    (goto-char (point-min))
+    (should (search-forward needle nil t))
+    (let* ((pos (match-beginning 0))
+           (text (buffer-string)))
+      (when turn-id
+        (should (equal (get-text-property pos 'benedict-turn-id text)
+                       turn-id)))
+      (when turn-target
+        (should (eq (get-text-property pos 'benedict-turn-target text)
+                    turn-target)))
+      (when message-key
+        (should (equal (get-text-property pos 'benedict-message-key text)
+                       message-key)))
+      pos)))
+
 (provide 'test/benedict-vui-test-utils)
 ;;; benedict-vui-test-utils.el ends here

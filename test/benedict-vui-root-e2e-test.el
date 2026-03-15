@@ -134,41 +134,72 @@
           "mock tool output")))
     (with-mounted-vui-root
       (benedict-vui-root-e2e-test--dispatch session "Inspect README")
-      (should
-       (benedict-vui-test--wait-until
-        (lambda ()
-          (let ((text (benedict-vui-root-e2e-test--buffer-text)))
-            (and (string-match-p "Prompt" text)
-                 (string-match-p "Inspect README" text)
-                 (string-match-p "Activity" text)
-                 (string-match-p "Draft answer" text)
-                 (string-match-p "Draft" text)
-                 (string-match-p "ACTIVE" text))))
-        :timeout 2.0))
-      (should (benedict-vui-test--wait-for-request-finished session 2.0))
-      (vui-flush-sync)
-      (let ((text (benedict-vui-root-e2e-test--buffer-text)))
-        (should (string-match-p "Prompt" text))
-        (should (string-match-p "Inspect README" text))
-        (should (string-match-p "Answer" text))
-        (should (string-match-p "Draft" text))
-        (should (string-match-p "Execution" text))
-        (should (string-match-p "1 tool | read_file | thinking" text))
-        (should (string-match-p "Show details" text))
-        (should-not (string-match-p "Activity" text))
-        (should-not (string-match-p "Draft answer" text))
-        (should-not (string-match-p "Execution details" text))
-        (should-not (string-match-p "Result: read_file" text))
-        (should-not (string-match-p "ACTIVE" text)))
-      (benedict-vui-test--click-button-labeled "Show details")
-      (vui-flush-sync)
-      (let ((text (benedict-vui-root-e2e-test--buffer-text)))
-        (should (string-match-p "Execution details" text))
-        (should (string-match-p "Tool: read_file" text))
-        (should (string-match-p "Result: read_file" text))
-        (should (string-match-p "SUCCESS" text))
-        (should (string-match-p "mock tool output" text)))
-      (funcall done))))
+      (let ((prompt-id (benedict-message-id
+                        (car (benedict-vui-root-e2e-test--messages session)))))
+        (should
+         (benedict-vui-test--wait-until
+          (lambda ()
+            (let ((text (benedict-vui-root-e2e-test--buffer-text)))
+              (and (string-match-p "Prompt" text)
+                   (string-match-p "Inspect README" text)
+                   (string-match-p "Activity" text)
+                   (string-match-p "Draft answer" text)
+                   (string-match-p "Draft" text)
+                   (string-match-p "ACTIVE" text))))
+          :timeout 2.0))
+        (benedict-vui-test--assert-turn-properties-for
+         "Prompt"
+         :turn-id prompt-id
+         :turn-target 'prompt
+         :message-key prompt-id)
+        (benedict-vui-test--assert-turn-properties-for
+         "Activity"
+         :turn-id prompt-id
+         :turn-target 'activity)
+        (should (benedict-vui-test--wait-for-request-finished session 2.0))
+        (vui-flush-sync)
+        (let* ((text (benedict-vui-root-e2e-test--buffer-text))
+               (messages (benedict-vui-root-e2e-test--messages session))
+               (assistant-id (benedict-message-id (nth 1 messages))))
+          (should (string-match-p "Prompt" text))
+          (should (string-match-p "Inspect README" text))
+          (should (string-match-p "Answer" text))
+          (should (string-match-p "Draft" text))
+          (should (string-match-p "Execution" text))
+          (should (string-match-p "1 tool | read_file | thinking" text))
+          (should (string-match-p "Show details" text))
+          (should-not (string-match-p "Activity" text))
+          (should-not (string-match-p "Draft answer" text))
+          (should-not (string-match-p "Execution details" text))
+          (should-not (string-match-p "Result: read_file" text))
+          (should-not (string-match-p "ACTIVE" text))
+          (benedict-vui-test--assert-turn-properties-for
+           "Prompt"
+           :turn-id prompt-id
+           :turn-target 'prompt
+           :message-key prompt-id)
+          (benedict-vui-test--assert-turn-properties-for
+           "Answer"
+           :turn-id prompt-id
+           :turn-target 'outcome
+           :message-key assistant-id)
+          (benedict-vui-test--assert-turn-properties-for
+           "Execution"
+           :turn-id prompt-id
+           :turn-target 'execution-summary))
+        (benedict-vui-test--click-button-labeled "Show details")
+        (vui-flush-sync)
+        (let ((text (benedict-vui-root-e2e-test--buffer-text)))
+          (should (string-match-p "Execution details" text))
+          (should (string-match-p "Tool: read_file" text))
+          (should (string-match-p "Result: read_file" text))
+          (should (string-match-p "SUCCESS" text))
+          (should (string-match-p "mock tool output" text))
+          (benedict-vui-test--assert-turn-properties-for
+           "Execution details"
+           :turn-id prompt-id
+           :turn-target 'execution-details))
+        (funcall done)))))
 
 (ert-deftest-async benedict-vui-root-e2e-streaming-thinking-payload-visible (done)
   "Streaming + thinking payload renders the thinking block label."

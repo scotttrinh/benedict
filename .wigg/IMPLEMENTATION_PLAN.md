@@ -115,6 +115,7 @@ Primary targets:
 Concrete tasks:
 
 - remove or retire legacy VUI rendering paths once all current turn-centric behavior is covered through the canonical path
+- done: consolidated redundant turn/turn-list VUI render tests into mounted root end-to-end coverage so the canonical session-driven turn path owns prompt/activity/outcome/detail navigation assertions
 - done: replaced the Vercel logging compatibility stubs with direct `lgr` logging, updated the remaining fake-provider caller, and rewrote stale logging commentary/docs that referenced removed knobs
 - remove obsolete variables and stale comments once callers are migrated
 - clean up misleading "skeleton", "placeholder", and "stub" commentary where the implementation is no longer stubbed
@@ -278,8 +279,9 @@ The best first batch is:
 - 2026-03-15: session-recorded tool results now preserve structured success metadata (`:details`, `:ui`, `:effects`) across runtime, persistence, and mounted VUI rendering; targeted regressions cover session persistence and mounted chat rendering.
 - 2026-03-15: removed the dead Vercel provider logging shim, moved Vercel/fake-provider diagnostics onto real `lgr` calls, and updated README/comments that still described the retired log-level/file logging knobs.
 - 2026-03-15: removed the legacy single-message fallback from `components/benedict-vui-turn.el` so the turn component only renders canonical turn data; trimmed legacy-only turn tests and kept coverage on active/completed turn behavior plus missing-prompt fallback.
+- 2026-03-15: promoted turn navigation and execution-summary assertions into mounted root e2e coverage, then deleted duplicate turn/turn-list render tests that only rechecked prompt/activity/detail ordering below the canonical path.
 - Decision: provider-facing replay still sends canonical tool-result text content only; UI/persistence-only metadata remains on canonical transcript blocks and metadata.
-- Next slice: classify the remaining VUI unit tests by behavioral value and collapse shallow structure checks into the stronger turn-list/root end-to-end coverage.
+- Next slice: audit the remaining conversation-view/root VUI unit tests for spinner/layout checks that can be collapsed into fewer session-driven flows without losing malformed-input edge coverage.
 
 This batch improves correctness, test value, and documentation accuracy with minimal feature expansion.
 
