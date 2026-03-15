@@ -29,7 +29,9 @@
                      :register-actions nil
                      :on-provider-click nil
                      :on-continue-checkpoint nil
-                     :on-stop-checkpoint nil)
+                     :on-stop-checkpoint nil
+                     :on-approve-approval nil
+                     :on-deny-approval nil)
     (let ((text (buffer-string)))
       (should (string-match-p "Chat" text))
       (should-not (string-match-p "No context" text))
@@ -52,7 +54,9 @@
                          :register-actions nil
                          :on-provider-click nil
                          :on-continue-checkpoint nil
-                         :on-stop-checkpoint nil)
+                         :on-stop-checkpoint nil
+                         :on-approve-approval nil
+                         :on-deny-approval nil)
         (let ((text (buffer-string)))
           (should (string-match-p "Session Context" text))
           (should (string-match-p "Session:" text))
@@ -179,7 +183,9 @@
                        :register-actions nil
                        :on-provider-click nil
                        :on-continue-checkpoint (lambda (&rest _) (setq continued t))
-                       :on-stop-checkpoint (lambda (&rest _) (setq stopped t)))
+                       :on-stop-checkpoint (lambda (&rest _) (setq stopped t))
+                       :on-approve-approval nil
+                       :on-deny-approval nil)
       (benedict-vui-root-test--emit-session-event
        session
        'checkpoint-requested
@@ -193,6 +199,38 @@
       (should continued)
       (benedict-vui-test--click-button-labeled "Stop")
       (should stopped))))
+
+(ert-deftest benedict-vui-root-approval-block-renders-buttons-and-calls-actions ()
+  "Approval events render persistent controls that call their handlers."
+  (let ((approved nil)
+        (denied nil)
+        (benedict-session--registry (make-hash-table :test #'equal))
+        (session (benedict-session-create :title "approval"
+                                          :provider 'fake
+                                          :model "fake/model")))
+    (with-mounted-vui-component
+        (vui-component 'benedict-vui-root
+                       :session session
+                       :register-actions nil
+                       :on-provider-click nil
+                       :on-continue-checkpoint nil
+                       :on-stop-checkpoint nil
+                       :on-approve-approval (lambda (&rest _) (setq approved t))
+                       :on-deny-approval (lambda (&rest _) (setq denied t)))
+      (benedict-vui-root-test--emit-session-event
+       session
+       'approval-requested
+       :approval '(:type tool-approval
+                   :tool-id write
+                   :approval confirm
+                   :args (:path "README.org")))
+      (should (string-match-p "Approval request: write" (buffer-string)))
+      (should (string-match-p "Approve" (buffer-string)))
+      (should (string-match-p "Deny" (buffer-string)))
+      (benedict-vui-test--click-button-labeled "Approve")
+      (should approved)
+      (benedict-vui-test--click-button-labeled "Deny")
+      (should denied))))
 
 (ert-deftest benedict-vui-root-toggle-collapsed-block-list-representation ()
   "Toggling collapsed blocks behaves correctly for list state."

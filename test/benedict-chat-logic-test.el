@@ -187,7 +187,6 @@
                     :tool-calls (list (list :id "call-123"
                                             :name 'project-search
                                             :arguments '(:query "needle"))))))
-       ((symbol-function benedict--prompt-for-approval) (lambda (&rest _args) t))
        ((symbol-function benedict-search-project-sync)
         (lambda (&rest _args)
           '(:query "needle"
@@ -236,7 +235,6 @@
                     :tool-calls (list (list :id "call-error"
                                             :name 'demo-tool
                                             :arguments '(:foo "bar"))))))
-       ((symbol-function benedict--prompt-for-approval) (lambda (&rest _args) t))
        ((symbol-function benedict-tool-invoke)
         (lambda (&rest _args)
           (signal 'wrong-type-argument (list 'stringp 123)))))

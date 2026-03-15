@@ -199,7 +199,9 @@ See `benedict-session' for the in-memory session data structure.")
            :register-actions #'benedict-chat--vui-register-actions
            :on-provider-click #'benedict-chat-choose-model
            :on-continue-checkpoint #'benedict-chat-continue-checkpoint
-           :on-stop-checkpoint #'benedict-chat-stop-checkpoint)
+           :on-stop-checkpoint #'benedict-chat-stop-checkpoint
+           :on-approve-approval #'benedict-chat-approve-pending-tool
+           :on-deny-approval #'benedict-chat-deny-pending-tool)
           (buffer-name))))
 
 ;; -------------------------------------------------------------------
@@ -473,6 +475,8 @@ When SKIP-CONTEXT is non-nil, do not append context slices."
     (define-key m (kbd "C-c C-x C-f") #'benedict-chat-load-session)
     (define-key m (kbd "C-c C-]") #'benedict-chat-continue-checkpoint)
     (define-key m (kbd "C-c C-[") #'benedict-chat-stop-checkpoint)
+    (define-key m (kbd "C-c C-.") #'benedict-chat-approve-pending-tool)
+    (define-key m (kbd "C-c C-,") #'benedict-chat-deny-pending-tool)
     (define-key m (kbd "g l") #'benedict-chat-nav-jump-to-latest)
     (define-key m (kbd "g a") #'benedict-chat-nav-jump-to-last-assistant)
     (define-key m (kbd "g A") #'benedict-chat-nav-jump-to-last-assistant-with-tools)
@@ -509,7 +513,7 @@ When SKIP-CONTEXT is non-nil, do not append context slices."
     (benedict-session-cancel benedict-chat--session))
   (when (and benedict-chat--session
              (memq (benedict-session-state benedict-chat--session)
-                   '(running checkpoint)))
+                   '(running checkpoint approval-pending)))
     (benedict-session-stop benedict-chat--session))
   (message "Benedict: loop/request canceled by user"))
 
@@ -561,6 +565,24 @@ When SKIP-CONTEXT is non-nil, do not append context slices."
     (benedict-session-stop session)
     (message "Benedict: checkpoint stopped")))
 
+(defun benedict-chat-approve-pending-tool ()
+  "Approve the active pending tool call."
+  (interactive)
+  (let ((session (benedict-chat--current-session)))
+    (unless (benedict-session-approval-pending-p session)
+      (user-error "Session is not waiting on a tool approval"))
+    (benedict-session-approve-pending-tool session)
+    (message "Benedict: tool approved")))
+
+(defun benedict-chat-deny-pending-tool ()
+  "Deny the active pending tool call."
+  (interactive)
+  (let ((session (benedict-chat--current-session)))
+    (unless (benedict-session-approval-pending-p session)
+      (user-error "Session is not waiting on a tool approval"))
+    (benedict-session-deny-pending-tool session)
+    (message "Benedict: tool denied")))
+
 ;;; Session Event Subscription
 
 (defun benedict-chat--subscribe-to-session (session)
@@ -588,6 +610,11 @@ Returns a function suitable for adding to `benedict-session-event-hook'."
       (plist-get payload :old) (plist-get payload :new)))
     ('checkpoint-requested
      (message "Benedict: checkpoint requested; use the in-buffer controls or checkpoint commands"))
+    ('approval-requested
+     (message "Benedict: tool approval requested; use the in-buffer controls or approval commands"))
+    ('approval-resolved
+     (message "Benedict: tool approval %s"
+              (plist-get payload :resolution)))
     ('request-completed
      (benedict-chat--observe-request-completed payload))
     ('loop-stopped
@@ -615,6 +642,9 @@ Returns a function suitable for adding to `benedict-session-event-hook'."
     ('streaming
      (benedict-chat-status--status-reset)
      (benedict-chat-status--status-start-timer))
+    ('approval-pending
+     (benedict-chat-status--status-reset)
+     (benedict-chat-status--status-stop-timer))
     ('error
      (benedict-chat-status--status-reset)
      (benedict-chat-status--status-stop-timer))

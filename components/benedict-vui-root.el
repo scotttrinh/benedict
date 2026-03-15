@@ -12,6 +12,7 @@
 (require 'benedict-message)
 (require 'benedict-session)
 (require 'benedict-vui-audit-log)
+(require 'benedict-vui-approval-block)
 (require 'benedict-vui-chat-header)
 (require 'benedict-vui-checkpoint-block)
 (require 'benedict-vui-conversation-view)
@@ -88,7 +89,7 @@ toggle based on current membership.  COLLAPSED-BLOCKS may be a list or hash tabl
    ((listp collapsed-blocks) (member block-id collapsed-blocks))
    (t nil)))
 
-(vui-defcomponent benedict-vui-root (session register-actions on-provider-click on-continue-checkpoint on-stop-checkpoint)
+(vui-defcomponent benedict-vui-root (session register-actions on-provider-click on-continue-checkpoint on-stop-checkpoint on-approve-approval on-deny-approval)
   "Root component owning all shared application state."
   :state ((conversation nil)
           (streaming nil)
@@ -97,6 +98,7 @@ toggle based on current membership.  COLLAPSED-BLOCKS may be a list or hash tabl
           (collapsed-blocks nil)
           (session-info nil)
           (checkpoint nil)
+          (approval nil)
           (audit-log nil)
           (error nil)
           (usage nil))
@@ -108,6 +110,8 @@ toggle based on current membership.  COLLAPSED-BLOCKS may be a list or hash tabl
          (initial-model (and session (benedict-session-model session)))
          (initial-usage (and session (benedict-session-last-usage session)))
          (initial-session-info (benedict-vui-root--session-info session))
+         (initial-approval (and session
+                                (copy-tree (benedict-session-pending-question session))))
          (initial-audit-log (and session
                                  (copy-tree
                                   (benedict-harness-audit-log
@@ -125,6 +129,8 @@ toggle based on current membership.  COLLAPSED-BLOCKS may be a list or hash tabl
         (vui-set-state :usage initial-usage))
       (when initial-session-info
         (vui-set-state :session-info initial-session-info))
+      (when initial-approval
+        (vui-set-state :approval initial-approval))
       (when initial-audit-log
         (vui-set-state :audit-log initial-audit-log)))
     (when session
@@ -167,6 +173,10 @@ toggle based on current membership.  COLLAPSED-BLOCKS may be a list or hash tabl
       :checkpoint checkpoint
       :on-continue on-continue-checkpoint
       :on-stop on-stop-checkpoint)
+     (vui-component 'benedict-vui-approval-block
+      :approval approval
+      :on-approve on-approve-approval
+      :on-deny on-deny-approval)
       (vui-component 'benedict-vui-conversation-view
        :conversation render-conversation
        :streaming streaming
@@ -207,6 +217,15 @@ Returns a function that when called unsubscribes from events."
            (lambda (conv)
              (append conv (list entry))))))
      (vui-set-state :session-info (benedict-vui-root--session-info session)))
+    ('message-updated
+     (when-let ((entry (plist-get payload :entry)))
+       (vui-set-state :conversation
+                      (lambda (conv)
+                        (cl-loop for message in conv
+                                 collect (if (equal (benedict-message-id message)
+                                                    (benedict-message-id entry))
+                                             entry
+                                           message))))))
     ('draft-started
      (vui-set-state :streaming
                     (list :status 'active
@@ -237,6 +256,10 @@ Returns a function that when called unsubscribes from events."
                           :elapsed (plist-get payload :elapsed)
                           :total-tokens (plist-get payload :total-tokens)
                           :limit (plist-get payload :limit))))
+    ('approval-requested
+     (vui-set-state :approval (copy-tree (plist-get payload :approval))))
+    ('approval-resolved
+     (vui-set-state :approval nil))
     ('tool-audit
      (when-let ((audit (plist-get payload :audit)))
        (vui-set-state :audit-log
@@ -250,6 +273,8 @@ Returns a function that when called unsubscribes from events."
          (vui-set-state :error (format "Session error: %s -> %s" old-state new-state)))
        (when (not (eq new-state 'checkpoint))
          (vui-set-state :checkpoint nil))
+       (when (not (eq new-state 'approval-pending))
+         (vui-set-state :approval nil))
        (when (and (memq old-state '(streaming running))
                   (eq new-state 'idle))
          (vui-set-state :error nil))))

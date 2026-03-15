@@ -4,6 +4,7 @@
 (require 'ert)
 (require 'cl-lib)
 (require 'benedict-harness)
+(require 'benedict-session)
 (require 'benedict-tools)
 
 ;;; Permission resolver tests
@@ -70,10 +71,9 @@
       (delete-directory test-dir t))))
 
 (ert-deftest benedict-tools-permission-predicate-allows-invocation-test ()
-  "Predicate returning t should allow invocation without prompting."
+  "Predicate returning t should allow invocation without approval UI."
   (let* ((tool-id 'benedict-tools-test-permission-allow)
          (called nil)
-         (prompted nil)
          (old-default (default-value 'benedict-tool-permission-predicate)))
     (unwind-protect
         (progn
@@ -85,15 +85,10 @@
            :approval 'confirm)
           (set-default 'benedict-tool-permission-predicate
                        (lambda (_tool _args) t))
-          (cl-letf (((symbol-function 'benedict--prompt-for-approval)
-                     (lambda (_spec _args)
-                       (setq prompted t)
-                       t)))
-            (let ((result (benedict-tool-invoke tool-id nil)))
-              (should (eq 'success (plist-get result :status)))
-              (should (eq 'ok (plist-get result :output))))
-            (should called)
-            (should-not prompted)))
+          (let ((result (benedict-tool-invoke tool-id nil)))
+            (should (eq 'success (plist-get result :status)))
+            (should (eq 'ok (plist-get result :output))))
+          (should called))
       (set-default 'benedict-tool-permission-predicate old-default)
       (remhash tool-id benedict--tools))))
 
@@ -120,11 +115,10 @@
       (set-default 'benedict-tool-permission-predicate old-default)
       (remhash tool-id benedict--tools))))
 
-(ert-deftest benedict-tools-permission-predicate-error-falls-back-test ()
-  "Predicate errors should fall back to legacy approval flow."
+(ert-deftest benedict-tools-permission-predicate-error-yields-pending-approval-test ()
+  "Predicate errors fall back to approval-required session state."
   (let* ((tool-id 'benedict-tools-test-permission-error)
          (called nil)
-         (prompted nil)
          (old-default (default-value 'benedict-tool-permission-predicate)))
     (unwind-protect
         (progn
@@ -137,23 +131,23 @@
           (set-default 'benedict-tool-permission-predicate
                        (lambda (_tool _args)
                          (error "Predicate failure")))
-          (cl-letf (((symbol-function 'benedict--prompt-for-approval)
-                     (lambda (_spec _args)
-                       (setq prompted t)
-                       t)))
-            (let ((result (benedict-tool-invoke tool-id nil)))
-              (should (eq 'success (plist-get result :status)))
-              (should (eq 'ok (plist-get result :output))))
-            (should called)
-            (should prompted)))
+          (let ((session (benedict-session-create))
+                (frontend (generate-new-buffer " *benedict-tools-approval*")))
+            (unwind-protect
+                (progn
+                  (benedict-session--add-frontend session frontend)
+                  (let ((result (benedict-tool-invoke tool-id nil :session session)))
+                    (should (eq 'pending (plist-get result :status)))
+                    (should (plist-get result :approval)))
+                  (should-not called))
+              (kill-buffer frontend))))
       (set-default 'benedict-tool-permission-predicate old-default)
       (remhash tool-id benedict--tools))))
 
-(ert-deftest benedict-tools-permission-predicate-non-boolean-falls-back-test ()
-  "Non-boolean predicate result should fall back to legacy approval flow."
+(ert-deftest benedict-tools-permission-predicate-non-boolean-yields-pending-approval-test ()
+  "Non-boolean predicate result falls back to approval-required session state."
   (let* ((tool-id 'benedict-tools-test-permission-non-bool)
          (called nil)
-         (prompted nil)
          (old-default (default-value 'benedict-tool-permission-predicate)))
     (unwind-protect
         (progn
@@ -165,16 +159,32 @@
            :approval 'confirm)
           (set-default 'benedict-tool-permission-predicate
                        (lambda (_tool _args) :maybe))
-          (cl-letf (((symbol-function 'benedict--prompt-for-approval)
-                     (lambda (_spec _args)
-                       (setq prompted t)
-                       t)))
-            (let ((result (benedict-tool-invoke tool-id nil)))
-              (should (eq 'success (plist-get result :status)))
-              (should (eq 'ok (plist-get result :output))))
-            (should called)
-            (should prompted)))
+          (let ((session (benedict-session-create))
+                (frontend (generate-new-buffer " *benedict-tools-approval*")))
+            (unwind-protect
+                (progn
+                  (benedict-session--add-frontend session frontend)
+                  (let ((result (benedict-tool-invoke tool-id nil :session session)))
+                    (should (eq 'pending (plist-get result :status)))
+                    (should (plist-get result :approval)))
+                  (should-not called))
+              (kill-buffer frontend))))
       (set-default 'benedict-tool-permission-predicate old-default)
+      (remhash tool-id benedict--tools))))
+
+(ert-deftest benedict-tools-approval-required-without-frontend-test ()
+  "Approval-required tools fail clearly when no frontend is attached."
+  (let* ((tool-id 'benedict-tools-test-no-frontend))
+    (unwind-protect
+        (progn
+          (benedict-tools-register
+           :id tool-id
+           :fn (lambda (&rest _args) 'ok)
+           :approval 'confirm)
+          (let ((result (benedict-tool-invoke tool-id nil :session (benedict-session-create))))
+            (should (eq 'denied (plist-get result :status)))
+            (should (eq 'approval-ui-required
+                        (plist-get (plist-get result :error) :code)))))
       (remhash tool-id benedict--tools))))
 
 (ert-deftest benedict-tools-permission-decision-allow-metadata-test ()

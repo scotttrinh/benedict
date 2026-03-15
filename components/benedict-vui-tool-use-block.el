@@ -37,11 +37,12 @@
    ((null status) 'running)
    ((keywordp status) (intern (substring (symbol-name status) 1)))
    ((symbolp status)
-    (pcase status
+   (pcase status
       ('ok 'success)
       ('error 'failure)
       ('pending 'running)
       ('in-progress 'running)
+      ('awaiting-approval 'awaiting-approval)
       (_ status)))
    ((stringp status)
     (let* ((normalized (replace-regexp-in-string
@@ -101,7 +102,11 @@ MESSAGE-KEY and BLOCK-ID annotate the rendered header."
 (defun benedict-vui-tool-use-block--content-text (tool-call)
   "Return formatted content for TOOL-CALL."
   (let ((arguments (plist-get tool-call :arguments)))
-    (format "Arguments:\n%s"
+    (format "%s\nArguments:\n%s"
+            (pcase (benedict-vui-tool-use-block--normalize-status
+                    (plist-get tool-call :status))
+              ('awaiting-approval "Awaiting approval")
+              (_ ""))
             (benedict-vui-tool-use-block--arguments-string arguments))))
 
 (defun benedict-vui-tool-use-block--content (tool-call message-key block-id)

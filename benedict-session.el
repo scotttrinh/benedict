@@ -223,7 +223,9 @@ Each function receives (SESSION QUESTION-PLIST).")
     (run-hook-with-args 'benedict-session-event-hook
                         session event-type (plist-put payload :event event)))
   (when (eq event-type 'question-raised)
-    (run-hook-with-args 'benedict-session-ask-user-hook session (car payload))))
+    (run-hook-with-args 'benedict-session-ask-user-hook
+                        session
+                        (plist-get payload :question))))
 
 (defun benedict-session-set-state (session new-state)
   "Set SESSION state to NEW-STATE, emitting event if changed."
@@ -231,6 +233,11 @@ Each function receives (SESSION QUESTION-PLIST).")
     (unless (eq old new-state)
       (setf (benedict-session-state session) new-state)
       (benedict-session--emit session 'state-changed :old old :new new-state))))
+
+(defun benedict-session-approval-pending-p (session)
+  "Return non-nil when SESSION is waiting on a tool approval."
+  (and (eq (benedict-session-state session) 'approval-pending)
+       (benedict-session-pending-question session)))
 
 ;;; Messages
 
@@ -290,6 +297,23 @@ Return the updated message or nil if not found."
                               :updates updates
                               :entry updated)
       updated)))
+
+(defun benedict-session--tool-call-statuses (message)
+  "Return MESSAGE tool call statuses from metadata, or nil."
+  (plist-get (benedict-message-metadata message) :tool-call-statuses))
+
+(defun benedict-session--update-tool-call-status (session message-id call-id status)
+  "Update tool CALL-ID in MESSAGE-ID to STATUS for SESSION."
+  (when-let ((entry (benedict-session-get-entry session message-id)))
+    (let* ((metadata (copy-tree (or (benedict-message-metadata entry) nil)))
+           (statuses (copy-tree (or (benedict-session--tool-call-statuses entry) nil)))
+           (existing (assoc call-id statuses)))
+      (if existing
+          (setcdr existing status)
+        (push (cons call-id status) statuses))
+      (benedict-session-update-message
+       session message-id
+       (list :metadata (plist-put metadata :tool-call-statuses statuses))))))
 
 (defun benedict-session-entries-chronological (session)
   "Return SESSION entries in chronological order (oldest first)."
@@ -484,9 +508,9 @@ Clear request and discard draft.  This is an internal callback for dispatch."
 ;;; Dispatch API
 
 (defun benedict-session-busy-p (session)
-  "Return non-nil if SESSION has an active request or is streaming."
+  "Return non-nil if SESSION has an active request or is waiting on approval."
   (or (benedict-session-request-active-p session)
-      (eq (benedict-session-state session) 'streaming)))
+      (memq (benedict-session-state session) '(streaming approval-pending))))
 
 (cl-defun benedict-session-dispatch (session request &key dispatch-fn)
   "Send REQUEST through the provider for SESSION.
@@ -548,7 +572,7 @@ Implementations may ignore OPTIONS.  Return tool output or signal error.")
           (and (integerp (cdr arity))
                (>= (cdr arity) 3))))))
 
-(defun benedict-session--invoke-tool (session tool-call)
+(defun benedict-session--invoke-tool (session tool-call &optional skip-approval)
   "Execute TOOL-CALL plist for SESSION.
 Return plist (:status :output :error).  Emit tool-started and tool-completed events."
   (let* ((tool-id (or (plist-get tool-call :name)
@@ -569,13 +593,17 @@ Return plist (:status :output :error).  Emit tool-started and tool-completed eve
                        (funcall benedict-session-tool-invoke-fn
                                 tool-id arguments
                                 :session session
-                                :harness (benedict-session-harness session))
+                                :harness (benedict-session-harness session)
+                                :skip-approval skip-approval)
                      (funcall benedict-session-tool-invoke-fn tool-id arguments))))
               (if (and (listp raw-result) (plist-member raw-result :status))
                   (progn
                     (setq status (plist-get raw-result :status))
                     (setq output (plist-get raw-result :output))
-                    (setq error-info (plist-get raw-result :error)))
+                    (setq error-info (plist-get raw-result :error))
+                    (when (plist-member raw-result :approval)
+                      (setq output (plist-put output :approval
+                                              (plist-get raw-result :approval)))))
                 (setq output raw-result)))
           (error "No tool invoke function configured"))
       (benedict-tool-denied
@@ -605,6 +633,25 @@ Return plist (:status :output :error).  Emit tool-started and tool-completed eve
           :call-id call-id
           :tool-id tool-id)))
 
+(defun benedict-session--pending-approval (session)
+  "Return the pending approval plist for SESSION, or nil."
+  (let ((pending (benedict-session-pending-question session)))
+    (when (and (listp pending)
+               (eq (plist-get pending :type) 'tool-approval))
+      pending)))
+
+(defun benedict-session--record-tool-result (session result)
+  "Record tool RESULT in SESSION as a transcript entry."
+  (let* ((call-id (plist-get result :call-id))
+         (tool-id (plist-get result :tool-id))
+         (status (plist-get result :status))
+         (output (plist-get result :output))
+         (error-info (plist-get result :error))
+         (message (benedict-session--format-tool-result
+                   tool-id call-id status output error-info)))
+    (benedict-session-add-message session message)
+    result))
+
 (defun benedict-session--format-tool-result (tool-id call-id status output error-info)
   "Format tool result for TOOL-ID and CALL-ID using STATUS, OUTPUT, and ERROR-INFO.
 Return a plist suitable for adding to message history."
@@ -626,22 +673,144 @@ Return a plist suitable for adding to message history."
           :content content
           :metadata (list :status normalized-status :error error-info))))
 
-(defun benedict-session--process-tool-calls (session tool-calls)
+(defun benedict-session--build-pending-approval (session tool-call tool-result tool-calls index)
+  "Build pending approval state for SESSION from TOOL-CALL and TOOL-RESULT."
+  (let* ((approval (plist-get (plist-get tool-result :output) :approval))
+         (assistant-message (cl-find-if
+                             (lambda (entry)
+                               (eq (benedict-message-role entry) 'assistant))
+                             (benedict-session-entries session)))
+         (message-id (and assistant-message (benedict-message-id assistant-message))))
+    (append
+     (list :type 'tool-approval
+           :tool-call tool-call
+           :tool-id (plist-get tool-result :tool-id)
+           :call-id (plist-get tool-result :call-id)
+           :assistant-message-id message-id
+           :tool-call-index index
+           :remaining-tool-calls tool-calls)
+     approval)))
+
+(defun benedict-session--set-pending-approval (session pending)
+  "Store PENDING approval on SESSION and emit approval request events."
+  (setf (benedict-session-pending-question session) pending)
+  (when-let ((message-id (plist-get pending :assistant-message-id)))
+    (benedict-session--update-tool-call-status
+     session message-id (plist-get pending :call-id) 'awaiting-approval))
+  (benedict-session-set-state session 'approval-pending)
+  (benedict-session--emit session 'approval-requested :approval pending)
+  (benedict-session--emit session 'question-raised :question pending))
+
+(defun benedict-session--clear-pending-approval (session)
+  "Clear any pending approval from SESSION."
+  (setf (benedict-session-pending-question session) nil))
+
+(defun benedict-session--process-tool-calls (session tool-calls &optional start-index)
   "Execute TOOL-CALLS for SESSION and record results.
 Return a list of result plists."
-  (let (results)
-    (dolist (call tool-calls)
-      (let* ((result (benedict-session--invoke-tool session call))
-             (call-id (plist-get result :call-id))
-             (tool-id (plist-get result :tool-id))
-             (status (plist-get result :status))
-             (output (plist-get result :output))
-             (error-info (plist-get result :error))
-             (message (benedict-session--format-tool-result
-                       tool-id call-id status output error-info)))
-        (benedict-session-add-message session message)
-        (push result results)))
-    (nreverse results)))
+  (let ((results nil)
+        (index 0)
+        (pending nil))
+    (ignore start-index)
+    (catch 'benedict-stop-tool-processing
+      (dolist (call tool-calls)
+        (let ((result (benedict-session--invoke-tool session call)))
+          (pcase (plist-get result :status)
+            ('pending
+             (setq pending (benedict-session--build-pending-approval
+                            session call result tool-calls index))
+             (benedict-session--set-pending-approval session pending)
+             (throw 'benedict-stop-tool-processing t))
+            (_
+             (benedict-session--record-tool-result session result)
+             (push result results)
+             (setq index (1+ index)))))))
+    (if pending
+        (list :status 'pending
+              :results (nreverse results)
+              :pending pending)
+      (list :status 'complete
+            :results (nreverse results)))))
+
+(defun benedict-session--resume-after-approval (session pending)
+  "Resume SESSION after resolving PENDING approval."
+  (let* ((tool-calls (plist-get pending :remaining-tool-calls))
+         (index (or (plist-get pending :tool-call-index) 0))
+         (remaining (nthcdr (1+ index) tool-calls))
+         (assistant-message-id (plist-get pending :assistant-message-id))
+         (assistant-message (and assistant-message-id
+                                 (benedict-session-get-entry session assistant-message-id))))
+    (benedict-session--clear-pending-approval session)
+    (if remaining
+        (let ((process-result (benedict-session--process-tool-calls
+                               session remaining (1+ index))))
+          (when (eq (plist-get process-result :status) 'complete)
+            (let ((decision (and assistant-message
+                                 (benedict-session--should-continue session assistant-message))))
+              (pcase decision
+                ('continue
+                 (benedict-session-set-state session 'running)
+                 (cl-incf (benedict-session-loop-turn-count session))
+                 (benedict-session--dispatch-next session))
+                ('checkpoint
+                 (benedict-session-set-state session 'checkpoint))
+                ('stop
+                 (benedict-session-set-state session 'idle))))))
+      (let ((decision (and assistant-message
+                           (benedict-session--should-continue session assistant-message))))
+        (pcase decision
+          ('continue
+           (benedict-session-set-state session 'running)
+           (cl-incf (benedict-session-loop-turn-count session))
+           (benedict-session--dispatch-next session))
+          ('checkpoint
+           (benedict-session-set-state session 'checkpoint))
+          (_
+           (benedict-session-set-state session 'idle)))))))
+
+(defun benedict-session-approve-pending-tool (session)
+  "Approve and execute the pending tool request for SESSION."
+  (let ((pending (or (benedict-session--pending-approval session)
+                     (user-error "Session is not waiting on a tool approval"))))
+    (let* ((tool-call (plist-get pending :tool-call))
+           (call-id (plist-get pending :call-id))
+           (assistant-message-id (plist-get pending :assistant-message-id))
+           (result (benedict-session--invoke-tool session tool-call t)))
+      (when assistant-message-id
+        (benedict-session--update-tool-call-status session assistant-message-id call-id 'success))
+      (unless (eq (plist-get result :status) 'success)
+        (error "Approved tool did not complete successfully"))
+      (benedict-session--record-tool-result session result)
+      (benedict-session--emit session 'approval-resolved
+                              :approval pending
+                              :resolution 'approved
+                              :result result)
+      (benedict-session--resume-after-approval session pending)
+      result)))
+
+(defun benedict-session-deny-pending-tool (session)
+  "Deny the pending tool request for SESSION."
+  (let ((pending (or (benedict-session--pending-approval session)
+                     (user-error "Session is not waiting on a tool approval"))))
+    (let* ((call-id (plist-get pending :call-id))
+           (tool-id (plist-get pending :tool-id))
+           (assistant-message-id (plist-get pending :assistant-message-id))
+           (result (list :status 'denied
+                         :call-id call-id
+                         :tool-id tool-id
+                         :error (list :message "Tool denied by user"
+                                      :code 'permission-denied
+                                      :decision 'approval-denied
+                                      :policy 'deny))))
+      (when assistant-message-id
+        (benedict-session--update-tool-call-status session assistant-message-id call-id 'denied))
+      (benedict-session--record-tool-result session result)
+      (benedict-session--emit session 'approval-resolved
+                              :approval pending
+                              :resolution 'denied
+                              :result result)
+      (benedict-session--resume-after-approval session pending)
+      result)))
 
 ;;; Loop Management
 
@@ -741,19 +910,20 @@ Process tool calls from the last message, then dispatch if it should continue."
              "Loop step for session %s: %d tool calls"
              (benedict-session-id session) (length tool-calls))
     (when tool-calls
-      (benedict-session--process-tool-calls session tool-calls)
-      (let ((decision (benedict-session--should-continue session last-msg)))
-        (lgr-log benedict-session--logger lgr-level-debug
-                 "Loop decision for session %s: %s"
-                 (benedict-session-id session) decision)
-        (pcase decision
-          ('continue
-           (cl-incf (benedict-session-loop-turn-count session))
-           (benedict-session--dispatch-next session))
-          ('checkpoint
-           (benedict-session-set-state session 'checkpoint))
-          ('stop
-           (benedict-session-set-state session 'idle)))))))
+      (let ((process-result (benedict-session--process-tool-calls session tool-calls)))
+        (when (eq (plist-get process-result :status) 'complete)
+          (let ((decision (benedict-session--should-continue session last-msg)))
+            (lgr-log benedict-session--logger lgr-level-debug
+                     "Loop decision for session %s: %s"
+                     (benedict-session-id session) decision)
+            (pcase decision
+              ('continue
+               (cl-incf (benedict-session-loop-turn-count session))
+               (benedict-session--dispatch-next session))
+              ('checkpoint
+               (benedict-session-set-state session 'checkpoint))
+              ('stop
+               (benedict-session-set-state session 'idle)))))))))
 
 (defun benedict-session--dispatch-next (session)
   "Dispatch next request in the loop for SESSION.
@@ -784,6 +954,8 @@ Reset the time limit and continue the loop."
 
 (defun benedict-session-stop (session)
   "Stop SESSION's agent loop."
+  (when (benedict-session-approval-pending-p session)
+    (setf (benedict-session-pending-question session) nil))
   (benedict-session-set-state session 'idle)
   (benedict-session--emit session 'loop-stopped :reason 'user-stopped))
 

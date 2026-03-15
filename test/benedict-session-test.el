@@ -493,10 +493,9 @@
       (remhash tool-id benedict--tools))))
 
 (ert-deftest benedict-session-test-invoke-tool-emits-permission-fallback-on-error-event ()
-  "Predicate errors emit fallback audit events and use legacy approval flow."
+  "Predicate errors emit fallback audit events and yield pending approval."
   (let* ((tool-id 'benedict-session-test-permission-fallback)
          (events nil)
-         (prompted nil)
          (old-default (default-value 'benedict-tool-permission-predicate))
          (benedict-session--registry (make-hash-table :test 'equal))
          (benedict-session-event-hook nil)
@@ -510,34 +509,34 @@
           (set-default 'benedict-tool-permission-predicate
                        (lambda (_tool _args)
                          (error "Permission predicate blew up")))
-          (cl-letf (((symbol-function 'benedict--prompt-for-approval)
-                     (lambda (_spec _args)
-                       (setq prompted t)
-                       t)))
-            (let ((session (benedict-session-create)))
-              (add-hook 'benedict-session-event-hook
-                        (lambda (_s type payload)
-                          (push (cons type payload) events)))
-              (let* ((result (benedict-session--invoke-tool
-                              session
-                              `(:id "call-fallback" :name ,tool-id :arguments nil)))
-                     (audit-event
-                      (cl-find-if
-                       (lambda (event)
-                         (and (eq 'tool-audit (car event))
-                              (eq 'authorization
-                                  (plist-get (plist-get (cdr event) :audit) :phase))))
-                       events))
-                     (decision-event (and audit-event
-                                          (plist-get (cdr audit-event) :audit))))
-                (should (eq 'success (plist-get result :status)))
-                (should prompted)
-                (should decision-event)
-                (should (eq 'fallback (plist-get decision-event :policy)))
-                (should (eq 'fallback-on-error (plist-get decision-event :decision)))
-                (should (string-match-p "predicate blew up"
-                                        (or (plist-get decision-event :error-message)
-                                            "")))))))
+          (let ((session (benedict-session-create))
+                (frontend (generate-new-buffer " *benedict-session-approval*")))
+            (unwind-protect
+                (progn
+                  (benedict-session--add-frontend session frontend)
+                  (add-hook 'benedict-session-event-hook
+                            (lambda (_s type payload)
+                              (push (cons type payload) events)))
+                  (let* ((result (benedict-session--invoke-tool
+                                  session
+                                  `(:id "call-fallback" :name ,tool-id :arguments nil)))
+                         (audit-event
+                          (cl-find-if
+                           (lambda (event)
+                             (and (eq 'tool-audit (car event))
+                                  (eq 'authorization
+                                      (plist-get (plist-get (cdr event) :audit) :phase))))
+                           events))
+                         (decision-event (and audit-event
+                                              (plist-get (cdr audit-event) :audit))))
+                    (should (eq 'pending (plist-get result :status)))
+                    (should decision-event)
+                    (should (eq 'fallback (plist-get decision-event :policy)))
+                    (should (eq 'fallback-on-error (plist-get decision-event :decision)))
+                    (should (string-match-p "predicate blew up"
+                                            (or (plist-get decision-event :error-message)
+                                                "")))))
+              (kill-buffer frontend))))
       (set-default 'benedict-tool-permission-predicate old-default)
       (remhash tool-id benedict--tools))))
 
@@ -573,6 +572,86 @@
         (should (eq 'denied (benedict-message-status entry)))
         (should (string-match-p "Tool denied:" (benedict-message-text entry)))
         (should (eq 'permission-denied (plist-get details :code)))))))
+
+(ert-deftest benedict-session-test-process-tool-calls-stops-for-approval ()
+  "Approval-required tool calls stop the loop and store pending approval state."
+  (let ((benedict-session--registry (make-hash-table :test 'equal))
+        (benedict-session-tool-invoke-fn
+         (lambda (tool-id _args &rest _options)
+           (if (eq tool-id 'tool_a)
+               '(:status pending
+                 :approval (:tool-id tool_a :approval confirm :args (:foo "bar")))
+             '(:status success :output "ok")))))
+    (let ((session (benedict-session-create))
+          (frontend (generate-new-buffer " *benedict-session-approval*")))
+      (unwind-protect
+          (progn
+            (benedict-session--add-frontend session frontend)
+            (benedict-session-add-message
+             session
+             '(:role assistant :content "" :tool-calls ((:id "call-1" :name tool_a :arguments (:foo "bar"))
+                                                       (:id "call-2" :name tool_b :arguments nil))))
+            (let ((result (benedict-session--process-tool-calls
+                           session
+                           '((:id "call-1" :name tool_a :arguments (:foo "bar"))
+                             (:id "call-2" :name tool_b :arguments nil)))))
+              (should (eq 'pending (plist-get result :status)))
+              (should (benedict-session-approval-pending-p session))
+              (should (equal "call-1"
+                             (plist-get (benedict-session-pending-question session) :call-id)))))
+        (kill-buffer frontend)))))
+
+(ert-deftest benedict-session-test-approve-pending-tool-records-result ()
+  "Approving a pending tool executes it and clears the pending state."
+  (let ((benedict-session--registry (make-hash-table :test 'equal))
+        (benedict-session-tool-invoke-fn
+         (lambda (_tool-id _args &rest options)
+           (if (plist-get options :skip-approval)
+               '(:status success :output "approved output")
+             '(:status pending
+               :approval (:tool-id tool_a :approval confirm :args (:foo "bar")))))))
+    (let ((session (benedict-session-create))
+          (frontend (generate-new-buffer " *benedict-session-approval*")))
+      (unwind-protect
+          (progn
+            (benedict-session--add-frontend session frontend)
+            (benedict-session-add-message
+             session
+             '(:role assistant :content "" :tool-calls ((:id "call-1" :name tool_a :arguments (:foo "bar")))))
+            (benedict-session--process-tool-calls
+             session
+             '((:id "call-1" :name tool_a :arguments (:foo "bar"))))
+            (let ((result (benedict-session-approve-pending-tool session)))
+              (should (eq 'success (plist-get result :status)))
+              (should-not (benedict-session-approval-pending-p session))
+              (should (string-match-p "approved output"
+                                      (benedict-message-text (car (benedict-session-entries session)))))))
+        (kill-buffer frontend)))))
+
+(ert-deftest benedict-session-test-deny-pending-tool-records-result ()
+  "Denying a pending tool records a denied result and clears the pending state."
+  (let ((benedict-session--registry (make-hash-table :test 'equal))
+        (benedict-session-tool-invoke-fn
+         (lambda (_tool-id _args &rest _options)
+           '(:status pending
+             :approval (:tool-id tool_a :approval confirm :args (:foo "bar"))))))
+    (let ((session (benedict-session-create))
+          (frontend (generate-new-buffer " *benedict-session-approval*")))
+      (unwind-protect
+          (progn
+            (benedict-session--add-frontend session frontend)
+            (benedict-session-add-message
+             session
+             '(:role assistant :content "" :tool-calls ((:id "call-1" :name tool_a :arguments (:foo "bar")))))
+            (benedict-session--process-tool-calls
+             session
+             '((:id "call-1" :name tool_a :arguments (:foo "bar"))))
+            (let ((result (benedict-session-deny-pending-tool session)))
+              (should (eq 'denied (plist-get result :status)))
+              (should-not (benedict-session-approval-pending-p session))
+              (should (string-match-p "Tool denied:"
+                                      (benedict-message-text (car (benedict-session-entries session)))))))
+        (kill-buffer frontend)))))
 
 (ert-deftest benedict-session-test-tool-event-ordering ()
   "Tool events fire after request completion and preserve message order."

@@ -155,7 +155,12 @@ MESSAGE-KEY and ON-TOGGLE-BLOCK supply navigation and folding behavior."
         :on-toggle toggle-handler))
       ('tool-use
        (vui-component 'benedict-vui-tool-use-block
-        :tool-call (or (plist-get block :tool-call) (plist-get block :call) block)
+        :tool-call (let ((tool-call (or (plist-get block :tool-call)
+                                        (plist-get block :call)
+                                        block)))
+                     (if (plist-get block :status)
+                         (plist-put (copy-tree tool-call) :status (plist-get block :status))
+                       tool-call))
         :status (plist-get block :status)
         :collapsed collapsed
         :message-key message-key

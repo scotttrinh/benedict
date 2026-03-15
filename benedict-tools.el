@@ -16,6 +16,7 @@
 (require 'benedict-harness)
 
 (declare-function benedict-session--emit "benedict-session" (session event-type &rest payload))
+(declare-function benedict-session-has-frontend-p "benedict-session" (session))
 (declare-function benedict-session-p "benedict-session" (object))
 
 (defvar benedict--tools (make-hash-table :test 'eq)
@@ -420,32 +421,26 @@ APPROVAL is one of 'auto, 'confirm, or 'always.  DOC is an optional string."
     (let ((fn (plist-get spec :fn)))
       (apply fn args))))
 
-(defun benedict--prompt-for-approval (spec args)
-  "Return non-nil when SPEC should run with ARGS after confirmation.
-Displays a basic `y-or-n-p' dialog showing the tool id, an optional doc
-string, and the argument plist."
-  (let* ((id (plist-get spec :id))
-         (doc (plist-get spec :doc))
-         (label (if doc
-                    (format "%s — %s" id doc)
-                  (format "%s" id)))
-         (prompt (format "Benedict tool %s with args %S? " label args)))
-    (y-or-n-p prompt)))
-
 (defun benedict--tool-approval-allows-p (spec args)
-  "Return non-nil when SPEC should run with ARGS per legacy approval metadata."
+  "Return approval policy for SPEC with ARGS.
+
+The return value is one of:
+- `allow' when the tool can run immediately
+- `pending' when explicit user approval is required
+- `deny' when approval cannot be requested in the current context"
+  (ignore args)
   (let ((approval (plist-get spec :approval)))
     (cond
-     ((or (null approval) (eq approval 'auto)) t)
-     ((memq approval '(confirm always))
-      (benedict--prompt-for-approval spec args))
-     (t (benedict--prompt-for-approval spec args)))))
+     ((or (null approval) (eq approval 'auto)) 'allow)
+     ((memq approval '(confirm always)) 'pending)
+     (t 'pending))))
 
-(cl-defun benedict-tool-invoke (id &optional args &key session harness)
+(cl-defun benedict-tool-invoke (id &optional args &key session harness skip-approval)
   "Invoke tool ID with ARGS after applying the tool's approval policy.
 ARGS must be a plist passed directly to the tool implementation.
 SESSION supplies runtime context for audit emission.  HARNESS overrides the
-session-attached harness when non-nil.
+session-attached harness when non-nil.  SKIP-APPROVAL bypasses approval
+metadata after the session has already recorded an approved decision.
 
 Return a plist with at least :status and :tool-id.  Successful invocations
 also include :output.  Denials return structured :error metadata instead of
@@ -485,20 +480,50 @@ signaling."
                           :decision (plist-get authorization :decision)
                           :scope-request (plist-get authorization :scope-request))))
       (_
-       (unless (benedict--tool-approval-allows-p spec normalized-args)
-         (signal 'benedict-error (list (format "Tool %S invocation canceled by user" id))))
-       (let ((output (benedict--tool-call-direct id normalized-args)))
-         (benedict-harness-record-effect effective-harness
-                                         (list :tool-id id
-                                               :args normalized-args
-                                               :status 'success
-                                               :decision (plist-get authorization :decision))
-                                         session)
-         (list :status 'success
-               :tool-id id
-               :args normalized-args
-               :output output
-               :audit authorization))))))
+       (let ((approval-decision (if skip-approval
+                                    'allow
+                                  (benedict--tool-approval-allows-p spec normalized-args))))
+         (pcase approval-decision
+           ('allow
+            (let ((output (benedict--tool-call-direct id normalized-args)))
+              (benedict-harness-record-effect effective-harness
+                                              (list :tool-id id
+                                                    :args normalized-args
+                                                    :status 'success
+                                                    :decision (plist-get authorization :decision))
+                                              session)
+              (list :status 'success
+                    :tool-id id
+                    :args normalized-args
+                    :output output
+                    :audit authorization)))
+           ('pending
+            (if (and session
+                     (fboundp 'benedict-session-has-frontend-p)
+                     (benedict-session-has-frontend-p session))
+                (list :status 'pending
+                      :tool-id id
+                      :args normalized-args
+                      :approval (list :tool-id id
+                                      :args normalized-args
+                                      :doc (plist-get spec :doc)
+                                      :approval (plist-get spec :approval)
+                                      :audit authorization))
+                (list :status 'denied
+                      :tool-id id
+                      :args normalized-args
+                      :error (list :message (format "Tool %S requires in-chat approval, but no frontend is attached" id)
+                                   :code 'approval-ui-required
+                                   :policy 'approval-required
+                                   :decision 'approval-ui-required))))
+           (_
+            (list :status 'denied
+                  :tool-id id
+                  :args normalized-args
+                  :error (list :message (format "Tool %S approval denied" id)
+                               :code 'permission-denied
+                               :policy 'deny
+                               :decision 'approval-denied)))))))))
 
 (benedict-tools-register
  :id 'write

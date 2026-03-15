@@ -52,6 +52,7 @@
   "Status normalization handles in-progress, success, and failure states."
   (dolist (entry '((pending "RUNNING")
                    (in-progress "RUNNING")
+                   (awaiting-approval "AWAITING APPROVAL")
                    (success "SUCCESS")
                    (failure "FAILURE")))
     (with-mounted-vui-component
@@ -79,6 +80,17 @@
       (if (cadr entry)
           (should (string-match-p (regexp-quote "...") (buffer-string)))
         (should-not (string-match-p (regexp-quote "...") (buffer-string)))))))
+
+(ert-deftest benedict-vui-tool-use-block-awaiting-approval-body-visible ()
+  "Awaiting approval state is rendered in the expanded body."
+  (with-mounted-vui-component
+      (vui-component 'benedict-vui-tool-use-block
+                     :tool-call '(:name "bash" :arguments (:command "echo hi") :status awaiting-approval)
+                     :status 'awaiting-approval
+                     :collapsed nil
+                     :message-key "msg-1"
+                     :block-id "block-1")
+    (should (string-match-p "Awaiting approval" (buffer-string)))))
 
 (ert-deftest benedict-vui-tool-use-block-render-test ()
   "Tool use block renders header and content."

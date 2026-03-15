@@ -32,7 +32,8 @@
         :id (plist-get tool-call :id)
         :name (or (plist-get tool-call :name)
                   (plist-get tool-call :tool))
-        :arguments (plist-get tool-call :arguments)))
+        :arguments (plist-get tool-call :arguments)
+        :status (plist-get tool-call :status)))
 
 (defun benedict-message--tool-result-block (tool-call-id name status content &optional details)
   "Create a tool-result block for TOOL-CALL-ID, NAME, STATUS, CONTENT, and DETAILS."
@@ -134,7 +135,8 @@
       (when (eq (plist-get block :type) 'tool-call)
         (push (list :id (plist-get block :id)
                     :name (plist-get block :name)
-                    :arguments (plist-get block :arguments))
+                    :arguments (plist-get block :arguments)
+                    :status (plist-get block :status))
               tool-calls)))
     (nreverse tool-calls)))
 
@@ -168,6 +170,8 @@
 (defun benedict-message-blocks-for-display (message)
   "Return display blocks for canonical MESSAGE."
   (let ((role (benedict-message-role message))
+        (tool-call-statuses (plist-get (benedict-message-metadata message)
+                                       :tool-call-statuses))
         (blocks nil))
     (dolist (block (benedict-message-blocks message))
       (pcase (plist-get block :type)
@@ -179,7 +183,9 @@
          (push (list :type 'tool-use
                      :tool-call (list :id (plist-get block :id)
                                       :name (plist-get block :name)
-                                      :arguments (plist-get block :arguments)))
+                                      :arguments (plist-get block :arguments))
+                     :status (or (cdr (assoc (plist-get block :id) tool-call-statuses))
+                                 (plist-get block :status)))
                blocks))
         ('tool-result
          (push (list :type 'tool-result
@@ -207,7 +213,11 @@
                       ""))
          (payload (list :role role
                         :content content))
-         (tool-calls (benedict-message-tool-calls message))
+         (tool-calls (mapcar (lambda (call)
+                               (list :id (plist-get call :id)
+                                     :name (plist-get call :name)
+                                     :arguments (plist-get call :arguments)))
+                             (benedict-message-tool-calls message)))
          )
     (when tool-calls
       (setq payload (plist-put payload :tool-calls tool-calls)))
