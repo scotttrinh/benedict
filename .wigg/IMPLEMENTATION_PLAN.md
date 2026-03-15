@@ -280,8 +280,9 @@ The best first batch is:
 - 2026-03-15: removed the dead Vercel provider logging shim, moved Vercel/fake-provider diagnostics onto real `lgr` calls, and updated README/comments that still described the retired log-level/file logging knobs.
 - 2026-03-15: removed the legacy single-message fallback from `components/benedict-vui-turn.el` so the turn component only renders canonical turn data; trimmed legacy-only turn tests and kept coverage on active/completed turn behavior plus missing-prompt fallback.
 - 2026-03-15: promoted turn navigation and execution-summary assertions into mounted root e2e coverage, then deleted duplicate turn/turn-list render tests that only rechecked prompt/activity/detail ordering below the canonical path.
+- 2026-03-15: removed the unused `benedict-vui-conversation-view--render` compatibility alias and cut conversation-view wrapper tests down to turn-list passthrough plus active/malformed spinner boundaries; root e2e remains the mainline streaming/render contract.
 - Decision: provider-facing replay still sends canonical tool-result text content only; UI/persistence-only metadata remains on canonical transcript blocks and metadata.
-- Next slice: audit the remaining conversation-view/root VUI unit tests for spinner/layout checks that can be collapsed into fewer session-driven flows without losing malformed-input edge coverage.
+- Next slice: continue the VUI/root test audit by trimming low-value root layout/session-event assertions or converting them into fewer mounted session flows, then shift to property coverage for session/persistence round-trips.
 
 This batch improves correctness, test value, and documentation accuracy with minimal feature expansion.
 

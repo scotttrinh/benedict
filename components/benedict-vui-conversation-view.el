@@ -27,20 +27,5 @@
    (vui-component 'benedict-vui-streaming-indicator
     :visible (benedict-vui-conversation-view--streaming-active-p streaming))))
 
-(defalias 'benedict-vui-conversation-view--render
-  (lambda (props)
-    (let ((conversation (plist-get props :conversation))
-          (streaming (plist-get props :streaming))
-          (collapsed-blocks (plist-get props :collapsed-blocks))
-          (on-toggle-block (plist-get props :on-toggle-block)))
-      (vui-vstack
-       (vui-component 'benedict-vui-turn-list
-        :conversation conversation
-        :streaming streaming
-        :collapsed-blocks collapsed-blocks
-        :on-toggle-block on-toggle-block)
-       (vui-component 'benedict-vui-streaming-indicator
-        :visible (benedict-vui-conversation-view--streaming-active-p streaming))))))
-
 (provide 'benedict-vui-conversation-view)
 ;;; benedict-vui-conversation-view.el ends here
