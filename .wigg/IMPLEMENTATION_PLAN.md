@@ -2,268 +2,299 @@
 
 ## Goal
 
-Refine Benedict's chat UI so each exchange reads as a coherent turn rather than a flat stream of unrelated blocks. The UI should make it obvious:
+Raise the overall quality of the Benedict repository without expanding the product surface area.
 
-- which user prompt the assistant is working on
-- which intermediate blocks are execution details versus the answer
-- what the final outcome of the turn is
+This plan is intentionally biased toward:
 
-The target interaction model is:
+- tightening contracts that already exist
+- removing transitional or historical scaffolding
+- improving test signal-to-noise
+- reconciling docs with reality
+- finishing work that is already substantially underway
 
-1. An active turn presents the user prompt as a persistent prompt header.
-2. Streaming thinking/tool/status content appears beneath that header as activity for that prompt.
-3. When the assistant finishes, the turn settles into a compact historical record where the final assistant answer is dominant and intermediate execution detail is collapsed by default.
+It is not a feature roadmap. Work that only exists in aspirational specs should remain out of scope unless it is required to complete or stabilize code that already exists in-tree.
 
-## Design Principles
+## Source of Truth
 
-- Turn-first, not message-first: render a user prompt and its resulting assistant work as one visual group.
-- Outcome-first: once complete, the final assistant answer should visually outweigh thinking and tool chatter.
-- Theme-safe polish: use faces that derive from existing Emacs theme surfaces rather than hardcoded colors.
-- Progressive disclosure: preserve detailed execution history, but hide most of it by default after completion.
-- Stable interaction: avoid layout tricks that fight Emacs buffer mechanics; emulate "sticky" behavior with deliberate component structure.
+When deciding intended behavior:
 
-## Target UX Model
+1. code + matching spec win
+2. code wins over stale README prose
+3. aspirational spec text does not, by itself, force new feature work into scope
 
-### Active Turn
+Practical rule:
 
-- The current user message is rendered as a prompt header for the active turn.
-- The prompt header remains visually persistent while tool/thinking/streaming blocks accumulate.
-- Execution blocks appear in an activity lane beneath the prompt header.
-- Partial assistant text may appear as a draft response area, but it remains visually secondary until completion.
+- if code and spec already agree, update the README to match them
+- if code is clearly mid-transition toward a spec and most of the implementation already exists, finish that transition
+- if a spec describes a future system that does not materially exist yet, document the gap but do not treat it as an immediate implementation requirement
 
-### Completed Turn
+## Current Quality Themes
 
-- The turn is "solidified" once the assistant finishes.
-- The final assistant message becomes the primary content block for the turn.
-- Thinking, tool use, and verbose tool results collapse into a summary section by default.
-- High-signal execution facts remain visible, such as tool names, error status, and whether approvals were involved.
+The current repo is strongest in:
 
-### Historical Turn
+- turn-centric VUI rendering
+- session lifecycle basics
+- fake-provider integration flows
+- tool and provider smoke coverage
 
-- Old turns are compact and easy to scan.
-- The user prompt remains attached to the final answer.
-- Hidden execution details can be expanded on demand.
-- Spacing between turns is larger than spacing between blocks inside a turn.
+The current repo is weakest in:
 
-## Proposed Visual Hierarchy
+- consistency between runtime contracts and provider dispatch
+- consistency between harness/spec approval behavior and actual tool execution
+- documentation accuracy
+- removal of transitional compatibility paths
+- test portfolio discipline
 
-Within a single completed turn, the reading order should be:
+## Quality Principles
 
-1. Prompt header
-2. Final assistant answer
-3. Execution summary
-4. Expandable execution details
+### 1. Runtime contracts must be real
 
-The active turn should use the same structure, except that the execution summary is replaced by a live activity lane until completion.
+If a session stores provider/model/tool state, dispatch and persistence must honor it end-to-end. Avoid "configuration-shaped" state that is ignored by the actual execution path.
 
-## Implementation Phases
+### 2. Transitional code must either graduate or be removed
 
-### Phase 1: Turn Model and State
+Compatibility shims, legacy render paths, and placeholder comments are acceptable only while actively migrating. Once a new path is clearly the intended one, the old path should stop accumulating support.
 
-Status: completed 2026-03-15
+### 3. Tests should buy confidence, not inventory
 
-Completed:
+Prefer:
 
-- Added turn-derived lifecycle metadata at the conversation/turn layer.
-- Added canonical helpers for prompt text, final assistant outcome, and execution summary data.
-- Moved active draft handling into the turn model so streaming state attaches to the active turn instead of a synthetic top-level message.
-- Added focused tests covering derived turn metadata and active-turn draft assembly.
+- end-to-end chat/session/provider flows
+- property tests for invariants
+- thin unit tests for failure edges and normalization boundaries
 
-Objective: make the UI explicitly aware of the difference between an active turn, a completed turn, and execution detail within a turn.
+De-emphasize:
 
-Work:
+- existence tests
+- registry/listing trivia
+- schema shape snapshots that restate implementation details without protecting behavior
 
-- Extend turn-level UI props/state so a turn can distinguish:
-  - active versus historical
-  - streaming versus completed
-  - presence of intermediate execution blocks
-  - whether execution detail is manually expanded
-- Add turn-derived metadata helpers to compute:
-  - prompt text used as the turn header
-  - final assistant message block for the turn
-  - execution summary for collapsed historical display
-- Keep this logic at the turn/conversation layer rather than scattering it across individual block components.
+### 4. Docs must describe the current product honestly
 
-Acceptance criteria:
+The README should help a user succeed with the code that exists today. It should not act as a second speculative spec.
 
-- A turn can render differently based on lifecycle state without special-casing every block type.
-- The UI has a canonical way to identify the "final assistant outcome" for a turn.
+## Workstreams
 
-### Phase 2: Active Turn Layout
+### Workstream 1: Contract Reconciliation
 
-Objective: make the active turn read like "assistant working on this prompt."
+Objective: make the implemented runtime behavior match its existing non-aspirational contracts.
 
-Work:
+Primary targets:
 
-- Introduce a dedicated prompt header region in the turn component.
-- Render the active turn as:
-  - prompt header
-  - activity lane
-  - optional in-progress answer area
-- Avoid trying to implement literal sticky positioning in the transcript body.
-- Instead, emulate stickiness through one of these approaches:
-  - render the prompt header as the topmost sub-block of the active turn and preserve viewport behavior
-  - optionally mirror the active prompt in a lightweight session/header area while streaming
-- Visually subordinate tool/thinking/status blocks relative to the prompt header.
+- provider selection is session-scoped all the way through dispatch and abort
+- persistence and replay continue to use canonical message forms
+- harness approval behavior matches the currently implemented interaction model
+
+Concrete tasks:
+
+- done: provider dispatch/abort now resolve against request/handle provider metadata instead of global process state
+- done: regression coverage now proves provider override is honored by the real chat send path, not only by resolution helpers
+- explicitly decide the scope-expansion behavior for v0.1:
+  - if the current approved direction is "scope expansion approval is part of the current system", finish the approval flow
+  - otherwise narrow the spec text and README so they describe the present deny-with-structured-result behavior
+- audit session events and request/result metadata so the VUI, persistence, and runtime are all consuming the same contract
 
 Acceptance criteria:
 
-- During streaming, it is always obvious which prompt the current activity belongs to.
-- Tool/thinking/status blocks no longer feel like peer chat messages.
+- per-session provider/model configuration is exercised in end-to-end tests
+- there is no silent fallback to unrelated global provider state
+- harness approval behavior is described consistently across code, tests, and docs
 
-### Phase 3: Completion and Collapse Behavior
+### Workstream 2: Finish Near-Complete Transitions
 
-Objective: make completed turns outcome-first while preserving inspectability.
+Objective: close out abandoned or nearly-finished migrations that are currently leaving the repo in a mixed state.
 
-Work:
+Primary targets:
 
-- On completion, promote the final assistant text block into a primary answer card.
-- Auto-collapse thinking/tool/tool-result blocks for completed turns.
-- Replace hidden detail with a compact execution summary row, for example:
-  - tool count
-  - tool names
-  - errors/warnings
-  - approval involvement
-- Keep the final assistant answer expanded by default.
-- Allow per-turn expansion/collapse of execution detail.
-- Preserve failed or high-signal tool output in the summary if it materially affected the answer.
+- VUI turn model migration
+- tool/harness approval migration
+- provider logging migration
 
-Acceptance criteria:
+Concrete tasks:
 
-- The final assistant answer is the visually dominant block in completed turns.
-- Historical transcript scanning is faster because verbose execution detail is hidden by default.
-
-### Phase 4: Theme-Safe Face System
-
-Objective: add polish without breaking compatibility across Doom/themes.
-
-Work:
-
-- Introduce dedicated faces for:
-  - prompt header
-  - active turn container
-  - final assistant outcome
-  - execution summary
-  - execution detail blocks
-- Derive backgrounds and emphasis from theme-safe base faces such as:
-  - `default`
-  - `shadow`
-  - `fringe`
-  - `region`
-  - `mode-line-inactive`
-- Use subtle background differences, padding, box/line styling, and weight changes instead of relying on color alone.
-- Increase spacing inside turn containers and increase separation between turn groups.
+- remove or retire legacy VUI rendering paths once all current turn-centric behavior is covered through the canonical path
+- finish replacing Vercel logging compatibility stubs with the current logging approach
+- remove obsolete variables and stale comments once callers are migrated
+- clean up misleading "skeleton", "placeholder", and "stub" commentary where the implementation is no longer stubbed
 
 Acceptance criteria:
 
-- The UI remains legible and visually coherent across light and dark themes.
-- User prompt, outcome, and execution detail are distinguishable even in low-color themes.
+- every remaining compatibility shim has a clear reason to exist, or is removed
+- comments describe what the code does now, not what it used to do
+- the canonical turn model is the only path exercised by mainline tests
 
-### Phase 5: Component Restructuring
+### Workstream 3: Test Portfolio Reshape
 
-Objective: align the current VUI component tree with the new turn-centric presentation model.
+Objective: concentrate test effort on behavior that protects user-facing reliability and architectural invariants.
 
-Likely component changes:
+Target distribution:
 
-- `benedict-vui-turn.el`
-  - becomes the primary orchestrator for turn lifecycle layout
-- `components/benedict-vui-turn-header.el`
-  - may be repurposed into a prompt header / turn meta header split
-- `components/benedict-vui-content-block-list.el`
-  - may need separate rendering paths for:
-    - primary answer content
-    - execution summary
-    - expandable execution details
-- `components/benedict-vui-conversation-view.el`
-  - may need awareness of the active turn so it can support viewport/persistence behavior
+- high-value end-to-end tests for complete chat/session flows
+- property-based tests for stable invariants
+- selective unit tests for parser/normalizer/error edges
 
-Potential new components:
+Concrete tasks:
 
-- `benedict-vui-prompt-header`
-- `benedict-vui-turn-outcome`
-- `benedict-vui-execution-summary`
-- `benedict-vui-execution-detail-group`
-
-Acceptance criteria:
-
-- The new layout is expressed through a small number of clear components with stable responsibilities.
-- The conversation view remains keyed by turn identity rather than transient block ordering.
-
-### Phase 6: Interaction and Navigation
-
-Objective: keep the new presentation efficient for keyboard users.
-
-Work:
-
-- Ensure `TAB` and navigation commands behave sensibly with collapsed execution detail.
-- Add obvious focus/jump targets for:
-  - prompt header
-  - final answer
-  - execution summary
-- Preserve current message navigation semantics where possible, but bias toward turn-level navigation for the transcript.
-- Consider commands for:
-  - toggle execution details on current turn
-  - jump to current turn outcome
-  - jump between prompts rather than every block
+- inventory the current suite and classify tests as:
+  - end-to-end
+  - invariant/property
+  - focused unit
+  - low-value structural
+- keep and expand tests that cover:
+  - provider override through real dispatch
+  - session save/load/replay
+  - tool approval and denial recovery
+  - turn progression from active to completed state
+  - cancellation, recovery, and error propagation
+- add or strengthen property tests for:
+  - canonical message normalization round-trips
+  - persistence round-trips
+  - session/tool event ordering invariants where deterministic
+- delete, merge, or demote shallow tests that only assert:
+  - a function returns a string
+  - a registry contains known symbols
+  - an internal schema/property name exists without behavioral consequence
 
 Acceptance criteria:
 
-- Collapsing execution detail does not make the transcript harder to navigate.
-- Keyboard-first usage still feels native and predictable.
+- the suite has a clear bias toward behavior over structure
+- fragile implementation-detail tests are reduced
+- important regressions are caught by fewer, more meaningful tests
 
-### Phase 7: Test Coverage
+### Workstream 4: Documentation Reconciliation
 
-Objective: lock the new behavior down with focused VUI tests.
+Objective: make the README a trustworthy guide to current behavior.
 
-Work:
+Concrete tasks:
 
-- Add tests covering:
-  - active turn renders prompt header and live execution detail together
-  - completed turn promotes the final assistant message
-  - execution detail auto-collapses after completion
-  - expansion toggles reveal the expected blocks
-  - failed tool results remain visible in summary state when needed
-  - face/structure regressions for prompt header vs outcome vs detail blocks
-- Prefer component-level tests around turn rendering plus one end-to-end transcript test for turn progression.
+- compare README claims against code and the non-aspirational portions of the specs
+- update README sections where code and spec already agree
+- remove or rewrite outdated claims about:
+  - credential precedence
+  - secret storage behavior
+  - rendering architecture
+  - provider capabilities
+  - supported Emacs baseline
+- keep future-looking material only when clearly labeled as planned and non-current
 
 Acceptance criteria:
 
-- The active-to-completed turn transition is exercised in automated tests.
-- The turn structure is stable against regressions during future UI work.
+- users can follow the README without being misled by outdated behavior
+- README no longer contradicts the code on implemented behavior
+- spec/README disagreements that remain are explicitly future-looking rather than accidental
 
-## Open Design Decisions
+### Workstream 5: Boundary Tightening
 
-These should be resolved before implementation gets too deep:
+Objective: reduce hidden coupling between modules without broad redesign.
 
-- Should partial assistant prose appear in the primary outcome area while streaming, or in a visually subordinate draft area until completion?
-- Should the active prompt be mirrored into a session-level header, or remain only inside the active turn container?
-- What summary information should always remain visible after collapse?
-- Should user prompts always stay expanded, or should long prompts clamp by default in historical turns?
-- How should multi-assistant-message turns be normalized into one final outcome presentation?
+Primary targets:
 
-## Non-Goals
+- runtime/tool injection
+- session/frontend approval coupling
+- provider/runtime boundaries
 
-- Replacing the current VUI architecture
-- Building a fully custom layout engine to emulate GUI sticky positioning
-- Hiding all execution detail permanently
-- Introducing theme-specific hardcoded palettes
+Concrete tasks:
 
-## Suggested Delivery Order
+- reduce reliance on global mutation for session tool invocation setup
+- make runtime dependencies explicit where possible
+- isolate UI-only behavior from headless runtime behavior
+- review modules for places where "headless-friendly" code actually depends on frontend attachment
 
-1. Turn state/model helpers
-2. Active turn prompt header layout
-3. Completion-state outcome promotion
-4. Execution summary + collapse behavior
-5. Face and spacing polish
-6. Navigation updates
-7. Regression tests
+Acceptance criteria:
+
+- session/runtime modules can be reasoned about without tracing buffer-local side effects through the UI
+- approval and tool execution paths have explicit dependency points
+- provider dispatch boundaries are testable without incidental global setup
+
+## Sequenced Phases
+
+### Phase 1: Audit to Decision
+
+Produce a short reconciliation matrix covering:
+
+- code behavior
+- matching spec behavior
+- README claim
+- required action: keep, finish, narrow, or delete
+
+This phase should end with explicit decisions on:
+
+- session-scoped provider dispatch
+- scope-expansion behavior for current quality work
+- supported Emacs baseline
+- credential precedence and storage wording
+
+### Phase 2: Contract Repairs
+
+Implement the minimum code changes needed to make existing contracts true:
+
+- provider dispatch/abort complete
+- approval/scope handling decision
+- event/request/result cleanup where required
+
+Add end-to-end tests before removing old scaffolding.
+
+### Phase 3: Transitional Code Removal
+
+After contract repairs are covered:
+
+- remove compatibility shims that no longer serve a live migration
+- remove legacy rendering fallbacks that no longer represent intended behavior
+- delete stale comments and obsolete knobs
+
+### Phase 4: Test Suite Consolidation
+
+Refactor the test suite around the new portfolio:
+
+- strengthen e2e and property coverage
+- collapse redundant unit tests
+- remove low-signal structural checks
+
+### Phase 5: Documentation Pass
+
+Update:
+
+- README
+- inline commentary/docstrings where misleading
+- any spec wording that accidentally implies already-shipped behavior when the code does not support it yet
+
+## Candidate First Tasks
+
+The best first batch is:
+
+1. done: fix provider dispatch to respect session/request provider end-to-end
+2. done: add an end-to-end regression test for provider override through actual dispatch
+3. decide and implement the v0.1 scope-expansion behavior
+4. remove or complete the Vercel logging compatibility layer
+5. rewrite the README sections on credentials, rendering, and current capabilities
+
+## Recent Progress
+
+- 2026-03-15: provider dispatch and abort now honor per-request/per-handle provider metadata, closing the silent fallback to global `benedict-provider`.
+- 2026-03-15: added regression coverage at two levels: provider helper dispatch/abort and chat-session send path with a provider override.
+- Next slice: reconcile approval/scope-expansion behavior between harness specs and the current deny-with-structured-result implementation before touching README wording.
+
+This batch improves correctness, test value, and documentation accuracy with minimal feature expansion.
+
+## Out of Scope
+
+Unless needed to complete in-progress work, this plan does not include:
+
+- queued steering/follow-up support
+- branching/forking UX
+- subagents and delegation
+- programmable loop policies
+- extension middleware surface expansion
+- broad new tool or provider features
+
+Those remain future work unless a code path already present in the repo is clearly halfway through implementation and currently harming quality by being left incomplete.
 
 ## Definition of Done
 
-This effort is complete when:
+This quality plan is complete when:
 
-- active turns clearly communicate "the assistant is working on this prompt"
-- completed turns clearly communicate "this was the outcome"
-- execution details are available but no longer dominate the transcript
-- spacing and face treatment make turn boundaries obvious without clashing with existing themes
-- the active-to-completed transition is covered by automated tests
+- major code/spec-aligned contracts are actually enforced by the implementation
+- transitional code paths are either finished or removed
+- the README accurately describes current behavior
+- the test suite is visibly more behavior-oriented
+- the repo is easier to reason about because fewer historical paths and hidden couplings remain
