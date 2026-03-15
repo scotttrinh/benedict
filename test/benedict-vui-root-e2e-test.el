@@ -115,6 +115,61 @@
         (should (string-match-p "mock tool output" text)))
       (funcall done))))
 
+(ert-deftest-async benedict-vui-root-e2e-turn-progression-promotes-answer-and-collapses-execution (done)
+  "A streaming turn settles into answer-first history with expandable execution detail."
+  (benedict-test-with-bindings done
+      ((benedict-provider 'fake)
+       (benedict-provider-fake-latency-seconds 0.01)
+       (benedict-provider-fake-streaming-chunk-delay 0.08)
+       (benedict-provider-fake-script
+       (list (list :type 'success
+                    :chunks '("Draft")
+                    :content "Draft"
+                    :thinking "Reasoning details"
+                    :tool-calls (list (list :id "call-1"
+                                            :name 'read_file
+                                            :arguments '(:path "README.md"))))))
+       (benedict-session-tool-invoke-fn
+        (lambda (_tool-id _arguments)
+          "mock tool output")))
+    (with-mounted-vui-root
+      (benedict-vui-root-e2e-test--dispatch session "Inspect README")
+      (should
+       (benedict-vui-test--wait-until
+        (lambda ()
+          (let ((text (benedict-vui-root-e2e-test--buffer-text)))
+            (and (string-match-p "Prompt" text)
+                 (string-match-p "Inspect README" text)
+                 (string-match-p "Activity" text)
+                 (string-match-p "Draft answer" text)
+                 (string-match-p "Draft" text)
+                 (string-match-p "ACTIVE" text))))
+        :timeout 2.0))
+      (should (benedict-vui-test--wait-for-request-finished session 2.0))
+      (vui-flush-sync)
+      (let ((text (benedict-vui-root-e2e-test--buffer-text)))
+        (should (string-match-p "Prompt" text))
+        (should (string-match-p "Inspect README" text))
+        (should (string-match-p "Answer" text))
+        (should (string-match-p "Draft" text))
+        (should (string-match-p "Execution" text))
+        (should (string-match-p "1 tool | read_file | thinking" text))
+        (should (string-match-p "Show details" text))
+        (should-not (string-match-p "Activity" text))
+        (should-not (string-match-p "Draft answer" text))
+        (should-not (string-match-p "Execution details" text))
+        (should-not (string-match-p "Result: read_file" text))
+        (should-not (string-match-p "ACTIVE" text)))
+      (benedict-vui-test--click-button-labeled "Show details")
+      (vui-flush-sync)
+      (let ((text (benedict-vui-root-e2e-test--buffer-text)))
+        (should (string-match-p "Execution details" text))
+        (should (string-match-p "Tool: read_file" text))
+        (should (string-match-p "Result: read_file" text))
+        (should (string-match-p "SUCCESS" text))
+        (should (string-match-p "mock tool output" text)))
+      (funcall done))))
+
 (ert-deftest-async benedict-vui-root-e2e-streaming-thinking-payload-visible (done)
   "Streaming + thinking payload renders the thinking block label."
   (benedict-test-with-bindings done

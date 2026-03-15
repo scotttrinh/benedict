@@ -221,6 +221,45 @@
        "Waiting for assistant output."
        'benedict-chat-turn-active))))
 
+(ert-deftest benedict-vui-turn-active-turn-sections-expose-turn-navigation-properties ()
+  "Active turn sections mark prompt, activity, and draft as turn-level targets."
+  (with-mounted-vui-component
+      (vui-component 'benedict-vui-turn
+                     :turn (list :id "turn-1"
+                                 :prompt-text "Question"
+                                 :active t
+                                 :streaming t
+                                 :completed nil
+                                 :historical nil
+                                 :has-execution-blocks t
+                                 :execution-expanded nil
+                                 :execution-summary '(:tool-count 1 :tool-names ("bash"))
+                                 :messages (list (list :id "u1" :role 'user :content "Question")
+                                                 (list :id "a1"
+                                                       :role 'assistant
+                                                       :content "Draft answer"
+                                                       :thinking "Working"
+                                                       :tool-calls (list
+                                                                    (list :id "call-1"
+                                                                          :name "bash"
+                                                                          :arguments "pwd"))))))
+    (let* ((text (buffer-string))
+           (prompt-pos (string-match "Prompt" text))
+           (activity-pos (string-match "Activity" text))
+           (draft-pos (string-match "Draft answer" text)))
+      (should prompt-pos)
+      (should activity-pos)
+      (should draft-pos)
+      (should (equal (get-text-property prompt-pos 'benedict-turn-id text) "turn-1"))
+      (should (eq (get-text-property prompt-pos 'benedict-turn-target text) 'prompt))
+      (should (equal (get-text-property prompt-pos 'benedict-message-key text) "u1"))
+      (should (equal (get-text-property activity-pos 'benedict-turn-id text) "turn-1"))
+      (should (eq (get-text-property activity-pos 'benedict-turn-target text) 'activity))
+      (should (equal (get-text-property activity-pos 'benedict-message-key text) "a1"))
+      (should (equal (get-text-property draft-pos 'benedict-turn-id text) "turn-1"))
+      (should (eq (get-text-property draft-pos 'benedict-turn-target text) 'draft))
+      (should (equal (get-text-property draft-pos 'benedict-message-key text) "a1")))))
+
 (ert-deftest benedict-vui-turn-completed-turn-promotes-answer-and-collapses-details ()
   "Completed turns show the final answer first and hide execution detail by default."
   (with-mounted-vui-component
@@ -365,6 +404,48 @@
       (should (string-match-p "THINKING" text))
       (should (string-match-p "Tool: bash" text))
       (should (string-match-p "Hide details" text)))))
+
+(ert-deftest benedict-vui-turn-completed-turn-toggle-reveals-and-hides-details ()
+  "Execution summary toggle updates the mounted completed turn in place."
+  (with-mounted-vui-component
+      (vui-component 'benedict-vui-turn
+                     :turn (list :id "u1"
+                                 :prompt-text "Question"
+                                 :active nil
+                                 :streaming nil
+                                 :completed t
+                                 :historical t
+                                 :has-execution-blocks t
+                                 :execution-expanded nil
+                                 :execution-summary '(:tool-count 1
+                                                     :tool-names ("bash")
+                                                     :has-thinking t)
+                                 :messages (list (list :id "u1" :role 'user :content "Question")
+                                                 (list :id "a1"
+                                                       :role 'assistant
+                                                       :content "Final answer"
+                                                       :thinking "Reasoning"
+                                                       :tool-calls (list
+                                                                    (list :id "call-1"
+                                                                          :name "bash"
+                                                                          :arguments "pwd"))))))
+    (let ((text (buffer-string)))
+      (should (string-match-p "Show details" text))
+      (should-not (string-match-p "Execution details" text))
+      (should-not (string-match-p "Tool: bash" text)))
+    (benedict-vui-test--click-button-labeled "Show details")
+    (vui-flush-sync)
+    (let ((text (buffer-string)))
+      (should (string-match-p "Hide details" text))
+      (should (string-match-p "Execution details" text))
+      (should (string-match-p "THINKING" text))
+      (should (string-match-p "Tool: bash" text)))
+    (benedict-vui-test--click-button-labeled "Hide details")
+    (vui-flush-sync)
+    (let ((text (buffer-string)))
+      (should (string-match-p "Show details" text))
+      (should-not (string-match-p "Execution details" text))
+      (should-not (string-match-p "Tool: bash" text)))))
 
 (ert-deftest benedict-vui-turn-turn-sections-expose-turn-navigation-properties ()
   "Turn sections mark prompt, outcome, and execution summary as turn-level targets."

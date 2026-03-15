@@ -27,5 +27,27 @@
       (should (equal (get-text-property highlight-pos 'face text)
                      '(benedict-chat-turn-summary benedict-chat-error))))))
 
+(ert-deftest benedict-vui-execution-summary-toggle-invokes-callback-with-next-state ()
+  "Toggle button reports the next expanded state."
+  (let ((calls nil))
+    (with-mounted-vui-component
+        (vui-component 'benedict-vui-execution-summary
+                       :items '("1 tool")
+                       :summary nil
+                       :expanded nil
+                       :on-toggle (lambda (next)
+                                    (push next calls)))
+      (benedict-vui-test--click-button-labeled "Show details")
+      (should (equal calls '(t))))
+    (with-mounted-vui-component
+        (vui-component 'benedict-vui-execution-summary
+                       :items '("1 tool")
+                       :summary nil
+                       :expanded t
+                       :on-toggle (lambda (next)
+                                    (push next calls)))
+      (benedict-vui-test--click-button-labeled "Hide details")
+      (should (equal calls '(nil t))))))
+
 (provide 'test/benedict-vui-execution-summary-test)
 ;;; benedict-vui-execution-summary-test.el ends here
