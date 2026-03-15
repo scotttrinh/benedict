@@ -55,9 +55,17 @@ Signals an error when `benedict-provider' is not registered."
       (error "Provider %S is not registered" benedict-provider))
     provider))
 
+(defun benedict-provider--resolve (provider-id)
+  "Return provider struct for PROVIDER-ID or the current provider.
+Signals an error when the resolved provider is not registered."
+  (if provider-id
+      (or (benedict-provider-lookup provider-id)
+          (error "Provider %S is not registered" provider-id))
+    (benedict-provider-current)))
+
 (cl-defun benedict-provider-dispatch
     (request &key on-success on-error on-delta on-complete)
-  "Send REQUEST to the active provider.
+  "Send REQUEST to the resolved provider.
 REQUEST is provider-specific data (typically a plist).
 Callbacks:
 - ON-SUCCESS: invoked with the final payload (non-streaming or fallback).
@@ -65,7 +73,7 @@ Callbacks:
 - ON-DELTA: optional streaming chunk callback (called zero or more times).
 - ON-COMPLETE: optional final callback for streaming providers; when nil the
   provider should fall back to ON-SUCCESS."
-  (let ((provider (benedict-provider-current)))
+  (let ((provider (benedict-provider--resolve (plist-get request :provider))))
     (funcall (benedict-provider-send provider)
              provider request
              :on-success on-success
@@ -74,9 +82,10 @@ Callbacks:
              :on-complete on-complete)))
 
 (defun benedict-provider-abort (handle)
-  "Ask the active provider to cancel HANDLE (a provider-specific token)."
+  "Ask HANDLE's provider to cancel it.
+Fall back to the current provider when HANDLE does not carry provider metadata."
   (when handle
-    (let* ((provider (benedict-provider-current))
+    (let* ((provider (benedict-provider--resolve (plist-get handle :provider)))
            (cancel-fn (benedict-provider-cancel provider)))
       (when (functionp cancel-fn)
         (funcall cancel-fn provider handle)))))

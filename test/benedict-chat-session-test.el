@@ -148,6 +148,48 @@
                      (should (>= (length (benedict-chat-session-test--entries session)) 2))
                      (funcall done))))))
 
+(ert-deftest benedict-chat-session-test-send-honors-provider-override-through-dispatch ()
+  "Provider override is used by the real chat send path, not only resolution helpers."
+  (let ((benedict-session--registry (make-hash-table :test 'equal))
+        (benedict-provider 'fake)
+        (benedict-provider-openrouter-default-model "openrouter/test-default")
+        (captured-request nil)
+        (previous-openrouter (benedict-provider-lookup 'openrouter)))
+    (unwind-protect
+        (progn
+          (benedict-provider-register
+           (benedict-provider--create
+            :id 'openrouter
+            :name "OpenRouter"
+            :send (lambda (_provider request &rest callbacks)
+                    (setq captured-request request)
+                    (funcall (plist-get callbacks :on-success)
+                             '(:message (:role assistant :content "override reply")
+                               :provider openrouter
+                               :model "openrouter/test-default"))
+                    '(:provider openrouter :request-id "openrouter-test"))
+            :capabilities '(:streaming nil)
+            :cancel #'ignore))
+          (with-temp-buffer
+            (benedict-chat-mode)
+            (benedict-chat--init-buffer)
+            (setq-local benedict-chat--provider-override 'openrouter)
+            (benedict-chat--send-text "use the override")
+            (let* ((session benedict-chat--session)
+                   (messages (benedict-session-entries-chronological session))
+                   (assistant (car (last messages))))
+              (should (eq (plist-get captured-request :provider) 'openrouter))
+              (should (equal (plist-get captured-request :model)
+                             "openrouter/test-default"))
+              (should (eq (benedict-session-provider session) 'openrouter))
+              (should (equal (benedict-session-model session)
+                             "openrouter/test-default"))
+              (should (eq (benedict-message-role assistant) 'assistant))
+              (should (equal (benedict-message-text assistant) "override reply")))))
+      (if previous-openrouter
+          (puthash 'openrouter previous-openrouter benedict-provider--registry)
+        (remhash 'openrouter benedict-provider--registry)))))
+
 (ert-deftest benedict-chat-session-test-error-sets-session-state ()
   "Errors during operation set session error state."
   (let ((benedict-session--registry (make-hash-table :test 'equal)))

@@ -15,6 +15,19 @@
 (require 'benedict-provider-fake)
 (require 'benedict-test-helpers)
 
+(defmacro benedict-provider-test--with-provider (provider &rest body)
+  "Register PROVIDER for BODY, then restore the previous registry entry."
+  (declare (indent 1))
+  `(let* ((provider-id (benedict-provider-id ,provider))
+          (previous (benedict-provider-lookup provider-id)))
+     (unwind-protect
+         (progn
+           (benedict-provider-register ,provider)
+           ,@body)
+       (if previous
+           (puthash provider-id previous benedict-provider--registry)
+         (remhash provider-id benedict-provider--registry)))))
+
 (ert-deftest-async benedict-provider-fake-default-echo (done)
   "Fake provider echoes last user message with metadata."
   (benedict-test-with-bindings done
@@ -90,6 +103,53 @@
                      (lambda ()
                        (should-not callback-fired)
                        (funcall done)))))))
+
+(ert-deftest benedict-provider-dispatch-uses-request-provider ()
+  "Dispatch honors REQUEST provider instead of global provider state."
+  (let ((benedict-provider 'fake)
+        (captured nil))
+    (benedict-provider-test--with-provider
+        (benedict-provider--create
+         :id 'dispatch-test
+         :name "Dispatch Test"
+         :send (lambda (provider request &rest callbacks)
+                 (setq captured (list :provider (benedict-provider-id provider)
+                                      :request request))
+                 (funcall (plist-get callbacks :on-success)
+                          '(:message (:role assistant :content "override")
+                            :provider dispatch-test
+                            :model "dispatch/model"))
+                 '(:provider dispatch-test :request-id "dispatch-test"))
+         :capabilities nil
+         :cancel #'ignore)
+      (let ((result nil))
+        (benedict-provider-dispatch
+         '(:provider dispatch-test :model "dispatch/model" :messages [(:role user :content "hi")])
+         :on-success (lambda (payload)
+                       (setq result payload)))
+        (should (eq (plist-get captured :provider) 'dispatch-test))
+        (should (eq (plist-get (plist-get captured :request) :provider) 'dispatch-test))
+        (should (equal (plist-get result :provider) 'dispatch-test))
+        (should (equal (plist-get result :model) "dispatch/model"))))))
+
+(ert-deftest benedict-provider-abort-uses-handle-provider ()
+  "Abort honors HANDLE provider instead of global provider state."
+  (let ((benedict-provider 'fake)
+        (aborted nil))
+    (benedict-provider-test--with-provider
+        (benedict-provider--create
+         :id 'abort-test
+         :name "Abort Test"
+         :send #'ignore
+         :capabilities nil
+         :cancel (lambda (provider handle)
+                   (setq aborted (list :provider (benedict-provider-id provider)
+                                       :handle handle))))
+      (let ((handle '(:provider abort-test :request-id "abort-me")))
+        (benedict-provider-abort handle)
+        (should (eq (plist-get aborted :provider) 'abort-test))
+        (should (equal (plist-get (plist-get aborted :handle) :request-id)
+                       "abort-me"))))))
 
 (provide 'benedict-provider-fake-test)
 ;;; benedict-provider-fake-test.el ends here
