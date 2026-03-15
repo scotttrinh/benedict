@@ -142,7 +142,9 @@ The snippet below is an annotated, copy‑pasteable Doom Emacs setup. Drop it in
 ;; Optional: enable provider logging while you experiment
 ;; Logs appear in *Messages*; set to nil once you're happy.
 (after! benedict
-  (setq benedict-provider-log-level 'debug))
+  (setq benedict-logging-threshold lgr-level-debug
+        benedict-logging-configure-function #'benedict-logging-configure-default)
+  (benedict-logging-setup))
 
 ;; Usage:
 ;;   - Reload Doom (M-x doom/reload or restart).
@@ -288,18 +290,16 @@ Example: increase the limit for large diffs:
 
 ** Provider selection & logging
 
-- =benedict-provider-log-level= :: Minimum severity for logs in =*Messages*=; one of =nil= (off), =error=, =warn=, =info=, =debug=, =trace=.
-- =benedict-provider-log-file-level= :: Minimum severity for logs written to disk; same choices as =benedict-provider-log-level= (default: =trace=).
-- =benedict-provider-log-directory= :: Directory for per-request JSONL log files (default: =nil=, disabled).
-- =benedict-provider-log-retain-count= :: Number of per-request log files to keep (default: =5=).
+- =benedict-provider= :: Default provider used for new requests when a session or request does not override it.
+- =benedict-logging-threshold= :: Optional global threshold for Benedict's =lgr= loggers. Use =lgr-level-debug= or =lgr-level-trace= for verbose diagnostics.
+- =benedict-logging-configure-function= :: Optional logger setup hook. Set this to =#'benedict-logging-configure-default= to install a simple =*Messages*= appender for the =benedict= logger tree.
 
-Example: enable verbose logs for debugging into =~/.local/share/benedict-logs/=:
+Example: enable verbose logs in =*Messages*=:
 #+begin_src elisp
 (after! benedict
-  (setq benedict-provider-log-level       'debug
-        benedict-provider-log-file-level 'trace
-        benedict-provider-log-directory  (expand-file-name "~/.local/share/benedict-logs/")
-        benedict-provider-log-retain-count 20))
+  (setq benedict-logging-threshold lgr-level-debug
+        benedict-logging-configure-function #'benedict-logging-configure-default)
+  (benedict-logging-setup))
 #+end_src
 
 ** OpenRouter provider options

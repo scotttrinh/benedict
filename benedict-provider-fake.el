@@ -262,12 +262,11 @@ Returns a handle plist with :request, :entry, :provider, and :timers."
               (register delay
                         (lambda ()
                           (let ((payload (benedict-provider-fake--error-payload entry)))
-                            (benedict-provider-log
-                             'fake 'warn :response
-                             :request-id request-id
-                             :type 'error
-                             :message (plist-get payload :message)
-                             :status (plist-get payload :status))
+                            (lgr-warn lgr "Fake response error"
+                                      :request-id request-id
+                                      :type 'error
+                                      :message (plist-get payload :message)
+                                      :status (plist-get payload :status))
                             (funcall on-error payload))))))
         ;; Success branch - MUST wrap in progn too!
         (progn

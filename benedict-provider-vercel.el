@@ -2,8 +2,8 @@
 ;; Author: Benedict maintainers
 
 ;;; Commentary:
-;; Implements a non-streaming chat backend against the Vercel API using
-;; url-retrieve with retry/backoff and auth-source/env based credential lookup.
+;; Implements a Vercel chat backend with HTTP/streaming support, retry/backoff,
+;; and auth-source/env based credential lookup.
 
 ;;; Code:
 
@@ -18,20 +18,6 @@
 (require 'benedict-tools)
 (require 'benedict-http)
 (require 'benedict-credentials)
-
-;; Temporary compatibility layer for old logging calls
-;; TODO: Replace all call sites with direct lgr calls
-(cl-defun benedict-provider-log (_provider _level _event &rest _data)
-  "Stub for old logging infrastructure - replaced by lgr."
-  nil)
-
-(cl-defun benedict-provider-log-debug (_provider _event &rest _data)
-  "Stub for old logging infrastructure - replaced by lgr."
-  nil)
-
-(cl-defun benedict-provider-log-trace (_provider _event &rest _data)
-  "Stub for old logging infrastructure - replaced by lgr."
-  nil)
 
 (defgroup benedict-provider-vercel nil
   "Settings for the Benedict Vercel provider."
@@ -119,9 +105,16 @@ Set to nil to skip matching on :user."
   '(408 409 425 429 500 502 503 504)
   "HTTP status codes considered retryable for Vercel requests.")
 
+(defconst benedict-provider-vercel--logger-name "benedict.vercel"
+  "Logger name used for Vercel provider events.")
+
 (defvar benedict-provider-vercel--state-table
   (make-hash-table :test 'equal)
   "In-memory registry of per-request state keyed by request id.")
+
+(defun benedict-provider-vercel--logger ()
+  "Return the logger used for Vercel provider logs."
+  (lgr-get-logger benedict-provider-vercel--logger-name))
 
 (defun benedict-provider-vercel--make-request-id ()
   "Return a log-friendly unique request identifier for Vercel."
@@ -245,15 +238,17 @@ When streaming is enabled, callbacks receive incremental deltas via curl."
   (let* ((token (plist-get (plist-get context :credential) :token))
          (headers (benedict-provider-vercel--build-headers token))
          (payload (plist-get context :payload))
-         (streaming (plist-get context :streaming)))
-    (benedict-provider-log-debug
-     'vercel :request
-     :request-id (plist-get context :request-id)
-     :attempt (plist-get context :attempt)
-     :endpoint benedict-provider-vercel-endpoint
-     :body payload
-     :body-bytes (and payload (string-bytes payload))
-     :credential-source (plist-get (plist-get context :credential) :source))
+         (streaming (plist-get context :streaming))
+         (lgr (benedict-provider-vercel--logger)))
+    (lgr-debug lgr "Vercel HTTP request"
+               :request-id (plist-get context :request-id)
+               :attempt (plist-get context :attempt)
+               :endpoint benedict-provider-vercel-endpoint
+               :streaming streaming
+               :headers (benedict-provider-vercel--redact-headers headers)
+               :body payload
+               :body-bytes (and payload (string-bytes payload))
+               :credential-source (plist-get (plist-get context :credential) :source))
 
     (let ((process
            (benedict-http-request
@@ -306,23 +301,23 @@ which some providers (like xAI/Grok) seem to emit within a single SSE block."
                                            :null-object nil :false-object :json-false)))
               (benedict-provider-vercel--stream-handle-json context json))
           (json-parse-error
-           (benedict-provider-log
-            'vercel 'warn :stream-parse-error
-            :request-id (plist-get context :request-id)
-            :payload payload
-            :error err)))))))
+           (let ((lgr (benedict-provider-vercel--logger)))
+             (lgr-warn lgr "Vercel stream parse error"
+                       :request-id (plist-get context :request-id)
+                       :payload payload
+                       :error err))))))))
 
 (defun benedict-provider-vercel--stream-handle-error (context error-block _ignored)
   "Handle streaming ERROR-BLOCK for CONTEXT."
   (let ((message (or (plist-get error-block :message) "Unknown streaming error"))
         (code (plist-get error-block :code))
         (type (plist-get error-block :type)))
-    (benedict-provider-log
-     'vercel 'error :stream-error
-     :request-id (plist-get context :request-id)
-     :code code
-     :type type
-     :message message)
+    (let ((lgr (benedict-provider-vercel--logger)))
+      (lgr-error lgr "Vercel stream error"
+                 :request-id (plist-get context :request-id)
+                 :code code
+                 :type type
+                 :message message))
     (benedict-provider-vercel--emit-error
      context (list :type 'api :code code :message message :body error-block :retryable nil))))
 
@@ -349,11 +344,11 @@ which some providers (like xAI/Grok) seem to emit within a single SSE block."
              (choices
               (let* ((normalized (benedict-provider-vercel--normalize-delta-choices
                                   context choices)))
-                (benedict-provider-log-trace
-                 'vercel :stream-delta
-                 :request-id request-id
-                 :remote-id remote-id
-                 :choices (length normalized))
+                (let ((lgr (benedict-provider-vercel--logger)))
+                  (lgr-trace lgr "Vercel stream delta"
+                             :request-id request-id
+                             :remote-id remote-id
+                             :choice-count (length normalized)))
                 (when (functionp on-delta)
                   (dolist (choice normalized)
                     (let ((delta (plist-get choice :delta)))
@@ -385,10 +380,10 @@ Returns non-nil when a delta was dispatched."
         (on-delta (plist-get context :on-delta))
         (request-id (plist-get context :request-id)))
     (when details
-      (benedict-provider-log-trace
-       'vercel :stream-reasoning-event
-       :request-id request-id
-       :details (length details))
+      (let ((lgr (benedict-provider-vercel--logger)))
+        (lgr-trace lgr "Vercel stream reasoning event"
+                   :request-id request-id
+                   :detail-count (length details)))
       (when on-delta
         (mapc (lambda (detail)
                 (let ((chunk (or (plist-get detail :text)
@@ -699,13 +694,13 @@ Returns non-nil when a delta was dispatched."
                                                 :status :completed
                                                 :end-time end-time
                                                 :latency latency)
-    (benedict-provider-log
-     'vercel 'info :stream-complete
-     :request-id request-id
-     :remote-id (plist-get state :remote-id)
-     :latency latency
-     :model (plist-get result :model)
-     :content-bytes (length (or content "")))
+    (let ((lgr (benedict-provider-vercel--logger)))
+      (lgr-info lgr "Vercel stream complete"
+                :request-id request-id
+                :remote-id (plist-get state :remote-id)
+                :latency latency
+                :model (plist-get result :model)
+                :content-bytes (length (or content ""))))
     (benedict-provider-vercel--stream-cleanup context)
     (benedict-provider-vercel--state-clear request-id)
     (let ((on-complete (plist-get context :on-complete))
@@ -757,18 +752,18 @@ Returns non-nil when a delta was dispatched."
              (attempt (plist-get context :attempt))
              (err-msg (or message stderr "Unknown error")))
         (if (benedict-provider-vercel--maybe-retry context nil err-msg)
-            (benedict-provider-log
-             'vercel 'warn :network-error
-             :request-id request-id
-             :attempt attempt
-             :message err-msg
-             :retry t)
-          (benedict-provider-log
-           'vercel 'error :network-error
-           :request-id request-id
-           :attempt attempt
-           :message err-msg
-           :retry nil)
+            (let ((lgr (benedict-provider-vercel--logger)))
+              (lgr-warn lgr "Vercel network error"
+                        :request-id request-id
+                        :attempt attempt
+                        :message err-msg
+                        :retry t))
+          (let ((lgr (benedict-provider-vercel--logger)))
+            (lgr-error lgr "Vercel network error"
+                       :request-id request-id
+                       :attempt attempt
+                       :message err-msg
+                       :retry nil))
           (benedict-provider-vercel--emit-error
            context (list :type 'network :message err-msg :retryable nil)))))))
 
@@ -785,20 +780,20 @@ Returns non-nil when a delta was dispatched."
     (json-parse-error
      (let ((request-id (plist-get context :request-id)))
        (if (benedict-provider-vercel--maybe-retry context status-code "JSON parse error")
-           (benedict-provider-log
-            'vercel 'warn :decode-error
-            :request-id request-id
-            :status status-code
-            :body body
-            :error err
-            :retry t)
-         (benedict-provider-log
-          'vercel 'error :decode-error
-          :request-id request-id
-          :status status-code
-          :body body
-          :error err
-          :retry nil)
+           (let ((lgr (benedict-provider-vercel--logger)))
+             (lgr-warn lgr "Vercel decode error"
+                       :request-id request-id
+                       :status status-code
+                       :body body
+                       :error err
+                       :retry t))
+         (let ((lgr (benedict-provider-vercel--logger)))
+           (lgr-error lgr "Vercel decode error"
+                      :request-id request-id
+                      :status status-code
+                      :body body
+                      :error err
+                      :retry nil))
          (benedict-provider-vercel--emit-error
           context (list :type 'decode :status status-code :message "Failed to parse response"
                         :body body :retryable nil :error err)))))))
@@ -836,15 +831,26 @@ Returns non-nil when a delta was dispatched."
     (benedict-provider-vercel--state-update
      request-id :usage usage :model model :latency latency
      :status :completed :end-time end-time)
-    (benedict-provider-log
-     'vercel log-level :completion
-     :request-id request-id
-     :attempt (plist-get context :attempt)
-     :status status-code
-     :model model
-     :latency latency
-     :usage usage
-     :empty-response empty-response)
+    (let ((lgr (benedict-provider-vercel--logger)))
+      (pcase log-level
+        ('warn
+         (lgr-warn lgr "Vercel completion"
+                   :request-id request-id
+                   :attempt (plist-get context :attempt)
+                   :status status-code
+                   :model model
+                   :latency latency
+                   :usage usage
+                   :empty-response empty-response))
+        (_
+         (lgr-info lgr "Vercel completion"
+                   :request-id request-id
+                   :attempt (plist-get context :attempt)
+                   :status status-code
+                   :model model
+                   :latency latency
+                   :usage usage
+                   :empty-response empty-response))))
     ;; Prefer :on-complete over :on-success for consistency with streaming protocol
     (if (functionp (plist-get context :on-complete))
         (funcall (plist-get context :on-complete) result)
@@ -862,24 +868,24 @@ Returns non-nil when a delta was dispatched."
          (retry (and retryable
                      (benedict-provider-vercel--maybe-retry context status-code message))))
     (if retry
-        (benedict-provider-log
-         'vercel 'warn :http-error
-         :request-id (plist-get context :request-id)
-         :attempt (plist-get context :attempt)
-         :status status-code
-         :code code
-         :message message
-         :retry t
-         :body body)
-      (benedict-provider-log
-       'vercel 'error :http-error
-       :request-id (plist-get context :request-id)
-       :attempt (plist-get context :attempt)
-       :status status-code
-       :code code
-       :message message
-       :retry nil
-       :body body)
+        (let ((lgr (benedict-provider-vercel--logger)))
+          (lgr-warn lgr "Vercel HTTP error"
+                    :request-id (plist-get context :request-id)
+                    :attempt (plist-get context :attempt)
+                    :status status-code
+                    :code code
+                    :message message
+                    :retry t
+                    :body body))
+      (let ((lgr (benedict-provider-vercel--logger)))
+        (lgr-error lgr "Vercel HTTP error"
+                   :request-id (plist-get context :request-id)
+                   :attempt (plist-get context :attempt)
+                   :status status-code
+                   :code code
+                   :message message
+                   :retry nil
+                   :body body))
       (benedict-provider-vercel--emit-error
        context (list :type 'http :status status-code :code code :message message
                      :retryable retryable :body body)))))
@@ -898,14 +904,14 @@ Returns non-nil when a delta was dispatched."
          (plist-get context :request-id)
          :status :retrying
          :start-time (plist-get next :start-time))
-        (benedict-provider-log-debug
-         'vercel :retry
-         :request-id (plist-get context :request-id)
-         :current-attempt attempt
-         :next-attempt (plist-get next :attempt)
-         :delay delay
-         :status status
-         :message message)
+        (let ((lgr (benedict-provider-vercel--logger)))
+          (lgr-debug lgr "Vercel retry scheduled"
+                     :request-id (plist-get context :request-id)
+                     :current-attempt attempt
+                     :next-attempt (plist-get next :attempt)
+                     :delay delay
+                     :status status
+                     :message message))
         (run-at-time delay #'benedict-provider-vercel--perform-request next)
         t))))
 
@@ -1242,11 +1248,10 @@ The CALLS argument supplies the tool-call payloads."
           (json-parse-string arguments :object-type 'plist :array-type 'list
                              :null-object nil :false-object :json-false)
         (json-parse-error
-         (benedict-provider-log
-          'vercel 'warn :tool-args-decode
-          :message "Failed to decode tool arguments"
-          :error err
-          :input arguments)
+         (let ((lgr (benedict-provider-vercel--logger)))
+           (lgr-warn lgr "Vercel tool args decode failed"
+                     :error err
+                     :input arguments))
          nil))))
    ((plistp arguments) arguments)
    (t nil)))

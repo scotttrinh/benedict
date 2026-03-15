@@ -1,9 +1,9 @@
-;;; benedict-tools.el --- Tool registry skeleton -*- lexical-binding: t; -*-
+;;; benedict-tools.el --- Tool registry and built-in tools -*- lexical-binding: t; -*-
 ;; Author: Benedict maintainers
 
 ;;; Commentary:
-;; Minimal registry to register/list/call tool functions.  Approval UX is a
-;; placeholder and will be implemented later in Phase 1.
+;; Registers tool specs, normalizes schema metadata, and provides the
+;; built-in tool implementations that run through the harness boundary.
 
 ;;; Code:
 

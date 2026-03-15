@@ -115,7 +115,7 @@ Primary targets:
 Concrete tasks:
 
 - remove or retire legacy VUI rendering paths once all current turn-centric behavior is covered through the canonical path
-- finish replacing Vercel logging compatibility stubs with the current logging approach
+- done: replaced the Vercel logging compatibility stubs with direct `lgr` logging, updated the remaining fake-provider caller, and rewrote stale logging commentary/docs that referenced removed knobs
 - remove obsolete variables and stale comments once callers are migrated
 - clean up misleading "skeleton", "placeholder", and "stub" commentary where the implementation is no longer stubbed
 
@@ -276,8 +276,9 @@ The best first batch is:
 - 2026-03-15: added regression coverage at two levels: provider helper dispatch/abort and chat-session send path with a provider override.
 - 2026-03-15: added chat/UI regressions for the implemented harness split: approval-required tools enter `approval-pending` and resume cleanly after in-buffer approval, while scope denials stay in-band as structured tool results without surfacing approval UI.
 - 2026-03-15: session-recorded tool results now preserve structured success metadata (`:details`, `:ui`, `:effects`) across runtime, persistence, and mounted VUI rendering; targeted regressions cover session persistence and mounted chat rendering.
+- 2026-03-15: removed the dead Vercel provider logging shim, moved Vercel/fake-provider diagnostics onto real `lgr` calls, and updated README/comments that still described the retired log-level/file logging knobs.
 - Decision: provider-facing replay still sends canonical tool-result text content only; UI/persistence-only metadata remains on canonical transcript blocks and metadata.
-- Next slice: remove the Vercel logging compatibility shims and stale placeholder commentary, then reassess the remaining legacy VUI fallback path.
+- Next slice: remove the remaining legacy VUI fallback path in `components/benedict-vui-turn.el` once its mainline coverage is confirmed, then prune any tests that only exercise the retired renderer shape.
 
 This batch improves correctness, test value, and documentation accuracy with minimal feature expansion.
 
