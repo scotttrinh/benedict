@@ -679,6 +679,46 @@
         (kill-buffer buf)
         (funcall done)))))
 
+(ert-deftest-async benedict-chat-session-test-ui-structured-tool-result-renders-ui-metadata (done)
+  "Mounted chat UI renders preserved tool result headers and bodies."
+  (benedict-test-with-bindings done
+      ((benedict-session--registry (make-hash-table :test 'equal))
+       (benedict-provider 'fake)
+       (benedict-session-tool-invoke-fn #'benedict-tool-invoke)
+       (benedict-provider-fake-script
+        (list (list :type 'success
+                    :content "Search complete"
+                    :tool-calls (list (list :id "call-search"
+                                            :name 'project-search
+                                            :arguments '(:query "needle"))))))
+       ((symbol-function benedict-search-project-sync)
+        (lambda (_query &rest _args)
+          '(:query "needle"
+            :root "/tmp/project"
+            :regexp nil
+            :limit 5
+            :match-count 1
+            :matches ((:file "README.org"
+                       :line 3
+                       :column 1
+                       :text "needle in haystack"))))))
+    (let ((buf (generate-new-buffer "*benedict-chat-structured-tool-ui*")))
+      (with-current-buffer buf
+        (benedict-chat-mode)
+        (benedict-chat--init-buffer)
+        (let ((session benedict-chat--session))
+          (benedict-chat--send-text "search the project")
+          (should (benedict-vui-test--wait-for-request-finished session 2.0))
+          (vui-flush-sync)
+          (benedict-vui-test--click-button-labeled "Show details")
+          (vui-flush-sync)
+          (let ((text (buffer-string)))
+            (should (string-match-p "Project search" text))
+            (should (string-match-p "Query: \"needle\"" text))
+            (should (string-match-p "README.org:3:1" text)))))
+      (kill-buffer buf)
+      (funcall done))))
+
 (ert-deftest-async benedict-chat-session-test-ui-approval-request-resumes-after-approve (done)
   "Approval-required tools pause in chat UI and resume after approval."
   (let ((tool-id 'benedict-chat-session-test-confirm-tool))

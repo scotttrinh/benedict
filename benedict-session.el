@@ -652,26 +652,62 @@ Return plist (:status :output :error).  Emit tool-started and tool-completed eve
     (benedict-session-add-message session message)
     result))
 
+(defun benedict-session--tool-result-plist-without-keys (plist keys)
+  "Return PLIST copied without KEYS."
+  (let (result)
+    (cl-loop for (key value) on plist by #'cddr
+             unless (memq key keys)
+             do (setq result (plist-put result key value)))
+    result))
+
+(defun benedict-session--tool-result-content (output error-info)
+  "Return display content derived from OUTPUT and ERROR-INFO."
+  (if error-info
+      (if (eq (plist-get error-info :code) 'permission-denied)
+          (format "Tool denied: %s" (plist-get error-info :message))
+        (if (eq (plist-get error-info :code) 'scope-expansion-required)
+            (format "Tool requires scope expansion: %s" (plist-get error-info :message))
+          (format "Tool error: %s" (plist-get error-info :message))))
+    (cond
+     ((stringp output) output)
+     ((plist-get output :text) (plist-get output :text))
+     ((plist-get output :content) (plist-get output :content))
+     (t (format "%S" output)))))
+
+(defun benedict-session--tool-result-metadata (status output error-info)
+  "Return canonical tool result metadata for STATUS, OUTPUT, and ERROR-INFO."
+  (let* ((structured-output (and (listp output) (copy-tree output)))
+         (ui (and structured-output (plist-get structured-output :ui)))
+         (effects (and structured-output (plist-get structured-output :effects)))
+         (details (if error-info
+                      (copy-tree error-info)
+                    (and structured-output
+                         (benedict-session--tool-result-plist-without-keys
+                          structured-output
+                          '(:content :text :message :ui :effects))))))
+    (let ((metadata (list :status status)))
+      (when details
+        (setq metadata (plist-put metadata :details details)))
+      (when ui
+        (setq metadata (plist-put metadata :ui ui)))
+      (when effects
+        (setq metadata (plist-put metadata :effects effects)))
+      (when error-info
+        (setq metadata (plist-put metadata :error (copy-tree error-info))))
+      metadata)))
+
 (defun benedict-session--format-tool-result (tool-id call-id status output error-info)
   "Format tool result for TOOL-ID and CALL-ID using STATUS, OUTPUT, and ERROR-INFO.
 Return a plist suitable for adding to message history."
   (let* ((normalized-status (or status (if error-info 'failure 'success)))
-         (content (if error-info
-                      (if (eq (plist-get error-info :code) 'permission-denied)
-                          (format "Tool denied: %s" (plist-get error-info :message))
-                        (if (eq (plist-get error-info :code) 'scope-expansion-required)
-                            (format "Tool requires scope expansion: %s" (plist-get error-info :message))
-                          (format "Tool error: %s" (plist-get error-info :message))))
-                    (cond
-                     ((stringp output) output)
-                     ((plist-get output :text) (plist-get output :text))
-                     ((plist-get output :content) (plist-get output :content))
-                     (t (format "%S" output))))))
+         (content (benedict-session--tool-result-content output error-info))
+         (metadata (benedict-session--tool-result-metadata
+                    normalized-status output error-info)))
     (list :role 'tool
           :tool-call-id call-id
           :name tool-id
           :content content
-          :metadata (list :status normalized-status :error error-info))))
+          :metadata metadata)))
 
 (defun benedict-session--build-pending-approval (session tool-call tool-result tool-calls index)
   "Build pending approval state for SESSION from TOOL-CALL, TOOL-RESULT, TOOL-CALLS, and INDEX."

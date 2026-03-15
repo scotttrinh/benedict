@@ -35,14 +35,20 @@
         :arguments (plist-get tool-call :arguments)
         :status (plist-get tool-call :status)))
 
-(defun benedict-message--tool-result-block (tool-call-id name status content &optional details)
-  "Create a tool-result block for TOOL-CALL-ID, NAME, STATUS, CONTENT, and DETAILS."
+(defun benedict-message--tool-result-block
+    (tool-call-id name status content &optional details ui effects)
+  "Create a tool-result block for TOOL-CALL-ID, NAME, STATUS, and CONTENT.
+
+DETAILS preserves structured runtime metadata.  UI carries render hints and
+EFFECTS carries observed side-effect summaries."
   (list :type 'tool-result
         :tool-call-id tool-call-id
         :name name
         :status status
         :content content
-        :details details))
+        :details details
+        :ui ui
+        :effects effects))
 
 (defun benedict-message-user-text (text &optional metadata)
   "Create a canonical user text message for TEXT and METADATA."
@@ -60,13 +66,27 @@
    :blocks (list (benedict-message--text-block text))
    :metadata metadata))
 
-(defun benedict-message-tool-result (tool-call-id name status content &optional details)
-  "Create a canonical tool result message for TOOL-CALL-ID, NAME, STATUS, CONTENT, and DETAILS."
-  (benedict-message-create
-   :kind 'message
-   :role 'tool
-   :blocks (list (benedict-message--tool-result-block tool-call-id name status content details))
-   :metadata (list :status status :details details)))
+(defun benedict-message-tool-result
+    (tool-call-id name status content &optional details ui effects)
+  "Create a canonical tool result message.
+
+TOOL-CALL-ID, NAME, STATUS, and CONTENT identify the result.  DETAILS, UI,
+and EFFECTS mirror the structured tool result contract."
+  (let ((metadata (list :status status)))
+    (when details
+      (setq metadata (plist-put metadata :details details)))
+    (when ui
+      (setq metadata (plist-put metadata :ui ui)))
+    (when effects
+      (setq metadata (plist-put metadata :effects effects)))
+    (when (and details (memq status '(failure denied)))
+      (setq metadata (plist-put metadata :error details)))
+    (benedict-message-create
+     :kind 'message
+     :role 'tool
+     :blocks (list (benedict-message--tool-result-block
+                    tool-call-id name status content details ui effects))
+     :metadata metadata)))
 
 (defun benedict-message-from-data (message)
   "Normalize MESSAGE data into a `benedict-message'."
@@ -90,6 +110,10 @@
            (tool-call-id (plist-get message :tool-call-id))
            (name (plist-get message :name))
            (metadata (copy-tree (plist-get message :metadata)))
+           (tool-result-details (or (plist-get metadata :details)
+                                    (plist-get metadata :error)))
+           (tool-result-ui (plist-get metadata :ui))
+           (tool-result-effects (plist-get metadata :effects))
            (blocks nil))
       (when (or content (memq role '(assistant user system tool)))
         (push (benedict-message--text-block content) blocks))
@@ -103,7 +127,9 @@
                name
                (or (plist-get metadata :status) 'success)
                content
-               (plist-get metadata :error))
+               tool-result-details
+               tool-result-ui
+               tool-result-effects)
               blocks))
       (benedict-message-create
        :id (plist-get message :id)
@@ -167,6 +193,16 @@
   (when-let ((block (benedict-message--tool-result-block-data message)))
     (plist-get block :details)))
 
+(defun benedict-message-tool-result-ui (message)
+  "Return tool result UI metadata from MESSAGE, or nil."
+  (when-let ((block (benedict-message--tool-result-block-data message)))
+    (plist-get block :ui)))
+
+(defun benedict-message-tool-result-effects (message)
+  "Return tool result effects metadata from MESSAGE, or nil."
+  (when-let ((block (benedict-message--tool-result-block-data message)))
+    (plist-get block :effects)))
+
 (defun benedict-message-blocks-for-display (message)
   "Return display blocks for canonical MESSAGE."
   (let ((role (benedict-message-role message))
@@ -193,7 +229,10 @@
                                    :name (plist-get block :name)
                                    :status (plist-get block :status)
                                    :content (plist-get block :content)
-                                   :error (plist-get block :details))
+                                   :details (plist-get block :details)
+                                   :error (plist-get block :details)
+                                   :ui (plist-get block :ui)
+                                   :effects (plist-get block :effects))
                      :status (plist-get block :status))
                blocks))))
     (if (and (eq role 'tool) blocks)

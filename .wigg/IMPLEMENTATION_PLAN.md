@@ -90,7 +90,7 @@ Concrete tasks:
 - done: provider dispatch/abort now resolve against request/handle provider metadata instead of global process state
 - done: regression coverage now proves provider override is honored by the real chat send path, not only by resolution helpers
 - done: v0.1 scope expansion is narrowed to the implemented deny-with-structured-result path; specs/README now describe audit-backed structured denials instead of a separate approval UI
-- audit session events and request/result metadata so the VUI, persistence, and runtime are all consuming the same contract
+- done: successful tool results now persist canonical `:details`/`:ui`/`:effects` metadata so the VUI, persistence, and runtime consume the same structured contract instead of flattening to display text
 
 Acceptance criteria:
 
@@ -275,7 +275,9 @@ The best first batch is:
 - 2026-03-15: provider dispatch and abort now honor per-request/per-handle provider metadata, closing the silent fallback to global `benedict-provider`.
 - 2026-03-15: added regression coverage at two levels: provider helper dispatch/abort and chat-session send path with a provider override.
 - 2026-03-15: added chat/UI regressions for the implemented harness split: approval-required tools enter `approval-pending` and resume cleanly after in-buffer approval, while scope denials stay in-band as structured tool results without surfacing approval UI.
-- Next slice: audit session event and tool-result metadata so UI, persistence, and runtime consume the same contract before touching README wording.
+- 2026-03-15: session-recorded tool results now preserve structured success metadata (`:details`, `:ui`, `:effects`) across runtime, persistence, and mounted VUI rendering; targeted regressions cover session persistence and mounted chat rendering.
+- Decision: provider-facing replay still sends canonical tool-result text content only; UI/persistence-only metadata remains on canonical transcript blocks and metadata.
+- Next slice: remove the Vercel logging compatibility shims and stale placeholder commentary, then reassess the remaining legacy VUI fallback path.
 
 This batch improves correctness, test value, and documentation accuracy with minimal feature expansion.
 

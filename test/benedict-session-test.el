@@ -573,6 +573,32 @@
         (should (string-match-p "Tool denied:" (benedict-message-text entry)))
         (should (eq 'permission-denied (plist-get details :code)))))))
 
+(ert-deftest benedict-session-test-process-tool-calls-preserves-structured-success-result ()
+  "Successful tool calls retain structured metadata for persistence and UI."
+  (let ((benedict-session--registry (make-hash-table :test 'equal))
+        (benedict-session-tool-invoke-fn
+         (lambda (_id _args &rest _options)
+           '(:status success
+             :output (:content "Project summary"
+                      :ui (:header "Project search — \"needle\""
+                           :body "Showing 1 result")
+                      :effects ((:kind read :path "README.org"))
+                      :data (:matches ((:file "README.org"))))))))
+    (let ((session (benedict-session-create)))
+      (benedict-session--process-tool-calls
+       session
+       '((:id "call-1" :name project-search :arguments (:query "needle"))))
+      (let ((entry (car (benedict-session-entries session))))
+        (should (eq 'tool (benedict-message-role entry)))
+        (should (eq 'success (benedict-message-status entry)))
+        (should (equal "Project summary" (benedict-message-text entry)))
+        (should (equal "Project search — \"needle\""
+                       (plist-get (benedict-message-tool-result-ui entry) :header)))
+        (should (equal '((:kind read :path "README.org"))
+                       (benedict-message-tool-result-effects entry)))
+        (should (equal '(:matches ((:file "README.org")))
+                       (plist-get (benedict-message-tool-result-details entry) :data)))))))
+
 (ert-deftest benedict-session-test-process-tool-calls-records-scope-denial-without-approval ()
   "Out-of-scope tool calls record a denial and never enter approval-pending state."
   (let ((benedict-session--registry (make-hash-table :test 'equal))
@@ -966,7 +992,11 @@ session returns to idle state."
             (benedict-session-add-message session '(:role user :content "Persist me"))
             (benedict-session-add-message
              session
-             (benedict-message-tool-result "call-1" 'read-file 'success "Tool output"))
+             (benedict-message-tool-result
+              "call-1" 'read-file 'success "Tool output"
+              '(:path "README.org" :line-count 12)
+              '(:header "Read file — README.org" :body "Showing README.org")
+              '((:kind read :path "README.org"))))
             (benedict-session-save session :root root)
             (setq loaded (benedict-session-load
                           (benedict-store-session-path (benedict-session-id session) root)))
@@ -987,6 +1017,17 @@ session returns to idle state."
                             (car (benedict-session-entries-chronological loaded)))))
             (should (equal 'tool
                            (benedict-message-role
+                            (cadr (benedict-session-entries-chronological loaded)))))
+            (should (equal '(:path "README.org" :line-count 12)
+                           (benedict-message-tool-result-details
+                            (cadr (benedict-session-entries-chronological loaded)))))
+            (should (equal "Read file — README.org"
+                           (plist-get
+                            (benedict-message-tool-result-ui
+                             (cadr (benedict-session-entries-chronological loaded)))
+                            :header)))
+            (should (equal '((:kind read :path "README.org"))
+                           (benedict-message-tool-result-effects
                             (cadr (benedict-session-entries-chronological loaded)))))
             (should (equal "Tool output"
                            (plist-get (car (last (plist-get request :messages))) :content))))
