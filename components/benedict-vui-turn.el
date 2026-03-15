@@ -281,8 +281,19 @@ COLLAPSED-BLOCKS and ON-TOGGLE-BLOCK are forwarded to the block list."
       (push "approval" items))
     (nreverse items)))
 
-(defun benedict-vui-turn--prompt-header-node (prompt-message prompt-text)
-  "Return a dedicated prompt header node for PROMPT-MESSAGE and PROMPT-TEXT."
+(defun benedict-vui-turn--section-navigation-properties (turn target &optional message-key)
+  "Return navigation properties for TURN TARGET and MESSAGE-KEY."
+  (let ((properties (list 'benedict-turn-id (plist-get turn :id)
+                          'benedict-turn-target target
+                          'benedict-region-kind 'turn-target)))
+    (when message-key
+      (setq properties
+            (append properties
+                    (list 'benedict-message-key message-key))))
+    properties))
+
+(defun benedict-vui-turn--prompt-header-node (turn prompt-message prompt-text)
+  "Return a dedicated prompt header node for TURN, PROMPT-MESSAGE, and PROMPT-TEXT."
   (let* ((message-key (and prompt-message (benedict-message-id prompt-message)))
          (content (or prompt-text (benedict-vui-turn--message-text prompt-message) ""))
          (content-node
@@ -300,6 +311,9 @@ COLLAPSED-BLOCKS and ON-TOGGLE-BLOCK are forwarded to the block list."
                    :title "Prompt"
                    :detail nil
                    :face 'benedict-chat-turn-prompt-header
+                   :navigation-properties
+                   (benedict-vui-turn--section-navigation-properties
+                    turn 'prompt message-key)
                    :content content-node)))
 
 (defun benedict-vui-turn--active-turn-node (turn collapsed-blocks on-toggle-block)
@@ -317,6 +331,7 @@ COLLAPSED-BLOCKS and ON-TOGGLE-BLOCK are forwarded to rendered content blocks."
          (draft-message-key (and outcome-message (benedict-message-id outcome-message)))
          (children (list
                     (benedict-vui-turn--prompt-header-node
+                     turn
                      prompt-message
                      (plist-get turn :prompt-text))
                     (vui-component 'benedict-vui-turn-section
@@ -324,6 +339,9 @@ COLLAPSED-BLOCKS and ON-TOGGLE-BLOCK are forwarded to rendered content blocks."
                                    :title "Activity"
                                    :detail "Working"
                                    :face 'benedict-chat-turn-active
+                                   :navigation-properties
+                                   (benedict-vui-turn--section-navigation-properties
+                                    turn 'activity draft-message-key)
                                    :content (if activity-blocks
                                                 (benedict-vui-turn--content-node
                                                  (benedict-vui-turn--blocks-with-region-face
@@ -346,6 +364,9 @@ COLLAPSED-BLOCKS and ON-TOGGLE-BLOCK are forwarded to rendered content blocks."
                                     :title "Draft answer"
                                     :detail nil
                                     :face 'benedict-chat-turn-active
+                                    :navigation-properties
+                                    (benedict-vui-turn--section-navigation-properties
+                                     turn 'draft draft-message-key)
                                     :content (benedict-vui-turn--content-node
                                               (benedict-vui-turn--blocks-with-region-face
                                                draft-blocks
@@ -372,6 +393,7 @@ EXECUTION-EXPANDED and ON-TOGGLE-EXECUTION control turn-level detail visibility.
          (outcome-message-key (and outcome-message (benedict-message-id outcome-message)))
          (children (list
                     (benedict-vui-turn--prompt-header-node
+                     turn
                      prompt-message
                      (plist-get turn :prompt-text)))))
     (when outcome-blocks
@@ -383,6 +405,9 @@ EXECUTION-EXPANDED and ON-TOGGLE-EXECUTION control turn-level detail visibility.
                                     :title "Answer"
                                     :detail nil
                                     :face 'benedict-chat-turn-outcome
+                                    :navigation-properties
+                                    (benedict-vui-turn--section-navigation-properties
+                                     turn 'outcome outcome-message-key)
                                     :content (benedict-vui-turn--content-node
                                               (benedict-vui-turn--blocks-with-region-face
                                                outcome-blocks
@@ -396,7 +421,10 @@ EXECUTION-EXPANDED and ON-TOGGLE-EXECUTION control turn-level detail visibility.
                                                  (plist-get turn :execution-summary))
                                          :summary (plist-get turn :execution-summary)
                                          :expanded execution-expanded
-                                         :on-toggle on-toggle-execution))))
+                                         :on-toggle on-toggle-execution
+                                         :navigation-properties
+                                         (benedict-vui-turn--section-navigation-properties
+                                          turn 'execution-summary outcome-message-key)))))
       (when execution-expanded
         (setq children
               (append children
@@ -406,6 +434,9 @@ EXECUTION-EXPANDED and ON-TOGGLE-EXECUTION control turn-level detail visibility.
                                       :title "Execution details"
                                       :detail nil
                                       :face 'benedict-chat-turn-detail
+                                      :navigation-properties
+                                      (benedict-vui-turn--section-navigation-properties
+                                       turn 'execution-details outcome-message-key)
                                       :content (benedict-vui-turn--content-node
                                                 (benedict-vui-turn--blocks-with-region-face
                                                  execution-blocks

@@ -16,7 +16,8 @@
       '(benedict-chat-turn-summary benedict-chat-error)
     '(benedict-chat-turn-summary benedict-chat-header-time)))
 
-(vui-defcomponent benedict-vui-execution-summary (items summary expanded on-toggle)
+(vui-defcomponent benedict-vui-execution-summary
+    (items summary expanded on-toggle navigation-properties)
   "Render execution summary using ITEMS and SUMMARY."
   :render
   (let ((children nil))
@@ -43,6 +44,7 @@
                    :title "Execution"
                    :detail nil
                    :face 'benedict-chat-turn-summary
+                   :navigation-properties navigation-properties
                    :content (apply #'vui-vstack (append (list :spacing 1) children)))))
 
 (provide 'benedict-vui-execution-summary)

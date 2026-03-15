@@ -9,16 +9,26 @@
 (require 'vui)
 (require 'benedict-vui-badge)
 
+(defun benedict-vui-turn-section--decorate-text (text face navigation-properties)
+  "Return TEXT propertized with FACE and NAVIGATION-PROPERTIES."
+  (let ((value (propertize text 'face face)))
+    (when navigation-properties
+      (add-text-properties 0 (length value) navigation-properties value))
+    value))
+
 (defun benedict-vui-turn-section--label-face (face suffix-face)
   "Return combined FACE with SUFFIX-FACE."
   (if face
       (list face suffix-face)
     suffix-face))
 
-(defun benedict-vui-turn-section--label-node (status title detail face)
-  "Return a section label node for STATUS, TITLE, DETAIL, and FACE."
+(defun benedict-vui-turn-section--label-node
+    (status title detail face navigation-properties)
+  "Return a section label node for STATUS, TITLE, DETAIL, FACE, and NAVIGATION-PROPERTIES."
   (let ((children (list (vui-component 'benedict-vui-badge :status status)
-                        (vui-text (propertize title 'face face)))))
+                        (vui-text
+                         (benedict-vui-turn-section--decorate-text
+                          title face navigation-properties)))))
     (when detail
       (setq children
             (append children
@@ -27,18 +37,20 @@
                                            face
                                            'benedict-chat-header-separator))
                           (vui-text
-                           (propertize
+                           (benedict-vui-turn-section--decorate-text
                             detail
-                            'face (benedict-vui-turn-section--label-face
-                                   face
-                                   'benedict-chat-header-time)))))))
+                            (benedict-vui-turn-section--label-face
+                             face
+                             'benedict-chat-header-time)
+                            navigation-properties))))))
     (apply #'vui-hstack children)))
 
-(vui-defcomponent benedict-vui-turn-section (status title detail face content)
+(vui-defcomponent benedict-vui-turn-section
+    (status title detail face content navigation-properties)
   "Render a labeled turn section."
   :render
   (let ((children (list (benedict-vui-turn-section--label-node
-                         status title detail face))))
+                         status title detail face navigation-properties))))
     (when content
       (setq children (append children (list content))))
     (apply #'vui-vstack (append (list :spacing 1) children))))

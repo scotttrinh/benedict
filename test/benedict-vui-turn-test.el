@@ -366,5 +366,46 @@
       (should (string-match-p "Tool: bash" text))
       (should (string-match-p "Hide details" text)))))
 
+(ert-deftest benedict-vui-turn-turn-sections-expose-turn-navigation-properties ()
+  "Turn sections mark prompt, outcome, and execution summary as turn-level targets."
+  (with-mounted-vui-component
+      (vui-component 'benedict-vui-turn
+                     :turn (list :id "turn-1"
+                                 :prompt-text "Question"
+                                 :active nil
+                                 :streaming nil
+                                 :completed t
+                                 :historical t
+                                 :has-execution-blocks t
+                                 :execution-expanded nil
+                                 :execution-summary '(:tool-count 1
+                                                     :tool-names ("bash")
+                                                     :has-thinking t)
+                                 :messages (list (list :id "u1" :role 'user :content "Question")
+                                                 (list :id "a1"
+                                                       :role 'assistant
+                                                       :content "Final answer"
+                                                       :thinking "Reasoning"
+                                                       :tool-calls (list
+                                                                    (list :id "call-1"
+                                                                          :name "bash"
+                                                                          :arguments "pwd"))))))
+    (let* ((text (buffer-string))
+           (prompt-pos (string-match "Prompt" text))
+           (answer-pos (string-match "Answer" text))
+           (execution-pos (string-match "Execution" text)))
+      (should prompt-pos)
+      (should answer-pos)
+      (should execution-pos)
+      (should (equal (get-text-property prompt-pos 'benedict-turn-id text) "turn-1"))
+      (should (eq (get-text-property prompt-pos 'benedict-turn-target text) 'prompt))
+      (should (equal (get-text-property prompt-pos 'benedict-message-key text) "u1"))
+      (should (equal (get-text-property answer-pos 'benedict-turn-id text) "turn-1"))
+      (should (eq (get-text-property answer-pos 'benedict-turn-target text) 'outcome))
+      (should (equal (get-text-property answer-pos 'benedict-message-key text) "a1"))
+      (should (equal (get-text-property execution-pos 'benedict-turn-id text) "turn-1"))
+      (should (eq (get-text-property execution-pos 'benedict-turn-target text)
+                  'execution-summary)))))
+
 (provide 'test/benedict-vui-turn-test)
 ;;; benedict-vui-turn-test.el ends here
