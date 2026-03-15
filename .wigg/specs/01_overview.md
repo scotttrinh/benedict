@@ -23,7 +23,7 @@ Persistent chat history is valuable, but not required for day-to-day usefulness 
 - **UI:** Uses standard Emacs faces, text properties, and keymaps.
 - **Navigation:** Supports standard motion commands.
 - **Customization:** Fully configurable via `defcustom` and `defgroup`.
-- **Dependencies:** Relies on standard Emacs packages (`json`, `project`, `url`) and high-quality community packages (`magit-section`, `markdown-mode`, `svg-lib`).
+- **Dependencies:** Relies on standard Emacs packages (`json`, `project`, `url`) and community packages used by the current implementation (`vui`, `markdown-mode`, `svg-lib`, `lgr`).
 
 ### 2.2 Provider Agnostic
 - Benedict acts as a neutral client. It supports multiple backends (OpenRouter, Vercel, Gemini, Ollama) through a unified adapter layer.
@@ -31,8 +31,8 @@ Persistent chat history is valuable, but not required for day-to-day usefulness 
 
 ### 2.3 Transparent & Safe
 - **Harness Controls:** The agent runs under a harness that enforces safety constraints (scopes, budgets, sandboxing), and produces auditable events.
-- **Approvals Are Exceptions:** Confirmations exist, but the default experience should not feel like "y/n spam". Prompts happen when the agent requests to widen scope or perform privileged effects.
-- **Isolation:** Potentially disruptive operations run in an isolated environment (`benedict-flywire`) to avoid polluting the user's active windows/buffers.
+- **Approvals Are Exceptions:** Confirmations exist, but the default experience should not feel like "y/n spam". In the current implementation, privileged per-tool approvals can still surface UI prompts, while out-of-scope requests are denied in-band as structured tool results.
+- **Isolation:** `benedict-flywire` exists as the isolation layer for controlled execution environments, but its use should be described carefully as current implementation detail rather than as a blanket guarantee for every tool path.
 - **Telemetry:** The user can see what context is sent, what tools ran, and what files/buffers were affected.
 
 ## 3. High-Level Architecture Summary

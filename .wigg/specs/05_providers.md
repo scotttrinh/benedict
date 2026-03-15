@@ -89,8 +89,8 @@ The provider layer should therefore support both:
 ### 3.3 Gemini
 - **Transport:** REST API.
 - **Capabilities:**
-    - Streaming (via SSE/HTTP chunking) is the target implementation.
     - Native Function Calling.
+    - Non-streaming only in the current implementation.
 - **Auth:** OAuth2 flow (via `google-oauth` or similar mechanism).
     - Requires Refresh Token management in `auth-source`.
     - Supports re-authentication flow inside Emacs.
@@ -108,8 +108,8 @@ The provider layer should therefore support both:
 
 Benedict adheres to strict security practices:
 1.  **Never hardcode secrets.**
-2.  **`auth-source` Priority:** Look in `~/.authinfo.gpg` first.
-3.  **Env Var Fallback:** Look for specific env vars (e.g., `OPENROUTER_API_KEY`) second.
-4.  **Filesystem Store:** Optional JSON store `~/.config/benedict/auth.json` (user preferred).
+2.  **Ordered Source Lookup:** Consult `benedict-credentials-sources` in order.
+3.  **Default Order:** Environment variables first, then the filesystem store, then `auth-source`.
+4.  **Filesystem Store:** Optional JSON store `~/.config/benedict/auth.json`.
 
 Secrets are loaded into memory only when needed and redacted from logs.

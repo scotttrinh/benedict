@@ -172,7 +172,7 @@ Objective: make the README a trustworthy guide to current behavior.
 Concrete tasks:
 
 - compare README claims against code and the non-aspirational portions of the specs
-- update README sections where code and spec already agree
+- done: updated README/spec/package metadata to match the implemented Emacs 29.1 baseline, credential source order, Gemini non-streaming behavior, and VUI-based rendering contract
 - remove or rewrite outdated claims about:
   - credential precedence
   - secret storage behavior
@@ -286,9 +286,10 @@ The best first batch is:
 - 2026-03-15: collapsed `benedict-vui-root-test.el` from per-event layout trivia into a smaller root-only wiring slice; mounted root e2e remains the primary render lifecycle contract while unit coverage now stays focused on root controls, session metadata wiring, audit wiring, and collapsed-block helpers.
 - 2026-03-15: trimmed the chat-header/provider-badge/status-bar test matrices down to helper invariants plus the few wrapper-specific behaviors not already covered by mounted root flows, removing another pocket of VUI inventory testing without weakening header/status regressions.
 - 2026-03-15: removed the dead `benedict-vui-turn-header` wrapper that no runtime path used, then refocused the remaining `streaming-indicator`/`turn-section` tests on timer lifecycle and navigation-property propagation instead of duplicate render snapshots.
+- 2026-03-15: reconciled README/spec/package metadata with the current implementation: top-level package metadata now targets Emacs 29.1, docs now describe `env -> file -> auth-source` credential lookup, Gemini as non-streaming, and the mounted VUI turn renderer instead of the retired marker/sentinel rendering story.
 - Decision: provider-facing replay still sends canonical tool-result text content only; UI/persistence-only metadata remains on canonical transcript blocks and metadata.
 - Decision: keep helper-level tests only when they protect local behavior that mounted root flows do not cover; otherwise prefer the canonical root/turn integration tests.
-- Next slice: move to Workstream 4 and reconcile README/spec wording on current credentials, provider capabilities, and rendering architecture now that the obvious VUI wrapper/test duplication has been trimmed.
+- Next slice: move to Workstream 5 and tighten the runtime/frontend boundary around tool invocation setup so session execution stops depending on hidden global mutation.
 
 This batch improves correctness, test value, and documentation accuracy with minimal feature expansion.
 
