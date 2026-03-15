@@ -277,8 +277,9 @@ The best first batch is:
 - 2026-03-15: added chat/UI regressions for the implemented harness split: approval-required tools enter `approval-pending` and resume cleanly after in-buffer approval, while scope denials stay in-band as structured tool results without surfacing approval UI.
 - 2026-03-15: session-recorded tool results now preserve structured success metadata (`:details`, `:ui`, `:effects`) across runtime, persistence, and mounted VUI rendering; targeted regressions cover session persistence and mounted chat rendering.
 - 2026-03-15: removed the dead Vercel provider logging shim, moved Vercel/fake-provider diagnostics onto real `lgr` calls, and updated README/comments that still described the retired log-level/file logging knobs.
+- 2026-03-15: removed the legacy single-message fallback from `components/benedict-vui-turn.el` so the turn component only renders canonical turn data; trimmed legacy-only turn tests and kept coverage on active/completed turn behavior plus missing-prompt fallback.
 - Decision: provider-facing replay still sends canonical tool-result text content only; UI/persistence-only metadata remains on canonical transcript blocks and metadata.
-- Next slice: remove the remaining legacy VUI fallback path in `components/benedict-vui-turn.el` once its mainline coverage is confirmed, then prune any tests that only exercise the retired renderer shape.
+- Next slice: classify the remaining VUI unit tests by behavioral value and collapse shallow structure checks into the stronger turn-list/root end-to-end coverage.
 
 This batch improves correctness, test value, and documentation accuracy with minimal feature expansion.
 

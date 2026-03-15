@@ -13,7 +13,6 @@
 (require 'benedict-vui-content-block-list)
 (require 'benedict-vui-execution-summary)
 (require 'benedict-vui-turn-section)
-(require 'benedict-vui-turn-header)
 
 (defun benedict-vui-turn--coerce-message (message)
   "Return MESSAGE as a canonical entry when possible."
@@ -42,27 +41,10 @@
         (intern (downcase trimmed)))))
    (t nil)))
 
-(defun benedict-vui-turn--message-role (message props)
-  "Return the role for MESSAGE or PROPS."
-  (benedict-vui-turn--normalize-role
-   (or (plist-get props :role)
-       (and message (benedict-message-role message)))))
-
-(defun benedict-vui-turn--message-timestamp (message props)
-  "Return the timestamp for MESSAGE or PROPS."
-  (or (plist-get props :timestamp)
-      (and message (benedict-message-timestamp message))))
-
 (defun benedict-vui-turn--message-metadata (message props)
   "Return metadata for MESSAGE or PROPS."
   (or (plist-get props :metadata)
       (and message (benedict-message-metadata message))))
-
-(defun benedict-vui-turn--message-key (message props)
-  "Return a navigation key for MESSAGE or PROPS."
-  (or (plist-get props :message-key)
-      (and message (or (benedict-message-id message)
-                       (plist-get props :nav-index)))))
 
 (defun benedict-vui-turn--face-for-role (role metadata)
   "Return a face for ROLE given METADATA."
@@ -130,15 +112,6 @@
       copy))
    (t block)))
 
-(defun benedict-vui-turn--normalize-content-blocks (content)
-  "Return CONTENT coerced into a list of block plists."
-  (cond
-   ((null content) nil)
-   ((stringp content) (list (list :type 'text :content content)))
-   ((vectorp content) (append content nil))
-   ((listp content) content)
-   (t (list (list :type 'text :content (format "%s" content))))))
-
 (defun benedict-vui-turn--blocks-with-region-face (blocks face)
   "Return BLOCKS with FACE layered onto text payloads."
   (mapcar
@@ -157,8 +130,8 @@
            updated)))))
    blocks))
 
-(defun benedict-vui-turn--build-blocks (message role)
-  "Return block list for MESSAGE given ROLE."
+(defun benedict-vui-turn--build-blocks (message)
+  "Return block list for canonical MESSAGE."
   (cond
    ((null message) nil)
    ((benedict-message-p message)
@@ -169,11 +142,12 @@
 (defun benedict-vui-turn--blocks (props)
   "Return content blocks for PROPS."
   (let* ((message (plist-get props :message))
-         (role (benedict-vui-turn--message-role message props))
+         (role (benedict-vui-turn--normalize-role
+                (and message (benedict-message-role message))))
          (metadata (benedict-vui-turn--message-metadata message props))
          (face (benedict-vui-turn--face-for-role role metadata))
          (blocks (or (plist-get props :blocks)
-                     (benedict-vui-turn--build-blocks message role))))
+                     (benedict-vui-turn--build-blocks message))))
     (mapcar (lambda (block)
               (benedict-vui-turn--apply-face-to-block block face))
             blocks)))
@@ -452,50 +426,22 @@ EXECUTION-EXPANDED and ON-TOGGLE-EXECUTION control turn-level detail visibility.
                                                         benedict-chat-header-time)))))))
     (apply #'vui-vstack (append (list :spacing 1) children))))
 
-(defun benedict-vui-turn--legacy-node
-    (message blocks role timestamp metadata message-key collapsed-blocks on-toggle-block)
-  "Render the pre-turn-model node using MESSAGE, BLOCKS, ROLE, TIMESTAMP, METADATA, MESSAGE-KEY, COLLAPSED-BLOCKS, and ON-TOGGLE-BLOCK."
-  (let* ((canonical-message (benedict-vui-turn--coerce-message message))
-         (actual-role (benedict-vui-turn--normalize-role
-                       (or role (and canonical-message (benedict-message-role canonical-message)))))
-         (actual-timestamp (or timestamp
-                               (and canonical-message (benedict-message-timestamp canonical-message))))
-         (actual-metadata (or metadata (and canonical-message (benedict-message-metadata canonical-message))))
-         (actual-message-key (or message-key
-                                 (and canonical-message (benedict-message-id canonical-message))))
-         (face (benedict-vui-turn--face-for-role actual-role actual-metadata))
-         (actual-blocks (or blocks (benedict-vui-turn--build-blocks canonical-message actual-role)))
-         (final-blocks (mapcar (lambda (block)
-                                 (benedict-vui-turn--apply-face-to-block block face))
-                               actual-blocks))
-         (header (vui-component 'benedict-vui-turn-header :role actual-role
-                                            :timestamp actual-timestamp
-                                            :metadata actual-metadata))
-         (content (benedict-vui-turn--content-node
-                   final-blocks actual-message-key collapsed-blocks on-toggle-block)))
-    (vui-vstack header content)))
-
 (vui-defcomponent benedict-vui-turn
-    (turn message blocks role timestamp metadata message-key collapsed-blocks on-toggle-block)
+    (turn collapsed-blocks on-toggle-block)
   :state ((execution-expanded nil))
   :render
   (let ((turn-messages (and (listp turn)
                             (benedict-vui-turn--messages-from-turn turn))))
-    (if turn-messages
-        (let* ((default-expanded (plist-get turn :execution-expanded))
-               (expanded (if (plist-member --props-- :turn)
-                             (or execution-expanded default-expanded)
-                           execution-expanded))
-               (toggle-execution (lambda (next)
-                                   (vui-set-state :execution-expanded next))))
-          (if (plist-get turn :active)
-              (benedict-vui-turn--active-turn-node
-               turn collapsed-blocks on-toggle-block)
-            (benedict-vui-turn--completed-turn-node
-             turn collapsed-blocks on-toggle-block expanded toggle-execution)))
-      (benedict-vui-turn--legacy-node
-       message blocks role timestamp metadata message-key
-       collapsed-blocks on-toggle-block))))
+    (when turn-messages
+      (let* ((default-expanded (plist-get turn :execution-expanded))
+             (expanded (or execution-expanded default-expanded))
+             (toggle-execution (lambda (next)
+                                 (vui-set-state :execution-expanded next))))
+        (if (plist-get turn :active)
+            (benedict-vui-turn--active-turn-node
+             turn collapsed-blocks on-toggle-block)
+          (benedict-vui-turn--completed-turn-node
+           turn collapsed-blocks on-toggle-block expanded toggle-execution))))))
 
 (provide 'benedict-vui-turn)
 ;;; benedict-vui-turn.el ends here
