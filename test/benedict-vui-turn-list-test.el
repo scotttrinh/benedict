@@ -31,6 +31,7 @@
                                          (list :role 'assistant :content "Answer one followup")
                                          (list :id "u2" :role 'user :content "Question two")
                                          (list :id "a2" :role 'assistant :content "Answer two"))
+                     :streaming nil
                      :collapsed-blocks nil
                      :on-toggle-block #'ignore)
     (let* ((text (buffer-string))
@@ -62,6 +63,7 @@
                                                :content "Hidden raw content"
                                                :display-content "Streaming partial"
                                                :streaming t))
+                     :streaming nil
                      :collapsed-blocks nil
                      :on-toggle-block #'ignore)
     (let* ((text (buffer-string))
@@ -81,6 +83,7 @@
                                          (list :role 'assistant :content "Answer without id")
                                          (list :role 'user :content "Question without id")
                                          (list :id "a2" :role 'assistant :content "Answer with id"))
+                     :streaming nil
                      :collapsed-blocks nil
                      :on-toggle-block #'ignore)
     (benedict-vui-test--assert-text-properties-for
@@ -105,15 +108,67 @@
   (with-mounted-vui-component
       (vui-component 'benedict-vui-turn-list
                      :conversation nil
+                     :streaming nil
                      :collapsed-blocks nil
                      :on-toggle-block #'ignore)
     (should (string-empty-p (string-trim (buffer-string)))))
   (with-mounted-vui-component
       (vui-component 'benedict-vui-turn-list
                      :conversation (list nil)
+                     :streaming nil
                      :collapsed-blocks nil
                      :on-toggle-block #'ignore)
     (should (string-empty-p (string-trim (buffer-string))))))
+
+(ert-deftest benedict-vui-turn-list-derive-turns-exposes-turn-metadata ()
+  "Derived turns expose lifecycle and outcome metadata at turn scope."
+  (let* ((messages (benedict-vui-turn-list--normalize-messages
+                    (list (list :id "u1" :role 'user :content "Question one")
+                          (list :id "a1" :role 'assistant
+                                :content "Answer one"
+                                :thinking "Reasoning"
+                                :tool-calls (list (list :id "call-1"
+                                                        :name "bash"
+                                                        :arguments "pwd"))))))
+         (turns (benedict-vui-turn-list--derive-turns messages nil))
+         (turn (car turns))
+         (summary (plist-get turn :execution-summary))
+         (outcome (plist-get turn :outcome-message)))
+    (should (= 1 (length turns)))
+    (should (equal (plist-get turn :id) "u1"))
+    (should (equal (plist-get turn :prompt-text) "Question one"))
+    (should (equal (benedict-message-id outcome) "a1"))
+    (should (plist-get turn :completed))
+    (should (plist-get turn :historical))
+    (should-not (plist-get turn :active))
+    (should (plist-get turn :has-execution-blocks))
+    (should (= (plist-get summary :tool-count) 1))
+    (should (equal (plist-get summary :tool-names) '("bash")))
+    (should (plist-get summary :has-thinking))))
+
+(ert-deftest benedict-vui-turn-list-derive-turns-merges-active-streaming-into-last-turn ()
+  "Active streaming is attached to the current turn and marked as in-flight."
+  (let* ((messages (benedict-vui-turn-list--normalize-messages
+                    (list (list :id "u1" :role 'user :content "Question one"))))
+         (turns (benedict-vui-turn-list--derive-turns
+                 messages
+                 '(:status active
+                   :content "Draft answer"
+                   :thinking "Working"
+                   :tool-calls ((:id "call-1" :name "bash" :arguments "pwd")))))
+         (turn (car turns))
+         (outcome (plist-get turn :outcome-message))
+         (summary (plist-get turn :execution-summary)))
+    (should (= 1 (length turns)))
+    (should (plist-get turn :active))
+    (should (plist-get turn :streaming))
+    (should-not (plist-get turn :completed))
+    (should-not (plist-get turn :historical))
+    (should (equal (plist-get turn :prompt-text) "Question one"))
+    (should (equal (benedict-message-text outcome) "Draft answer"))
+    (should (plist-get turn :has-execution-blocks))
+    (should (equal (plist-get summary :tool-names) '("bash")))
+    (should (plist-get summary :has-thinking))))
 
 (provide 'test/benedict-vui-turn-list-test)
 ;;; benedict-vui-turn-list-test.el ends here

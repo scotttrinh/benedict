@@ -136,5 +136,32 @@
         (should-not (string-match-p "·" text))
         (should-not (string-match-p "[0-9][0-9]:[0-9][0-9]:[0-9][0-9]" text))))))
 
+(ert-deftest benedict-vui-turn-renders-derived-turn-message-list ()
+  "Turn component accepts explicit turn records from the conversation layer."
+  (with-mounted-vui-component
+      (vui-component 'benedict-vui-turn
+                     :turn (list :id "u1"
+                                 :prompt-text "Question"
+                                 :active t
+                                 :streaming t
+                                 :completed nil
+                                 :historical nil
+                                 :has-execution-blocks t
+                                 :execution-expanded nil
+                                 :execution-summary '(:tool-count 1 :tool-names ("bash"))
+                                 :messages (list (list :id "u1" :role 'user :content "Question")
+                                                 (list :role 'assistant
+                                                       :content "Draft answer"
+                                                       :thinking "Working"
+                                                       :tool-calls (list
+                                                                    (list :id "call-1"
+                                                                          :name "bash"
+                                                                          :arguments "pwd"))))))
+    (let ((text (buffer-string)))
+      (should (string-match-p "Question" text))
+      (should (string-match-p "Draft answer" text))
+      (should (string-match-p "THINKING" text))
+      (should (string-match-p "Tool: bash" text)))))
+
 (provide 'test/benedict-vui-turn-test)
 ;;; benedict-vui-turn-test.el ends here

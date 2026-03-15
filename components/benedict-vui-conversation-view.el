@@ -21,6 +21,7 @@
   (vui-vstack
    (vui-component 'benedict-vui-turn-list
     :conversation conversation
+    :streaming streaming
     :collapsed-blocks collapsed-blocks
     :on-toggle-block on-toggle-block)
    (vui-component 'benedict-vui-streaming-indicator
@@ -35,6 +36,7 @@
       (vui-vstack
        (vui-component 'benedict-vui-turn-list
         :conversation conversation
+        :streaming streaming
         :collapsed-blocks collapsed-blocks
         :on-toggle-block on-toggle-block)
        (vui-component 'benedict-vui-streaming-indicator

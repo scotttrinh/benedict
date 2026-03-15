@@ -149,8 +149,44 @@
               (benedict-vui-turn--apply-face-to-block block face))
             blocks)))
 
-(vui-defcomponent benedict-vui-turn (message blocks role timestamp metadata message-key collapsed-blocks on-toggle-block)
-  :render
+(defun benedict-vui-turn--message-node (message collapsed-blocks on-toggle-block)
+  "Return a rendered node for MESSAGE.
+
+COLLAPSED-BLOCKS and ON-TOGGLE-BLOCK are forwarded to the block list."
+  (let* ((canonical-message (benedict-vui-turn--coerce-message message))
+         (actual-role (benedict-vui-turn--normalize-role
+                       (and canonical-message
+                            (benedict-message-role canonical-message))))
+         (actual-timestamp (and canonical-message
+                                (benedict-message-timestamp canonical-message)))
+         (actual-metadata (and canonical-message
+                               (benedict-message-metadata canonical-message)))
+         (actual-message-key (and canonical-message
+                                  (benedict-message-id canonical-message)))
+         (face (benedict-vui-turn--face-for-role actual-role actual-metadata))
+         (actual-blocks (benedict-vui-turn--build-blocks canonical-message actual-role))
+         (final-blocks (mapcar (lambda (block)
+                                 (benedict-vui-turn--apply-face-to-block block face))
+                               actual-blocks))
+         (header (vui-component 'benedict-vui-turn-header
+                                :role actual-role
+                                :timestamp actual-timestamp
+                                :metadata actual-metadata))
+         (content (vui-component 'benedict-vui-content-block-list
+                                 :blocks final-blocks
+                                 :collapsed-blocks collapsed-blocks
+                                 :message-key actual-message-key
+                                 :on-toggle-block on-toggle-block)))
+    (vui-vstack header content)))
+
+(defun benedict-vui-turn--messages-from-turn (turn)
+  "Return canonical messages from TURN plist."
+  (let ((messages (plist-get turn :messages)))
+    (delq nil (mapcar #'benedict-vui-turn--coerce-message messages))))
+
+(defun benedict-vui-turn--legacy-node
+    (message blocks role timestamp metadata message-key collapsed-blocks on-toggle-block)
+  "Render the pre-turn-model node using MESSAGE, BLOCKS, ROLE, TIMESTAMP, METADATA, MESSAGE-KEY, COLLAPSED-BLOCKS, and ON-TOGGLE-BLOCK."
   (let* ((canonical-message (benedict-vui-turn--coerce-message message))
          (actual-role (benedict-vui-turn--normalize-role
                        (or role (and canonical-message (benedict-message-role canonical-message)))))
@@ -173,6 +209,21 @@
                     :message-key actual-message-key
                     :on-toggle-block on-toggle-block)))
     (vui-vstack header content)))
+
+(vui-defcomponent benedict-vui-turn
+    (turn message blocks role timestamp metadata message-key collapsed-blocks on-toggle-block)
+  :render
+  (let ((turn-messages (and (listp turn)
+                            (benedict-vui-turn--messages-from-turn turn))))
+    (if turn-messages
+        (apply #'vui-vstack
+               (mapcar (lambda (turn-message)
+                         (benedict-vui-turn--message-node
+                          turn-message collapsed-blocks on-toggle-block))
+                       turn-messages))
+      (benedict-vui-turn--legacy-node
+       message blocks role timestamp metadata message-key
+       collapsed-blocks on-toggle-block))))
 
 (provide 'benedict-vui-turn)
 ;;; benedict-vui-turn.el ends here

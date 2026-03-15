@@ -25,22 +25,8 @@
     (when-let ((draft (benedict-session-draft session)))
       (list :status 'active
             :content (or (plist-get draft :content) "")
+            :thinking (plist-get draft :thinking)
             :tool-calls (plist-get draft :tool-calls)))))
-
-(defun benedict-vui-root--streaming-message (streaming)
-  "Return a synthetic message for STREAMING payload."
-  (when (and (listp streaming)
-             (eq (plist-get streaming :status) 'active))
-    (benedict-message-from-data
-     (list :role 'assistant
-           :content (plist-get streaming :content)
-           :tool-calls (plist-get streaming :tool-calls)))))
-
-(defun benedict-vui-root--append-streaming (conversation streaming)
-  "Return CONVERSATION with STREAMING appended when active."
-  (if (benedict-vui-root--streaming-message streaming)
-      (append conversation (list (benedict-vui-root--streaming-message streaming)))
-    conversation))
 
 (defun benedict-vui-root--session-info (session)
   "Return displayable session metadata for SESSION."
@@ -140,8 +126,6 @@ toggle based on current membership.  COLLAPSED-BLOCKS may be a list or hash tabl
   :render
   (let* ((current-usage (or (plist-get --props-- :usage)
                             usage))
-         (render-conversation (benedict-vui-root--append-streaming
-                               conversation streaming))
          (toggle-block (vui-use-memo ()
                          (vui-async-callback (block-id &optional next)
                            (vui-set-state :collapsed-blocks
@@ -173,12 +157,12 @@ toggle based on current membership.  COLLAPSED-BLOCKS may be a list or hash tabl
       :checkpoint checkpoint
       :on-continue on-continue-checkpoint
       :on-stop on-stop-checkpoint)
-     (vui-component 'benedict-vui-approval-block
+      (vui-component 'benedict-vui-approval-block
       :approval approval
       :on-approve on-approve-approval
       :on-deny on-deny-approval)
       (vui-component 'benedict-vui-conversation-view
-       :conversation render-conversation
+       :conversation conversation
        :streaming streaming
        :collapsed-blocks collapsed-blocks
        :on-toggle-block toggle-block)
@@ -230,23 +214,35 @@ Returns a function that when called unsubscribes from events."
      (vui-set-state :streaming
                     (list :status 'active
                           :content ""
+                          :thinking nil
                           :tool-calls nil)))
     ('draft-updated
      (let ((delta (plist-get payload :delta))
-           (tool-call (plist-get payload :tool-call)))
+           (tool-call (plist-get payload :tool-call))
+           (streaming-payload (plist-get payload :payload)))
        (if delta
            (vui-set-state :streaming
              (lambda (s)
                (list :status (plist-get s :status)
                      :content (concat (plist-get s :content) delta)
+                     :thinking (plist-get s :thinking)
                      :tool-calls (plist-get s :tool-calls))))
-         (when tool-call
+         (if tool-call
            (vui-set-state :streaming
              (lambda (s)
                (list :status (plist-get s :status)
                      :content (plist-get s :content)
+                     :thinking (plist-get s :thinking)
                      :tool-calls (append (plist-get s :tool-calls)
-                                         (list tool-call)))))))))
+                                         (list tool-call)))))
+           (when (eq (plist-get streaming-payload :kind) 'thinking-delta)
+             (vui-set-state :streaming
+               (lambda (s)
+                 (list :status (plist-get s :status)
+                       :content (plist-get s :content)
+                       :thinking (concat (or (plist-get s :thinking) "")
+                                         (or (plist-get streaming-payload :text) ""))
+                       :tool-calls (plist-get s :tool-calls)))))))))
     ('draft-finalized
      (vui-set-state :streaming nil))
     ('checkpoint-requested

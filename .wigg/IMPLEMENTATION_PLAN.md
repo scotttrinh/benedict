@@ -60,6 +60,15 @@ The active turn should use the same structure, except that the execution summary
 
 ### Phase 1: Turn Model and State
 
+Status: completed 2026-03-15
+
+Completed:
+
+- Added turn-derived lifecycle metadata at the conversation/turn layer.
+- Added canonical helpers for prompt text, final assistant outcome, and execution summary data.
+- Moved active draft handling into the turn model so streaming state attaches to the active turn instead of a synthetic top-level message.
+- Added focused tests covering derived turn metadata and active-turn draft assembly.
+
 Objective: make the UI explicitly aware of the difference between an active turn, a completed turn, and execution detail within a turn.
 
 Work:

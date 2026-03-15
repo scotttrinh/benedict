@@ -674,7 +674,7 @@ Return a plist suitable for adding to message history."
           :metadata (list :status normalized-status :error error-info))))
 
 (defun benedict-session--build-pending-approval (session tool-call tool-result tool-calls index)
-  "Build pending approval state for SESSION from TOOL-CALL and TOOL-RESULT."
+  "Build pending approval state for SESSION from TOOL-CALL, TOOL-RESULT, TOOL-CALLS, and INDEX."
   (let* ((approval (plist-get (plist-get tool-result :output) :approval))
          (assistant-message (cl-find-if
                              (lambda (entry)
