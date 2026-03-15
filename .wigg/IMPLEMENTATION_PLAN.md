@@ -285,8 +285,10 @@ The best first batch is:
 - 2026-03-15: replaced the dedicated context propcheck trivia with higher-value transcript invariants covering canonical message normalization, structured tool-result store round-trips, and session persistence/build-request round-trips.
 - 2026-03-15: collapsed `benedict-vui-root-test.el` from per-event layout trivia into a smaller root-only wiring slice; mounted root e2e remains the primary render lifecycle contract while unit coverage now stays focused on root controls, session metadata wiring, audit wiring, and collapsed-block helpers.
 - 2026-03-15: trimmed the chat-header/provider-badge/status-bar test matrices down to helper invariants plus the few wrapper-specific behaviors not already covered by mounted root flows, removing another pocket of VUI inventory testing without weakening header/status regressions.
+- 2026-03-15: removed the dead `benedict-vui-turn-header` wrapper that no runtime path used, then refocused the remaining `streaming-indicator`/`turn-section` tests on timer lifecycle and navigation-property propagation instead of duplicate render snapshots.
 - Decision: provider-facing replay still sends canonical tool-result text content only; UI/persistence-only metadata remains on canonical transcript blocks and metadata.
-- Next slice: continue Phase 4 by reviewing the remaining small VUI helper/unit files (`streaming-indicator`, `turn-header`, `turn-section`, similar wrappers) for the same pattern, then move to README/spec reconciliation once the obvious duplicate render inventory is gone.
+- Decision: keep helper-level tests only when they protect local behavior that mounted root flows do not cover; otherwise prefer the canonical root/turn integration tests.
+- Next slice: move to Workstream 4 and reconcile README/spec wording on current credentials, provider capabilities, and rendering architecture now that the obvious VUI wrapper/test duplication has been trimmed.
 
 This batch improves correctness, test value, and documentation accuracy with minimal feature expansion.
 

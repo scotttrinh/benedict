@@ -19,11 +19,6 @@
    (vui-button "Hide" :on-click (lambda (&rest _) (vui-set-state :visible nil)))
    (vui-component 'benedict-vui-streaming-indicator :visible visible)))
 
-(ert-deftest benedict-vui-streaming-indicator-frames-exist ()
-  "Spinner frames are defined."
-  (should (> (length benedict-vui-streaming-indicator--frames) 0))
-  (should (cl-every #'stringp benedict-vui-streaming-indicator--frames)))
-
 (ert-deftest benedict-vui-streaming-indicator-frame-wrapping ()
   "Frame index wraps around the frame list."
   (should (equal (benedict-vui-streaming-indicator--frame 0)
@@ -31,46 +26,22 @@
   (should (equal (benedict-vui-streaming-indicator--frame 1)
                  (elt benedict-vui-streaming-indicator--frames 1)))
   (should (equal (benedict-vui-streaming-indicator--frame
-                  (length benedict-vui-streaming-indicator--frames))
+                 (length benedict-vui-streaming-indicator--frames))
                  (elt benedict-vui-streaming-indicator--frames 0)))
   (should (equal (benedict-vui-streaming-indicator--frame
                   (* 2 (length benedict-vui-streaming-indicator--frames)))
                  (elt benedict-vui-streaming-indicator--frames 0))))
 
-(ert-deftest benedict-vui-streaming-indicator-mount-visible-renders-frame-with-stubbed-timer ()
-  "Mounted visible indicator renders a spinner frame without real timers."
-  (let ((run-args nil)
-        (fake-timer (list :timer "streaming")))
-    (cl-letf (((symbol-function 'run-with-timer)
-               (lambda (&rest args)
-                 (setq run-args args)
-                 fake-timer))
-              ((symbol-function 'cancel-timer)
-                (lambda (&rest _))))
-      (with-mounted-vui-component
-          (vui-component 'benedict-vui-streaming-indicator :visible t)
-        (let ((text (buffer-string)))
-          (should (string-match-p (regexp-quote (car benedict-vui-streaming-indicator--frames))
-                                  text)))
-        (should run-args)))))
-
-(ert-deftest benedict-vui-streaming-indicator-mount-hidden-renders-no-spinner ()
-  "Mounted hidden indicator does not render spinner text."
-  (with-mounted-vui-component
-      (vui-component 'benedict-vui-streaming-indicator :visible nil)
-    (let ((text (buffer-string)))
-      (should-not (string-match-p
-                   (regexp-quote (car benedict-vui-streaming-indicator--frames))
-                   text)))))
-
 (ert-deftest benedict-vui-streaming-indicator-visible-transitions-start-and-stop-timer ()
-  "Toggling visible state starts and then stops animation timer."
+  "Toggling visible state starts and then stops the animation timer."
   (let ((run-count 0)
+        (run-args nil)
         (cancelled nil)
         (fake-timer (list :timer "streaming")))
     (cl-letf (((symbol-function 'run-with-timer)
-               (lambda (&rest _)
+               (lambda (&rest args)
                  (setq run-count (1+ run-count))
+                 (setq run-args args)
                  fake-timer))
               ((symbol-function 'cancel-timer)
                (lambda (timer)
@@ -81,6 +52,9 @@
         (benedict-vui-test--click-button-labeled "Show")
         (vui-flush-sync)
         (should (> run-count 0))
+        (should (equal (seq-take run-args 2)
+                       (list benedict-vui-streaming-indicator--interval
+                             benedict-vui-streaming-indicator--interval)))
         (should (cl-some (lambda (frame)
                            (string-match-p (regexp-quote frame) (buffer-string)))
                          benedict-vui-streaming-indicator--frames))
