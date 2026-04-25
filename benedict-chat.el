@@ -383,8 +383,16 @@ Returns the session or nil if agent frame is disabled."
 (defun benedict-chat--ensure-not-busy ()
   "Signal an error when a provider request is already running."
   (when (and benedict-chat--session
-             (benedict-session-busy-p benedict-chat--session))
-    (user-error "A provider request is already in flight")))
+             (or (benedict-session-request-active-p benedict-chat--session)
+                 (memq (benedict-session-run-state benedict-chat--session)
+                       '(running waiting))))
+    (user-error "Session is already active")))
+
+(defun benedict-chat--pending-approval-yield (session)
+  "Return SESSION's first outstanding approval yield, or nil."
+  (cl-find-if (lambda (yield)
+                (eq (plist-get yield :type) 'approval-request))
+              (benedict-session-outstanding-yields session)))
 
 (defun benedict-chat--apply-request-result-extras (buffer result)
   "Apply RESULT metadata update for the current session in BUFFER."
@@ -441,15 +449,14 @@ When SKIP-CONTEXT is non-nil, do not append context slices."
       (let ((session benedict-chat--session))
         (unless session
           (user-error "No session attached"))
-        (when (benedict-session-busy-p session)
-          (user-error "A provider request is already in flight"))
-        ;; Add user message to session
+        (when (or (benedict-session-request-active-p session)
+                  (memq (benedict-session-run-state session) '(running waiting)))
+          (user-error "Session is already active"))
         (let* ((final (if (and benedict-chat--context-slices (not skip-context))
                           (benedict-chat-compose--assemble-message-text
                            text benedict-chat--context-slices)
                         text)))
-          (benedict-session-add-message session
-                                        (benedict-message-user-text final)))
+          (benedict-core-add-user-input session final))
         (when (and benedict-chat--context-slices
                    (not benedict-chat-context-retain-after-send))
           (benedict-chat--set-context-slices nil))
@@ -517,8 +524,8 @@ When SKIP-CONTEXT is non-nil, do not append context slices."
         (benedict-provider-abort handle)))
     (benedict-session-cancel benedict-chat--session))
   (when (and benedict-chat--session
-             (memq (benedict-session-state benedict-chat--session)
-                   '(running checkpoint approval-pending waiting)))
+             (memq (benedict-session-run-state benedict-chat--session)
+                   '(running waiting error)))
     (benedict-core-stop benedict-chat--session))
   (message "Benedict: loop/request canceled by user"))
 
@@ -553,44 +560,46 @@ When SKIP-CONTEXT is non-nil, do not append context slices."
     session))
 
 (defun benedict-chat-continue-checkpoint ()
-  "Continue the active session after a checkpoint."
+  "Continue the active session when core is waiting without a user decision."
   (interactive)
   (let ((session (benedict-chat--current-session)))
-    (unless (eq (benedict-session-state session) 'checkpoint)
-      (user-error "Session is not waiting at a checkpoint"))
+    (unless (eq (benedict-session-run-state session) 'waiting)
+      (user-error "Session is not waiting"))
+    (when (benedict-session-outstanding-yields session)
+      (user-error "Session has outstanding yields to resolve"))
     (benedict-core-continue session)
-    (message "Benedict: checkpoint continued")))
+    (message "Benedict: session continued")))
 
 (defun benedict-chat-stop-checkpoint ()
-  "Stop the active session after a checkpoint."
+  "Stop the active core run."
   (interactive)
   (let ((session (benedict-chat--current-session)))
-    (unless (eq (benedict-session-state session) 'checkpoint)
-      (user-error "Session is not waiting at a checkpoint"))
     (benedict-core-stop session)
-    (message "Benedict: checkpoint stopped")))
+    (message "Benedict: session stopped")))
 
 (defun benedict-chat-approve-pending-tool ()
   "Approve the active pending tool call."
   (interactive)
-  (let ((session (benedict-chat--current-session)))
-    (unless (benedict-session-outstanding-yields session)
+  (let* ((session (benedict-chat--current-session))
+         (yield (benedict-chat--pending-approval-yield session)))
+    (unless yield
       (user-error "Session is not waiting on a tool approval"))
     (benedict-core-resume
      session
-     (plist-get (car (benedict-session-outstanding-yields session)) :id)
+     (plist-get yield :id)
      '(:decision approve))
     (message "Benedict: tool approved")))
 
 (defun benedict-chat-deny-pending-tool ()
   "Deny the active pending tool call."
   (interactive)
-  (let ((session (benedict-chat--current-session)))
-    (unless (benedict-session-outstanding-yields session)
+  (let* ((session (benedict-chat--current-session))
+         (yield (benedict-chat--pending-approval-yield session)))
+    (unless yield
       (user-error "Session is not waiting on a tool approval"))
     (benedict-core-resume
      session
-     (plist-get (car (benedict-session-outstanding-yields session)) :id)
+     (plist-get yield :id)
      '(:decision deny))
     (message "Benedict: tool denied")))
 
@@ -618,14 +627,16 @@ Returns a function suitable for adding to `benedict-session-event-hook'."
   (pcase event-type
     ('state-changed
      (benedict-chat--observe-state-changed
-      (plist-get payload :old) (plist-get payload :new)))
+      (plist-get payload :old)
+      (plist-get payload :new)
+      (plist-get payload :axis)))
     ('checkpoint-requested
      (message "Benedict: checkpoint requested; use the in-buffer controls or checkpoint commands"))
     ('approval-requested
      (message "Benedict: tool approval requested; use the in-buffer controls or approval commands"))
     ('approval-resolved
      (message "Benedict: tool approval %s"
-              (plist-get payload :resolution)))
+              (plist-get (plist-get payload :decision) :decision)))
     ('request-completed
      (benedict-chat--observe-request-completed payload))
     ('loop-stopped
@@ -644,24 +655,26 @@ Returns a function suitable for adding to `benedict-session-event-hook'."
     ;; is relevant to the view. The view tracks session state directly.
     inflight))
 
-(defun benedict-chat--observe-state-changed (old-state new-state)
-  "Handle session state transition from OLD-STATE to NEW-STATE."
-  (pcase new-state
-    ('idle
-     (benedict-chat-status--status-reset)
-     (benedict-chat-status--status-stop-timer))
-    ('streaming
-     (benedict-chat-status--status-reset)
-     (benedict-chat-status--status-start-timer))
-    ('approval-pending
-     (benedict-chat-status--status-reset)
-     (benedict-chat-status--status-stop-timer))
-    ('error
-     (benedict-chat-status--status-reset)
-     (benedict-chat-status--status-stop-timer))
-    ('cancelled
-     (benedict-chat-status--status-reset)
-     (benedict-chat-status--status-stop-timer)))
+(defun benedict-chat--observe-state-changed (old-state new-state &optional axis)
+  "Handle state transition from OLD-STATE to NEW-STATE on AXIS."
+  (ignore old-state)
+  (when (or (null axis) (eq axis 'run))
+    (pcase new-state
+      ('running
+       (benedict-chat-status--status-reset)
+       (benedict-chat-status--status-start-timer))
+      ('idle
+       (benedict-chat-status--status-reset)
+       (benedict-chat-status--status-stop-timer))
+      ('waiting
+       (benedict-chat-status--status-reset)
+       (benedict-chat-status--status-stop-timer))
+      ('error
+       (benedict-chat-status--status-reset)
+       (benedict-chat-status--status-stop-timer))
+      ('cancelled
+       (benedict-chat-status--status-reset)
+       (benedict-chat-status--status-stop-timer))))
   ;; Refresh header line
   (force-mode-line-update))
 

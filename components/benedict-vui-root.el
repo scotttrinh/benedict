@@ -35,13 +35,25 @@
            (harness (benedict-session-harness session)))
       (list :session-id (benedict-session-id session)
             :title (benedict-session-title session)
-            :state (benedict-session-state session)
+            :state (benedict-session-run-state session)
+            :turn-state (benedict-session-turn-state session)
+            :outstanding-yield-count
+            (length (benedict-session-outstanding-yields session))
             :root (benedict-session-root session)
             :instruction-sources (copy-tree (plist-get meta :instruction-sources))
             :store-path (plist-get meta :store-path)
             :last-saved-at (plist-get meta :last-saved-at)
             :audit-count (length (benedict-harness-audit-log harness))
             :updated-at (benedict-session-updated-at session)))))
+
+(defun benedict-vui-root--session-approval (session)
+  "Return SESSION's current approval yield, or nil."
+  (and session
+       (copy-tree
+        (cl-find-if
+         (lambda (yield)
+           (eq (plist-get yield :type) 'approval-request))
+         (benedict-session-outstanding-yields session)))))
 
 (defun benedict-vui-root--toggle-collapsed-block (collapsed-blocks block-id &optional next)
   "Return COLLAPSED-BLOCKS updated for BLOCK-ID.
@@ -96,12 +108,7 @@ toggle based on current membership.  COLLAPSED-BLOCKS may be a list or hash tabl
          (initial-model (and session (benedict-session-model session)))
          (initial-usage (and session (benedict-session-last-usage session)))
          (initial-session-info (benedict-vui-root--session-info session))
-         (initial-approval (and session
-                                (copy-tree
-                                 (cl-find-if
-                                  (lambda (yield)
-                                    (eq (plist-get yield :type) 'approval-request))
-                                  (benedict-session-outstanding-yields session)))))
+         (initial-approval (benedict-vui-root--session-approval session))
          (initial-audit-log (and session
                                  (copy-tree
                                   (benedict-harness-audit-log
@@ -258,11 +265,18 @@ Returns a function that when called unsubscribes from events."
                           :limit (plist-get payload :limit))))
     ('approval-requested
      (vui-set-state :approval
-                    (copy-tree (or (plist-get payload :yield)
-                                   (plist-get payload :approval)
-                                   (plist-get payload :action)))))
+                    (or (copy-tree (plist-get payload :yield))
+                        (benedict-vui-root--session-approval session)))
+     (vui-set-state :session-info (benedict-vui-root--session-info session)))
     ('approval-resolved
-     (vui-set-state :approval nil))
+     (vui-set-state :approval (benedict-vui-root--session-approval session))
+     (vui-set-state :session-info (benedict-vui-root--session-info session)))
+    ('yield-created
+     (vui-set-state :approval (benedict-vui-root--session-approval session))
+     (vui-set-state :session-info (benedict-vui-root--session-info session)))
+    ('yield-resolved
+     (vui-set-state :approval (benedict-vui-root--session-approval session))
+     (vui-set-state :session-info (benedict-vui-root--session-info session)))
     ('tool-audit
      (when-let ((audit (plist-get payload :audit)))
        (vui-set-state :audit-log
@@ -270,15 +284,17 @@ Returns a function that when called unsubscribes from events."
                         (append entries (list audit))))))
     ('state-changed
      (let ((old-state (plist-get payload :old))
-           (new-state (plist-get payload :new)))
+           (new-state (plist-get payload :new))
+           (axis (plist-get payload :axis)))
        (vui-set-state :session-info (benedict-vui-root--session-info session))
-       (when (eq new-state 'error)
+       (when (and (eq axis 'run)
+                  (eq new-state 'error))
          (vui-set-state :error (format "Session error: %s -> %s" old-state new-state)))
        (when (not (eq new-state 'checkpoint))
          (vui-set-state :checkpoint nil))
-       (when (not (memq new-state '(approval-pending waiting)))
-         (vui-set-state :approval nil))
-       (when (and (memq old-state '(streaming running))
+       (vui-set-state :approval (benedict-vui-root--session-approval session))
+       (when (and (eq axis 'run)
+                  (memq old-state '(streaming running))
                   (eq new-state 'idle))
          (vui-set-state :error nil))))
     ('session-saved

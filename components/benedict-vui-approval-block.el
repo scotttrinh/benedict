@@ -21,8 +21,13 @@
 
 (defun benedict-vui-approval-block--reason (approval)
   "Return human-readable approval reason text for APPROVAL."
-  (pcase (plist-get approval :approval)
-    ('always "High-risk tool requires approval")
+  (pcase (plist-get approval :reason)
+    ('capability-approval-required
+     (let ((capabilities (plist-get approval :required-capabilities)))
+       (if capabilities
+           (format "Requires capabilities: %s"
+                   (mapconcat #'symbol-name capabilities ", "))
+         "Tool requires capability approval")))
     (_ "Tool requires approval")))
 
 (defun benedict-vui-approval-block--args (approval)

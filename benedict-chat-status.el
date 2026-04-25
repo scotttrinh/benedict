@@ -44,9 +44,11 @@ Values:
     (cond
      ((null session) 'idle)
      ((eq (benedict-session-state session) 'streaming) 'streaming)
-     ((eq (benedict-session-state session) 'error) 'error)
-     ((eq (benedict-session-state session) 'cancelled) 'canceled)
+     ((eq (benedict-session-run-state session) 'error) 'error)
+     ((eq (benedict-session-run-state session) 'cancelled) 'canceled)
+     ((benedict-session-outstanding-yields session) 'waiting)
      ((benedict-session-request-active-p session) 'sending)
+     ((eq (benedict-session-run-state session) 'running) 'running)
      (t 'idle))))
 
 (defun benedict-chat-status--status-request-started-at ()
@@ -70,7 +72,7 @@ Values:
 (defun benedict-chat-status--status-active-p ()
   "Return non-nil when session indicates an active provider call."
   (let ((phase (benedict-chat-status--status-phase)))
-    (memq phase '(sending streaming))))
+    (memq phase '(sending streaming running))))
 
 (defun benedict-chat-status--status-stop-timer ()
   "Cancel the status timer if present."
@@ -131,7 +133,7 @@ Values:
 (defun benedict-chat-status--status-indicator (phase last-phase)
   "Return the indicator glyph for PHASE using LAST-PHASE as a hint."
   (pcase phase
-    ((or 'sending 'streaming)
+    ((or 'sending 'streaming 'running)
      (let* ((frames benedict-chat-status--spinner-frames)
             (len (length frames))
             (index (mod (or benedict-chat--status-spinner-index 0) len)))
@@ -150,6 +152,8 @@ Values:
   (pcase phase
     ('sending "contacting")
     ('streaming "streaming")
+    ('running "running")
+    ('waiting "waiting")
     ('complete "completed")
     ('error "error")
     ('canceled "canceled")
@@ -190,7 +194,7 @@ Handles errors related to killed buffers gracefully."
       (let* ((session benedict-chat--session)
              (phase (benedict-chat-status--status-phase))
              (last-phase (and session (benedict-session-last-phase session)))
-             (active (memq phase '(sending streaming)))
+             (active (memq phase '(sending streaming running)))
              (elapsed (or (and active (benedict-chat-status--status-elapsed))
                           (and session (benedict-session-last-elapsed session))))
              (usage (and session (benedict-session-accumulated-usage session)))

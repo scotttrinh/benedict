@@ -20,6 +20,8 @@
   (let ((session-id (plist-get session-info :session-id))
         (title (plist-get session-info :title))
         (state (plist-get session-info :state))
+        (turn-state (plist-get session-info :turn-state))
+        (yield-count (plist-get session-info :outstanding-yield-count))
         (root (plist-get session-info :root))
         (store-path (plist-get session-info :store-path))
         (saved-at (plist-get session-info :last-saved-at))
@@ -30,7 +32,11 @@
     (when title
       (push (format "Title: %s" title) lines))
     (when state
-      (push (format "State: %s" state) lines))
+      (push (format "Run state: %s" state) lines))
+    (when turn-state
+      (push (format "Turn state: %s" turn-state) lines))
+    (when (and yield-count (> yield-count 0))
+      (push (format "Outstanding yields: %s" yield-count) lines))
     (when root
       (push (format "Root: %s" root) lines))
     (when store-path
