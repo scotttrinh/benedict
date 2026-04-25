@@ -31,6 +31,15 @@
   tools system-prompt autonomy verbosity
   harness tool-invoke-fn
   flywire-session attached-frontends
+  ;; Core runtime state
+  (run-state 'idle)
+  turn-state
+  outstanding-yields
+  events
+  core-provider-dispatch-fn
+  core-tool-invoke-fn
+  core-action-pipeline-functions
+  core-approved-capabilities
   ;; Telemetry fields
   (accumulated-usage nil)    ; plist: :prompt :completion :total :cost
   (accumulated-seconds 0.0)  ; float: total elapsed time
@@ -217,14 +226,18 @@ Each function receives (SESSION QUESTION-PLIST).")
 
 (defun benedict-session--emit (session event-type &rest payload)
   "Emit EVENT-TYPE for SESSION with PAYLOAD."
-  (let ((event (benedict-event-create
-                :type event-type
-                :session-id (benedict-session-id session)
-                :timestamp (current-time)
-                :payload payload)))
+  (let* ((durable-payload (copy-tree payload))
+         (event (benedict-event-create
+                 :type event-type
+                 :session-id (benedict-session-id session)
+                 :timestamp (current-time)
+                 :payload durable-payload))
+         (hook-payload (plist-put (copy-tree payload) :event event)))
+    (setf (benedict-session-events session)
+          (append (benedict-session-events session) (list event)))
     (benedict-session-touch session)
     (run-hook-with-args 'benedict-session-event-hook
-                        session event-type (plist-put payload :event event)))
+                        session event-type hook-payload))
   (when (eq event-type 'question-raised)
     (run-hook-with-args 'benedict-session-ask-user-hook
                         session

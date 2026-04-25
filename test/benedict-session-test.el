@@ -897,6 +897,25 @@ session returns to idle state."
       (should (equal (benedict-session-id session)
                      (benedict-event-session-id captured))))))
 
+(ert-deftest benedict-session-test-durable-event-is-serializable ()
+  "Durable event records can be serialized without hook-only self references."
+  (let ((benedict-session--registry (make-hash-table :test 'equal)))
+    (let* ((session (benedict-session-create))
+           (_message (benedict-session-add-message
+                      session '(:role user :content "Test")))
+           (event (car (benedict-session-events session)))
+           (event-plist (benedict-event-to-plist event))
+           (printed (let ((print-circle nil))
+                      (prin1-to-string event-plist)))
+           (read-back (read printed)))
+      (should (benedict-event-p event))
+      (should (equal (plist-get event-plist :type)
+                     (plist-get read-back :type)))
+      (should (equal (plist-get event-plist :session-id)
+                     (plist-get read-back :session-id)))
+      (should (equal (plist-get event-plist :payload)
+                     (plist-get read-back :payload))))))
+
 (ert-deftest benedict-session-test-event-on-draft-update ()
   "Draft updates emit events."
   (let ((benedict-session--registry (make-hash-table :test 'equal))
