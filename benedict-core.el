@@ -29,8 +29,6 @@
   (let ((old (benedict-session-run-state session)))
     (unless (eq old state)
       (setf (benedict-session-run-state session) state)
-      ;; Keep the legacy session state aligned while core is being introduced.
-      (setf (benedict-session-state session) state)
       (benedict-core--emit session 'state-changed
                            :axis 'run
                            :old old
@@ -189,7 +187,7 @@ METADATA is appended to the action plist."
         :run-state (benedict-session-run-state session)
         :turn-state (benedict-session-turn-state session)
         :approved-capabilities
-        (copy-tree (benedict-session-core-approved-capabilities session))
+        (copy-tree (benedict-session-approved-capabilities session))
         :harness (benedict-session-harness session)))
 
 (defun benedict-core--action-validation-error (object)
@@ -249,7 +247,7 @@ METADATA is appended to the action plist."
 
 (defun benedict-core--action-pipeline-functions (session)
   "Return action pipeline functions configured for SESSION."
-  (append (benedict-session-core-action-pipeline-functions session)
+  (append (benedict-session-action-pipeline-functions session)
           (list #'benedict-core--default-policy-action)))
 
 (defun benedict-core--run-action-pipeline (session tool-call tool-spec)
@@ -358,8 +356,7 @@ METADATA is appended to the action plist."
          (tool-id (or (plist-get tool-call :name)
                       (plist-get tool-call :tool)))
          (args (plist-get tool-call :arguments))
-         (invoke-fn (or (benedict-session-core-tool-invoke-fn session)
-                        (benedict-session-tool-invoke-fn session)))
+         (invoke-fn (benedict-session-tool-invoke-fn session))
          (spec-fn (plist-get tool-spec :fn))
          raw-result)
     (benedict-core--emit session 'tool-started
@@ -376,6 +373,14 @@ METADATA is appended to the action plist."
                              :harness (benedict-session-harness session))
                   (funcall invoke-fn tool-id args)))
                (spec-fn (apply spec-fn args))
+               (benedict-session-tool-invoke-fn
+                (let ((fn benedict-session-tool-invoke-fn))
+                  (if (benedict-core--function-accepts-options-p fn)
+                      (funcall fn
+                               tool-id args
+                               :session session
+                               :harness (benedict-session-harness session))
+                    (funcall fn tool-id args))))
                (t (error "No tool invoke function configured for %S" tool-id))))
       (error
        (setq raw-result
@@ -532,6 +537,18 @@ Return 'complete when all calls are handled, or 'waiting when a yield blocks."
           :verbosity (benedict-session-verbosity session)
           :messages messages)))
 
+(defun benedict-core--handle-provider-delta (session data)
+  "Handle streaming delta DATA for SESSION."
+  (when session
+    (let ((kind (plist-get data :kind))
+          (text (plist-get data :text)))
+      (pcase kind
+        ('content-delta
+         (when text
+           (benedict-session-append-draft session text)))
+        ('thinking-delta
+         (benedict-core--emit session 'draft-updated :payload data))))))
+
 (defun benedict-core--handle-provider-result (session result)
   "Apply provider RESULT to SESSION and continue the turn if needed."
   (let* ((inflight (benedict-session-inflight session))
@@ -550,21 +567,43 @@ Return 'complete when all calls are handled, or 'waiting when a yield blocks."
         (benedict-session-accumulate-usage session usage duration))))
   (benedict-session-clear-request session)
   (let* ((message (plist-get result :message))
-         (assistant (benedict-session-add-message
-                     session
-                     (list :role 'assistant
-                           :content (benedict-core--message-content message)
-                           :tool-calls (plist-get message :tool-calls)
-                           :thinking (plist-get result :thinking)
-                           :metadata (list :provider (plist-get result :provider)
-                                           :model (plist-get result :model)
-                                           :usage (plist-get result :usage)))))
-         (tool-calls (benedict-message-tool-calls assistant)))
+         (thinking (plist-get result :thinking))
+         (tool-calls (plist-get message :tool-calls))
+         (metadata (list :provider (plist-get result :provider)
+                         :model (plist-get result :model)
+                         :usage (plist-get result :usage)))
+         (assistant
+          (if (and (benedict-session-draft session)
+                   (not (string-empty-p (plist-get (benedict-session-draft session) :content))))
+              (let ((draft (benedict-session-draft session))
+                    (final-content (benedict-core--message-content message)))
+                (when thinking
+                  (setf (benedict-session-draft session)
+                        (plist-put draft :thinking thinking)))
+                (when tool-calls
+                  (setf (benedict-session-draft session)
+                        (plist-put draft :tool-calls
+                                   (append (plist-get draft :tool-calls)
+                                           tool-calls))))
+                (when (not (string-empty-p final-content))
+                   (setf (benedict-session-draft session)
+                         (plist-put draft :content final-content)))
+                (benedict-session-finalize-draft session metadata))
+            (progn
+              (benedict-session-discard-draft session)
+              (benedict-session-add-message
+               session
+               (list :role 'assistant
+                     :content (benedict-core--message-content message)
+                     :tool-calls tool-calls
+                     :thinking thinking
+                     :metadata metadata)))))
+         (assistant-tool-calls (benedict-message-tool-calls assistant)))
     (benedict-core--emit session 'request-completed
                          :success t
                          :result result)
-    (if tool-calls
-        (when (eq (benedict-core--execute-tool-calls session tool-calls) 'complete)
+    (if assistant-tool-calls
+        (when (eq (benedict-core--execute-tool-calls session assistant-tool-calls) 'complete)
           (benedict-core-step session))
       (benedict-core--set-turn-state session 'turn-complete)
       (benedict-core--set-run-state session 'idle)
@@ -574,6 +613,7 @@ Return 'complete when all calls are handled, or 'waiting when a yield blocks."
 (defun benedict-core--handle-provider-error (session error)
   "Apply provider ERROR to SESSION."
   (benedict-session-clear-request session)
+  (benedict-session-discard-draft session)
   (setf (benedict-session-last-error session) error)
   (benedict-core--set-run-state session 'error)
   (benedict-core--emit session 'request-completed
@@ -587,11 +627,11 @@ Return 'complete when all calls are handled, or 'waiting when a yield blocks."
     (&key id title root provider model profile meta tools system-prompt autonomy
      verbosity harness tool-invoke-fn provider-dispatch-fn
      action-pipeline-functions approved-capabilities &allow-other-keys)
-  "Create a Benedict session configured for headless core execution.
+  "Create a Benedict session configured for core execution.
 ID, TITLE, ROOT, PROVIDER, MODEL, PROFILE, META, TOOLS, SYSTEM-PROMPT,
 AUTONOMY, VERBOSITY, HARNESS, and TOOL-INVOKE-FN mirror
 `benedict-session-create'.  PROVIDER-DISPATCH-FN, ACTION-PIPELINE-FUNCTIONS, and
-APPROVED-CAPABILITIES configure core-owned runtime behavior."
+APPROVED-CAPABILITIES configure runtime behavior."
   (let ((session (benedict-session-create
                   :id id
                   :title title
@@ -605,15 +645,10 @@ APPROVED-CAPABILITIES configure core-owned runtime behavior."
                   :autonomy autonomy
                   :verbosity verbosity
                   :harness harness
-                  :tool-invoke-fn tool-invoke-fn)))
-    (setf (benedict-session-core-provider-dispatch-fn session)
-          provider-dispatch-fn)
-    (setf (benedict-session-core-tool-invoke-fn session)
-          tool-invoke-fn)
-    (setf (benedict-session-core-action-pipeline-functions session)
-          action-pipeline-functions)
-    (setf (benedict-session-core-approved-capabilities session)
-          approved-capabilities)
+                  :tool-invoke-fn tool-invoke-fn
+                  :provider-dispatch-fn provider-dispatch-fn
+                  :action-pipeline-functions action-pipeline-functions
+                  :approved-capabilities approved-capabilities)))
     (benedict-core--set-run-state session 'idle)
     (benedict-core--emit session 'session-created)
     session))
@@ -641,7 +676,8 @@ APPROVED-CAPABILITIES configure core-owned runtime behavior."
     (benedict-core--set-run-state session 'running))
   (benedict-core--set-turn-state session 'model-dispatch)
   (let ((request (benedict-core--provider-request session))
-        (dispatch (or (benedict-session-core-provider-dispatch-fn session)
+        (dispatch (or (benedict-session-provider-dispatch-fn session)
+                      benedict-session-provider-dispatch-fn
                       #'benedict-provider-dispatch)))
     (if (and (plist-get request :provider)
              (plist-get request :model))
@@ -650,14 +686,24 @@ APPROVED-CAPABILITIES configure core-owned runtime behavior."
                                        :request request
                                        :request-id request-id))
                (handle
-                (funcall dispatch
-                         request
-                         :on-success (lambda (result)
-                                       (benedict-core--handle-provider-result
-                                        session result))
-                         :on-error (lambda (error)
-                                     (benedict-core--handle-provider-error
-                                      session error)))))
+                (progn
+                  (benedict-session-start-draft session)
+                  (funcall dispatch
+                           request
+                           :on-success (lambda (result)
+                                         (benedict-core--handle-provider-result
+                                          session result))
+                           :on-error (lambda (error)
+                                       (benedict-core--handle-provider-error
+                                        session error))
+                           :on-delta (lambda (&rest payload)
+                                       (let ((data (if (and (listp payload)
+                                                            (not (keywordp (car payload)))
+                                                            (listp (car payload)))
+                                                       (car payload)
+                                                     payload)))
+                                         (benedict-core--handle-provider-delta
+                                          session data)))))))
           (when-let ((inflight (benedict-session-inflight session)))
             (when (equal request-id (plist-get inflight :request-id))
               (setf (benedict-session-inflight session)
@@ -685,8 +731,8 @@ APPROVED-CAPABILITIES configure core-owned runtime behavior."
        (if (eq (plist-get decision :decision) 'approve)
            (let* ((invocation (plist-get yield :invocation))
                   (capabilities (plist-get yield :required-capabilities))
-                  (existing (benedict-session-core-approved-capabilities session)))
-             (setf (benedict-session-core-approved-capabilities session)
+                  (existing (benedict-session-approved-capabilities session)))
+             (setf (benedict-session-approved-capabilities session)
                    (append existing
                            (cl-remove-if (lambda (cap) (member cap existing))
                                          capabilities)))
@@ -729,9 +775,15 @@ APPROVED-CAPABILITIES configure core-owned runtime behavior."
 
 (defun benedict-core-stop (session)
   "Stop SESSION and clear outstanding core yields."
+  (when-let ((inflight (benedict-session-inflight session)))
+    (let ((handle (plist-get inflight :request)))
+      (when handle
+        (benedict-provider-abort handle)))
+    (benedict-session-clear-request session))
+  (benedict-session-discard-draft session)
   (setf (benedict-session-outstanding-yields session) nil)
   (benedict-core--set-turn-state session 'turn-complete)
-  (benedict-core--set-run-state session 'idle)
+  (benedict-core--set-run-state session 'cancelled)
   (benedict-core--emit session 'run-stopped :reason 'user-stopped)
   session)
 

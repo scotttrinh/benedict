@@ -50,7 +50,7 @@
         (should (string-match-p "Ping" text))
         (should (string-match-p "Hello there" text))
         (should-not (string-match-p "ACTIVE" text))
-        (should (eq (benedict-session-state session) 'idle))
+        (should (eq (benedict-session-run-state session) 'idle))
         (should (= 2 (length messages))))
       (funcall done))))
 
@@ -79,7 +79,7 @@
       (let ((text (benedict-vui-root-e2e-test--buffer-text)))
         (should (string-match-p "Hello there" text))
         (should-not (string-match-p "ACTIVE" text))
-        (should (eq (benedict-session-state session) 'idle)))
+        (should (eq (benedict-session-run-state session) 'idle)))
       (funcall done))))
 
 (ert-deftest-async benedict-vui-root-e2e-streaming-tool-calls-show-use-and-result-status (done)
@@ -94,7 +94,9 @@
                     :content "Tooling done"
                     :tool-calls (list (list :id "call-1"
                                             :name 'read_file
-                                            :arguments '(:path "README.md")))))))
+                                            :arguments '(:path "README.md"))))
+              (list :type 'success
+                    :content "all finished"))))
     (with-mounted-vui-root
       (setf (benedict-session-tool-invoke-fn session)
             (lambda (_tool-id _arguments)
@@ -103,7 +105,7 @@
       (should (benedict-vui-test--wait-for-request-finished session 2.0))
       (vui-flush-sync)
       (let ((text (benedict-vui-root-e2e-test--buffer-text)))
-        (should (string-match-p "Tooling" text))
+        (should (string-match-p "all finished" text))
         (should (string-match-p "Execution" text))
         (should (string-match-p "read_file" text))
         (should (string-match-p "Show details" text)))
@@ -129,7 +131,9 @@
                     :thinking "Reasoning details"
                     :tool-calls (list (list :id "call-1"
                                             :name 'read_file
-                                            :arguments '(:path "README.md")))))))
+                                            :arguments '(:path "README.md"))))
+             (list :type 'success
+                   :content "turn complete"))))
     (with-mounted-vui-root
       (setf (benedict-session-tool-invoke-fn session)
             (lambda (_tool-id _arguments)
@@ -161,11 +165,11 @@
         (vui-flush-sync)
         (let* ((text (benedict-vui-root-e2e-test--buffer-text))
                (messages (benedict-vui-root-e2e-test--messages session))
-               (assistant-id (benedict-message-id (nth 1 messages))))
+               (assistant-id (benedict-message-id (car (last messages)))))
           (should (string-match-p "Prompt" text))
           (should (string-match-p "Inspect README" text))
           (should (string-match-p "Answer" text))
-          (should (string-match-p "Draft" text))
+          (should (string-match-p "turn complete" text))
           (should (string-match-p "Execution" text))
           (should (string-match-p "1 tool | read_file | thinking" text))
           (should (string-match-p "Show details" text))
@@ -275,7 +279,7 @@
       (let ((text (benedict-vui-root-e2e-test--buffer-text)))
         (should (string-match-p "Rate limited" text))
         (should-not (string-match-p "ACTIVE" text))
-        (should (eq (benedict-session-state session) 'error)))
+        (should (eq (benedict-session-run-state session) 'error)))
       (funcall done))))
 
 (ert-deftest-async benedict-vui-root-e2e-cancel-mid-stream-clears-draft-without-corruption (done)
@@ -295,12 +299,12 @@
         (lambda ()
           (string-match-p "ACTIVE" (benedict-vui-root-e2e-test--buffer-text)))
         :timeout 2.0))
-      (should (benedict-session-cancel session))
+      (should (benedict-core-stop session))
       (vui-flush-sync)
       (let ((text (benedict-vui-root-e2e-test--buffer-text))
             (messages (benedict-vui-root-e2e-test--messages session)))
         (should-not (string-match-p "ACTIVE" text))
-        (should (eq (benedict-session-state session) 'cancelled))
+        (should (eq (benedict-session-run-state session) 'cancelled))
         (should (= 1 (length messages)))
         (should (equal (benedict-message-text (car messages)) "cancel me")))
       (funcall done))))
@@ -322,7 +326,7 @@
         (should-not (string-match-p "ACTIVE" text))
         (should (= 2 (length messages)))
         (should (equal (benedict-message-text (nth 1 messages)) ""))
-        (should (eq (benedict-session-state session) 'idle)))
+        (should (eq (benedict-session-run-state session) 'idle)))
       (funcall done))))
 
 (ert-deftest-async benedict-vui-root-e2e-multi-turn-continuity-keeps-navigation-stable (done)
@@ -433,7 +437,7 @@
            "Third answer"
            :message-key third-assistant-id
            :region-kind 'body)
-          (should (eq (benedict-session-state session) 'idle)))
+          (should (eq (benedict-session-run-state session) 'idle)))
         (funcall done)))))
 
 (provide 'test/benedict-vui-root-e2e-test)

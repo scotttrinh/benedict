@@ -43,13 +43,14 @@ Values:
   (let ((session benedict-chat--session))
     (cond
      ((null session) 'idle)
-     ((eq (benedict-session-state session) 'streaming) 'streaming)
      ((eq (benedict-session-run-state session) 'error) 'error)
      ((eq (benedict-session-run-state session) 'cancelled) 'canceled)
      ((benedict-session-outstanding-yields session) 'waiting)
+     ((benedict-session-draft session) 'streaming)
      ((benedict-session-request-active-p session) 'sending)
      ((eq (benedict-session-run-state session) 'running) 'running)
      (t 'idle))))
+
 
 (defun benedict-chat-status--status-request-started-at ()
   "Return the time value when the current request started, if any."

@@ -383,9 +383,7 @@ Returns the session or nil if agent frame is disabled."
 (defun benedict-chat--ensure-not-busy ()
   "Signal an error when a provider request is already running."
   (when (and benedict-chat--session
-             (or (benedict-session-request-active-p benedict-chat--session)
-                 (memq (benedict-session-run-state benedict-chat--session)
-                       '(running waiting))))
+             (benedict-session-busy-p benedict-chat--session))
     (user-error "Session is already active")))
 
 (defun benedict-chat--pending-approval-yield (session)
@@ -518,14 +516,7 @@ When SKIP-CONTEXT is non-nil, do not append context slices."
   (interactive)
   (benedict-chat-status--status-stop-timer)
   (when (and benedict-chat--session
-             (benedict-session-request-active-p benedict-chat--session))
-    (let ((handle (plist-get (benedict-session-inflight benedict-chat--session) :request)))
-      (when handle
-        (benedict-provider-abort handle)))
-    (benedict-session-cancel benedict-chat--session))
-  (when (and benedict-chat--session
-             (memq (benedict-session-run-state benedict-chat--session)
-                   '(running waiting error)))
+             (benedict-session-busy-p benedict-chat--session))
     (benedict-core-stop benedict-chat--session))
   (message "Benedict: loop/request canceled by user"))
 
@@ -764,7 +755,7 @@ When SESSION is non-nil, attach to it instead of creating a new one."
   "Return annotation string for SESSION completion.
 Includes title, state, and message count."
   (let ((title (or (benedict-session-title session) "Untitled"))
-        (state (benedict-session-state session))
+        (state (benedict-session-run-state session))
         (msg-count (length (benedict-session-entries session))))
     (format "%s [%s] - %d messages" title state msg-count)))
 

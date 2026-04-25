@@ -68,6 +68,8 @@ When RECORD-REQUEST is non-nil, call it with each request."
                      run-started
                      turn-started
                      request-started
+                     draft-started
+                     draft-finalized
                      message-added
                      request-completed
                      state-changed
@@ -186,7 +188,7 @@ When RECORD-REQUEST is non-nil, call it with each request."
     (should (member 'approval-requested (benedict-core-test--event-types session)))
     (should (member 'approval-resolved (benedict-core-test--event-types session)))
     (should (equal '(project-write)
-                   (benedict-session-core-approved-capabilities session)))))
+                   (benedict-session-approved-capabilities session)))))
 
 (ert-deftest benedict-core-action-pipeline-can-rewrite-tool-call ()
   "Action pipeline functions can rewrite the invocation executed by the tool."

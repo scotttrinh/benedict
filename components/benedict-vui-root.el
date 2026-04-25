@@ -21,7 +21,7 @@
 
 (defun benedict-vui-root--session-draft (session)
   "Return streaming payload for SESSION draft, or nil."
-  (when (and session (eq (benedict-session-state session) 'streaming))
+  (when (and session (benedict-session-draft session))
     (when-let ((draft (benedict-session-draft session)))
       (list :status 'active
             :content (or (plist-get draft :content) "")
