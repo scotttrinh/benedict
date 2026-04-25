@@ -12,6 +12,7 @@
 (require 'benedict-provider)
 (require 'benedict-provider-fake)
 (require 'benedict-session)
+(require 'benedict-core)
 (require 'benedict-vui-root)
 (require 'benedict-test-helpers)
 (require 'test/benedict-vui-test-utils)
@@ -23,7 +24,7 @@
    (list :role 'user
          :content prompt
          :time (current-time)))
-  (benedict-session-run session))
+  (benedict-core-run session))
 
 (defun benedict-vui-root-e2e-test--buffer-text ()
   "Return the mounted buffer text."

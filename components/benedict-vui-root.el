@@ -97,7 +97,11 @@ toggle based on current membership.  COLLAPSED-BLOCKS may be a list or hash tabl
          (initial-usage (and session (benedict-session-last-usage session)))
          (initial-session-info (benedict-vui-root--session-info session))
          (initial-approval (and session
-                                (copy-tree (benedict-session-pending-question session))))
+                                (copy-tree
+                                 (cl-find-if
+                                  (lambda (yield)
+                                    (eq (plist-get yield :type) 'approval-request))
+                                  (benedict-session-outstanding-yields session)))))
          (initial-audit-log (and session
                                  (copy-tree
                                   (benedict-harness-audit-log
@@ -253,7 +257,10 @@ Returns a function that when called unsubscribes from events."
                           :total-tokens (plist-get payload :total-tokens)
                           :limit (plist-get payload :limit))))
     ('approval-requested
-     (vui-set-state :approval (copy-tree (plist-get payload :approval))))
+     (vui-set-state :approval
+                    (copy-tree (or (plist-get payload :yield)
+                                   (plist-get payload :approval)
+                                   (plist-get payload :action)))))
     ('approval-resolved
      (vui-set-state :approval nil))
     ('tool-audit
@@ -269,7 +276,7 @@ Returns a function that when called unsubscribes from events."
          (vui-set-state :error (format "Session error: %s -> %s" old-state new-state)))
        (when (not (eq new-state 'checkpoint))
          (vui-set-state :checkpoint nil))
-       (when (not (eq new-state 'approval-pending))
+       (when (not (memq new-state '(approval-pending waiting)))
          (vui-set-state :approval nil))
        (when (and (memq old-state '(streaming running))
                   (eq new-state 'idle))

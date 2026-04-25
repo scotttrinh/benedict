@@ -330,6 +330,14 @@ METADATA is appended to the action plist."
      ((and (listp output) (plist-get output :text)) (plist-get output :text))
      (t (format "%S" output)))))
 
+(defun benedict-core--function-accepts-options-p (fn)
+  "Return non-nil when FN can accept runtime keyword options."
+  (when fn
+    (let ((arity (func-arity fn)))
+      (or (eq (cdr arity) 'many)
+          (and (integerp (cdr arity))
+               (>= (cdr arity) 3))))))
+
 (defun benedict-core--record-tool-result (session result)
   "Record normalized tool RESULT in SESSION transcript."
   (let* ((status (or (plist-get result :status) 'success))
@@ -360,7 +368,13 @@ METADATA is appended to the action plist."
     (condition-case err
         (setq raw-result
               (cond
-               (invoke-fn (funcall invoke-fn tool-id args :session session))
+               (invoke-fn
+                (if (benedict-core--function-accepts-options-p invoke-fn)
+                    (funcall invoke-fn
+                             tool-id args
+                             :session session
+                             :harness (benedict-session-harness session))
+                  (funcall invoke-fn tool-id args)))
                (spec-fn (apply spec-fn args))
                (t (error "No tool invoke function configured for %S" tool-id))))
       (error
@@ -417,15 +431,21 @@ REMAINING-TOOL-CALLS are queued behind the approval request."
   (let ((invocation (plist-get action :invocation)))
     (benedict-core--add-yield
      session
-     (list :type 'approval-request
-           :from 'harness
-           :to 'user
-           :action action
-           :invocation invocation
-           :tool-call (plist-get invocation :tool-call)
-           :tool-spec (plist-get invocation :tool-spec)
-           :required-capabilities (plist-get invocation :required-capabilities)
-           :remaining-tool-calls remaining-tool-calls))))
+     (let* ((tool-call (plist-get invocation :tool-call))
+            (tool-id (or (plist-get tool-call :name)
+                         (plist-get tool-call :tool))))
+       (list :type 'approval-request
+             :from 'harness
+             :to 'user
+             :action action
+             :approval 'confirm
+             :tool-id tool-id
+             :args (plist-get tool-call :arguments)
+             :invocation invocation
+             :tool-call tool-call
+             :tool-spec (plist-get invocation :tool-spec)
+             :required-capabilities (plist-get invocation :required-capabilities)
+             :remaining-tool-calls remaining-tool-calls)))))
 
 (defun benedict-core--execute-tool-calls (session tool-calls)
   "Evaluate and execute TOOL-CALLS for SESSION.
@@ -455,10 +475,12 @@ Return 'complete when all calls are handled, or 'waiting when a yield blocks."
           ('request-yield
            (benedict-core--set-run-state session 'waiting)
            (benedict-core--set-turn-state session 'harness-yielded-approval)
-           (benedict-core--tool-approval-yield session action tool-calls)
-           (benedict-core--emit session 'approval-requested
-                                :tool-call tool-call
-                                :action action)
+           (let ((yield (benedict-core--tool-approval-yield
+                         session action tool-calls)))
+             (benedict-core--emit session 'approval-requested
+                                  :tool-call tool-call
+                                  :action action
+                                  :yield yield))
            (throw 'blocked 'waiting))
           ('append-tool-result
            (benedict-core--record-tool-result
@@ -512,6 +534,21 @@ Return 'complete when all calls are handled, or 'waiting when a yield blocks."
 
 (defun benedict-core--handle-provider-result (session result)
   "Apply provider RESULT to SESSION and continue the turn if needed."
+  (let* ((inflight (benedict-session-inflight session))
+         (started (and inflight (plist-get inflight :started-at)))
+         (usage (plist-get result :usage)))
+    (when-let ((provider (plist-get result :provider)))
+      (setf (benedict-session-provider session) provider))
+    (when-let ((model (plist-get result :model)))
+      (setf (benedict-session-model session) model))
+    (when started
+      (let* ((elapsed (float-time (time-subtract (current-time) started)))
+             (duration (or (plist-get result :latency) elapsed)))
+        (setf (benedict-session-last-phase session) 'complete)
+        (setf (benedict-session-last-elapsed session) elapsed)
+        (setf (benedict-session-last-usage session) usage)
+        (benedict-session-accumulate-usage session usage duration))))
+  (benedict-session-clear-request session)
   (let* ((message (plist-get result :message))
          (assistant (benedict-session-add-message
                      session
@@ -536,6 +573,7 @@ Return 'complete when all calls are handled, or 'waiting when a yield blocks."
 
 (defun benedict-core--handle-provider-error (session error)
   "Apply provider ERROR to SESSION."
+  (benedict-session-clear-request session)
   (setf (benedict-session-last-error session) error)
   (benedict-core--set-run-state session 'error)
   (benedict-core--emit session 'request-completed
@@ -605,13 +643,28 @@ APPROVED-CAPABILITIES configure core-owned runtime behavior."
   (let ((request (benedict-core--provider-request session))
         (dispatch (or (benedict-session-core-provider-dispatch-fn session)
                       #'benedict-provider-dispatch)))
-    (benedict-core--emit session 'request-started :request request)
-    (funcall dispatch
-             request
-             :on-success (lambda (result)
-                           (benedict-core--handle-provider-result session result))
-             :on-error (lambda (error)
-                         (benedict-core--handle-provider-error session error)))))
+    (if (and (plist-get request :provider)
+             (plist-get request :model))
+        (let* ((request-id (benedict-session-start-request session nil))
+               (_ (benedict-core--emit session 'request-started
+                                       :request request
+                                       :request-id request-id))
+               (handle
+                (funcall dispatch
+                         request
+                         :on-success (lambda (result)
+                                       (benedict-core--handle-provider-result
+                                        session result))
+                         :on-error (lambda (error)
+                                     (benedict-core--handle-provider-error
+                                      session error)))))
+          (when-let ((inflight (benedict-session-inflight session)))
+            (when (equal request-id (plist-get inflight :request-id))
+              (setf (benedict-session-inflight session)
+                    (plist-put inflight :request handle)))))
+      (benedict-core--set-run-state session 'idle)
+      (benedict-core--set-turn-state session 'turn-complete)
+      (benedict-core--emit session 'dispatch-needed))))
 
 (defun benedict-core-continue (session)
   "Continue SESSION when it is waiting and no external decision is required."

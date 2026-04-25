@@ -24,6 +24,7 @@
 (require 'benedict-tools)
 (require 'benedict-flywire)
 (require 'benedict-session)
+(require 'benedict-core)
 (require 'benedict-vui-root)
 (require 'benedict-chat-profiles)
 (require 'benedict-chat-status)
@@ -454,7 +455,7 @@ When SKIP-CONTEXT is non-nil, do not append context slices."
           (benedict-chat--set-context-slices nil))
         ;; Configure and run session
         (benedict-chat--configure-session)
-        (benedict-session-run session)
+        (benedict-core-run session)
         t))))
 
 (defun benedict-chat--ensure-chat-buffer ()
@@ -517,8 +518,8 @@ When SKIP-CONTEXT is non-nil, do not append context slices."
     (benedict-session-cancel benedict-chat--session))
   (when (and benedict-chat--session
              (memq (benedict-session-state benedict-chat--session)
-                   '(running checkpoint approval-pending)))
-    (benedict-session-stop benedict-chat--session))
+                   '(running checkpoint approval-pending waiting)))
+    (benedict-core-stop benedict-chat--session))
   (message "Benedict: loop/request canceled by user"))
 
 (defun benedict-chat--current-session ()
@@ -557,7 +558,7 @@ When SKIP-CONTEXT is non-nil, do not append context slices."
   (let ((session (benedict-chat--current-session)))
     (unless (eq (benedict-session-state session) 'checkpoint)
       (user-error "Session is not waiting at a checkpoint"))
-    (benedict-session-continue session)
+    (benedict-core-continue session)
     (message "Benedict: checkpoint continued")))
 
 (defun benedict-chat-stop-checkpoint ()
@@ -566,25 +567,31 @@ When SKIP-CONTEXT is non-nil, do not append context slices."
   (let ((session (benedict-chat--current-session)))
     (unless (eq (benedict-session-state session) 'checkpoint)
       (user-error "Session is not waiting at a checkpoint"))
-    (benedict-session-stop session)
+    (benedict-core-stop session)
     (message "Benedict: checkpoint stopped")))
 
 (defun benedict-chat-approve-pending-tool ()
   "Approve the active pending tool call."
   (interactive)
   (let ((session (benedict-chat--current-session)))
-    (unless (benedict-session-approval-pending-p session)
+    (unless (benedict-session-outstanding-yields session)
       (user-error "Session is not waiting on a tool approval"))
-    (benedict-session-approve-pending-tool session)
+    (benedict-core-resume
+     session
+     (plist-get (car (benedict-session-outstanding-yields session)) :id)
+     '(:decision approve))
     (message "Benedict: tool approved")))
 
 (defun benedict-chat-deny-pending-tool ()
   "Deny the active pending tool call."
   (interactive)
   (let ((session (benedict-chat--current-session)))
-    (unless (benedict-session-approval-pending-p session)
+    (unless (benedict-session-outstanding-yields session)
       (user-error "Session is not waiting on a tool approval"))
-    (benedict-session-deny-pending-tool session)
+    (benedict-core-resume
+     session
+     (plist-get (car (benedict-session-outstanding-yields session)) :id)
+     '(:decision deny))
     (message "Benedict: tool denied")))
 
 ;;; Session Event Subscription
@@ -700,7 +707,7 @@ When SESSION is non-nil, attach to it instead of creating a new one."
                          (project-root (project-current)))))
     (setq-local benedict-chat--session
                 (or existing-session
-                    (benedict-session-create
+                    (benedict-core-create-session
                      :title (buffer-name)
                      :profile profile
                      :provider provider
