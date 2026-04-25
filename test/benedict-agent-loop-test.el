@@ -73,8 +73,9 @@ TEXT and TOOL-CALLS are forwarded to `benedict-provider-result-create'."
       (benedict-core-add-user-input session "Hello")
       (benedict-core-run session)
       (should (eq 'idle (benedict-session-run-state session)))
-      (should (eq 'turn-complete (benedict-session-turn-state session)))
-      (should-not (benedict-session-outstanding-yields session)))))
+      (let ((last-turn (car (last (benedict-session-turns session)))))
+        (should (eq 'turn-complete (benedict-turn-state last-turn))))
+      (should-not (benedict-session-active-turn session)))))
 
 (ert-deftest benedict-loop-core-reports-dispatch-needed ()
   "Core emits dispatch-needed when provider/model are missing."

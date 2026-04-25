@@ -12,6 +12,7 @@
 (require 'benedict-message)
 (require 'benedict-provider)
 (require 'benedict-session)
+(require 'benedict-turn)
 
 (defvar benedict-core--yield-seq 0
   "Sequence number for core yield identifiers.")
@@ -36,11 +37,13 @@
 
 (defun benedict-core--set-turn-state (session state)
   "Set SESSION core turn STATE and emit a state transition event."
-  (let ((old (benedict-session-turn-state session)))
-    (unless (eq old state)
-      (setf (benedict-session-turn-state session) state)
+  (let* ((turn (benedict-session-active-turn session))
+         (old (when turn (benedict-turn-state turn))))
+    (when (and turn (not (eq old state)))
+      (benedict-turn-set-state turn state)
       (benedict-core--emit session 'state-changed
                            :axis 'turn
+                           :turn-id (benedict-turn-id turn)
                            :old old
                            :new state))))
 
@@ -182,13 +185,14 @@ METADATA is appended to the action plist."
 
 (defun benedict-core--action-pipeline-context (session)
   "Return immutable context passed to tool action pipeline stages for SESSION."
-  (list :session-id (benedict-session-id session)
-        :root (benedict-session-root session)
-        :run-state (benedict-session-run-state session)
-        :turn-state (benedict-session-turn-state session)
-        :approved-capabilities
-        (copy-tree (benedict-session-approved-capabilities session))
-        :harness (benedict-session-harness session)))
+  (let ((turn (benedict-session-active-turn session)))
+    (list :session-id (benedict-session-id session)
+          :root (benedict-session-root session)
+          :run-state (benedict-session-run-state session)
+          :turn-state (if turn (benedict-turn-state turn) 'idle)
+          :approved-capabilities
+          (copy-tree (benedict-session-approved-capabilities session))
+          :harness (benedict-session-harness session))))
 
 (defun benedict-core--action-validation-error (object)
   "Return validation error plist for OBJECT, or nil when it is valid."
@@ -275,25 +279,23 @@ METADATA is appended to the action plist."
     (or action (benedict-core-action-execute-tool invocation))))
 
 (defun benedict-core--add-yield (session yield)
-  "Add YIELD to SESSION and emit a yield-created event."
-  (let ((final-yield (copy-tree yield)))
+  "Add YIELD to SESSION's active turn and emit a yield-created event."
+  (let* ((turn (or (benedict-session-active-turn session)
+                   (error "Cannot add yield without an active turn")))
+         (final-yield (copy-tree yield)))
     (unless (plist-get final-yield :id)
       (setq final-yield (plist-put final-yield :id (benedict-core--next-yield-id))))
-    (setf (benedict-session-outstanding-yields session)
-          (append (benedict-session-outstanding-yields session) (list final-yield)))
-    (benedict-core--emit session 'yield-created :yield final-yield)
+    (benedict-turn-add-yield turn final-yield)
+    (benedict-core--emit session 'yield-created
+                         :turn-id (benedict-turn-id turn)
+                         :yield final-yield)
     final-yield))
 
 (defun benedict-core--remove-yield (session yield-id)
-  "Remove YIELD-ID from SESSION and return the removed yield."
-  (let ((removed nil)
-        (kept nil))
-    (dolist (yield (benedict-session-outstanding-yields session))
-      (if (and (not removed) (equal (plist-get yield :id) yield-id))
-          (setq removed yield)
-        (push yield kept)))
-    (setf (benedict-session-outstanding-yields session) (nreverse kept))
-    removed))
+  "Remove YIELD-ID from SESSION's active turn and return the removed yield."
+  (if-let ((turn (benedict-session-active-turn session)))
+      (benedict-turn-remove-yield turn yield-id)
+    nil))
 
 (defun benedict-core--message-content (message)
   "Return display content for provider MESSAGE."
@@ -337,7 +339,8 @@ METADATA is appended to the action plist."
                (>= (cdr arity) 3))))))
 
 (defun benedict-core--record-tool-result (session result)
-  "Record normalized tool RESULT in SESSION transcript."
+  "Record normalized tool RESULT in SESSION transcript.
+Returns the canonical transcript message."
   (let* ((status (or (plist-get result :status) 'success))
          (error (plist-get result :error))
          (message (benedict-message-tool-result
@@ -346,8 +349,10 @@ METADATA is appended to the action plist."
                    status
                    (benedict-core--tool-result-content result)
                    error)))
-    (benedict-session-add-message session message)
-    result))
+    (let ((canonical (benedict-session-add-message session message)))
+      (when-let ((turn (benedict-session-active-turn session)))
+        (benedict-turn-add-message-id turn (benedict-message-id canonical)))
+      canonical)))
 
 (defun benedict-core--invoke-tool (session invocation)
   "Invoke the enriched tool INVOCATION for SESSION."
@@ -456,70 +461,75 @@ REMAINING-TOOL-CALLS are queued behind the approval request."
   "Evaluate and execute TOOL-CALLS for SESSION.
 Return 'complete when all calls are handled, or 'waiting when a yield blocks."
   (benedict-core--set-turn-state session 'model-yielded-tool-calls)
-  (benedict-core--emit
-   session 'yield-created
-   :yield (list :type 'tool-call
-                :from 'model
-                :to 'harness
-                :tool-calls tool-calls))
-  (benedict-core--set-turn-state session 'harness-evaluating)
-  (catch 'blocked
-    (while tool-calls
-      (let* ((tool-call (pop tool-calls))
-             (tool-spec (or (benedict-core--tool-spec session tool-call)
-                            (list :id (or (plist-get tool-call :name)
-                                          (plist-get tool-call :tool)))))
-             (action (benedict-core--run-action-pipeline session tool-call tool-spec))
-             (invocation (plist-get action :invocation)))
-        (pcase (plist-get action :action)
-          ('execute-tool
-           (benedict-core--set-turn-state session 'harness-executing)
-           (benedict-core--record-tool-result
-            session
-            (benedict-core--invoke-tool session invocation)))
-          ('request-yield
-           (benedict-core--set-run-state session 'waiting)
-           (benedict-core--set-turn-state session 'harness-yielded-approval)
-           (let ((yield (benedict-core--tool-approval-yield
-                         session action tool-calls)))
-             (benedict-core--emit session 'approval-requested
-                                  :tool-call tool-call
-                                  :action action
-                                  :yield yield))
-           (throw 'blocked 'waiting))
-          ('append-tool-result
-           (benedict-core--record-tool-result
-            session
-            (benedict-core--action-tool-result
-             action
-             (plist-get action :status))))
-          ('stop-run
-           (benedict-core--record-tool-result
-            session
-            (benedict-core--action-tool-result
-             action
-             (plist-get action :status)))
-           (benedict-core--set-run-state session 'idle)
-           (benedict-core--set-turn-state session 'turn-complete)
-           (benedict-core--emit session 'run-stopped :reason (plist-get action :reason))
-           (throw 'blocked 'waiting))
-          ('fail-stage
-           (benedict-core--record-tool-result
-            session
-            (benedict-core--failed-action-tool-result action)))
-          (_
-           (benedict-core--record-tool-result
-            session
-            (benedict-core--action-tool-result
-             (benedict-core-action-append-tool-result
-              (benedict-core--initial-invocation session tool-call tool-spec)
-              "Unknown action pipeline status")))))))
-    (benedict-core--set-turn-state session 'tool-results-ready)
-    (benedict-core--emit session 'yield-created
-                         :yield (list :type 'tool-result
-                                      :from 'harness
-                                      :to 'model))
-    'complete))
+  (let ((turn-id (when-let ((turn (benedict-session-active-turn session)))
+                   (benedict-turn-id turn))))
+    (benedict-core--emit
+     session 'yield-created
+     :turn-id turn-id
+     :yield (list :type 'tool-call
+                  :from 'model
+                  :to 'harness
+                  :tool-calls tool-calls))
+    (benedict-core--set-turn-state session 'harness-evaluating)
+    (catch 'blocked
+      (while tool-calls
+        (let* ((tool-call (pop tool-calls))
+               (tool-spec (or (benedict-core--tool-spec session tool-call)
+                              (list :id (or (plist-get tool-call :name)
+                                            (plist-get tool-call :tool)))))
+               (action (benedict-core--run-action-pipeline session tool-call tool-spec))
+               (invocation (plist-get action :invocation)))
+          (pcase (plist-get action :action)
+            ('execute-tool
+             (benedict-core--set-turn-state session 'harness-executing)
+             (benedict-core--record-tool-result
+              session
+              (benedict-core--invoke-tool session invocation)))
+            ('request-yield
+             (benedict-core--set-run-state session 'waiting)
+             (benedict-core--set-turn-state session 'harness-yielded-approval)
+             (let ((yield (benedict-core--tool-approval-yield
+                           session action tool-calls)))
+               (benedict-core--emit session 'approval-requested
+                                    :turn-id turn-id
+                                    :tool-call tool-call
+                                    :action action
+                                    :yield yield))
+             (throw 'blocked 'waiting))
+            ('append-tool-result
+             (benedict-core--record-tool-result
+              session
+              (benedict-core--action-tool-result
+               action
+               (plist-get action :status))))
+            ('stop-run
+             (benedict-core--record-tool-result
+              session
+              (benedict-core--action-tool-result
+               action
+               (plist-get action :status)))
+             (benedict-core--set-run-state session 'idle)
+             (benedict-core--set-turn-state session 'turn-complete)
+             (benedict-core--emit session 'run-stopped :reason (plist-get action :reason))
+             (throw 'blocked 'waiting))
+            ('fail-stage
+             (benedict-core--record-tool-result
+              session
+              (benedict-core--failed-action-tool-result action)))
+            (_
+             (benedict-core--record-tool-result
+              session
+              (benedict-core--action-tool-result
+               (benedict-core-action-append-tool-result
+                (benedict-core--initial-invocation session tool-call tool-spec)
+                "Unknown action pipeline status")))))))
+      (benedict-core--set-turn-state session 'tool-results-ready)
+      (benedict-core--emit session 'yield-created
+                           :turn-id turn-id
+                           :yield (list :type 'tool-result
+                                        :from 'harness
+                                        :to 'model))
+      'complete)))
 
 (defun benedict-core--provider-request (session)
   "Build a canonical provider request from SESSION state."
@@ -552,7 +562,8 @@ Return 'complete when all calls are handled, or 'waiting when a yield blocks."
   (setq result (benedict-provider-require-result result))
   (let* ((inflight (benedict-session-inflight session))
          (started (and inflight (plist-get inflight :started-at)))
-         (usage (benedict-provider-result-usage result)))
+         (usage (benedict-provider-result-usage result))
+         (turn (benedict-session-active-turn session)))
     (when-let ((provider (benedict-provider-result-provider result)))
       (setf (benedict-session-provider session) provider))
     (when-let ((model (benedict-provider-result-model result)))
@@ -560,6 +571,9 @@ Return 'complete when all calls are handled, or 'waiting when a yield blocks."
     (when started
       (let* ((elapsed (float-time (time-subtract (current-time) started)))
              (duration (or (benedict-provider-result-latency result) elapsed)))
+        (when turn
+          (setf (benedict-turn-elapsed turn) elapsed)
+          (setf (benedict-turn-usage turn) usage))
         (setf (benedict-session-last-phase session) 'complete)
         (setf (benedict-session-last-elapsed session) elapsed)
         (setf (benedict-session-last-usage session) usage)
@@ -598,8 +612,12 @@ Return 'complete when all calls are handled, or 'waiting when a yield blocks."
                 :tool-calls tool-calls
                 :thinking thinking
                 :metadata metadata)))))
-         (assistant-tool-calls (benedict-message-tool-calls assistant)))
+         (assistant-tool-calls (benedict-message-tool-calls assistant))
+         (turn (benedict-session-active-turn session)))
+    (when turn
+      (benedict-turn-add-message-id turn (benedict-message-id assistant)))
     (benedict-core--emit session 'request-completed
+                         :turn-id (when turn (benedict-turn-id turn))
                          :success t
                          :result result)
     (if assistant-tool-calls
@@ -607,8 +625,14 @@ Return 'complete when all calls are handled, or 'waiting when a yield blocks."
           (benedict-core-step session))
       (benedict-core--set-turn-state session 'turn-complete)
       (benedict-core--set-run-state session 'idle)
+      (when turn
+        (benedict-turn-complete turn (benedict-message-id assistant))
+        (setf (benedict-session-turns session)
+              (append (benedict-session-turns session) (list turn)))
+        (setf (benedict-session-active-turn session) nil))
       (benedict-core--emit session 'run-completed
-                           :turn-state (benedict-session-turn-state session)))))
+                           :turn-id (when turn (benedict-turn-id turn))
+                           :turn-state (if turn (benedict-turn-state turn) 'turn-complete)))))
 
 (defun benedict-core--handle-provider-error (session error)
   "Apply provider ERROR to SESSION."
@@ -616,10 +640,19 @@ Return 'complete when all calls are handled, or 'waiting when a yield blocks."
   (benedict-session-discard-draft session)
   (setf (benedict-session-last-error session) error)
   (benedict-core--set-run-state session 'error)
-  (benedict-core--emit session 'request-completed
-                       :success nil
-                       :error error)
-  (benedict-core--emit session 'run-failed :error error))
+  (let ((turn (benedict-session-active-turn session)))
+    (when turn
+      (benedict-turn-fail turn)
+      (setf (benedict-session-turns session)
+            (append (benedict-session-turns session) (list turn)))
+      (setf (benedict-session-active-turn session) nil))
+    (benedict-core--emit session 'request-completed
+                         :turn-id (when turn (benedict-turn-id turn))
+                         :success nil
+                         :error error)
+    (benedict-core--emit session 'run-failed
+                         :turn-id (when turn (benedict-turn-id turn))
+                         :error error)))
 
 ;;; Public API
 
@@ -663,10 +696,20 @@ APPROVED-CAPABILITIES configure runtime behavior."
   "Run SESSION until it becomes idle, waits on a yield, errors, or is cancelled."
   (when (memq (benedict-session-run-state session) '(running waiting))
     (error "Session is already active"))
+  (unless (benedict-session-active-turn session)
+    (let* ((last-msg (car (benedict-session-entries session)))
+           (prompt-id (when (and last-msg (eq (benedict-message-role last-msg) 'user))
+                        (benedict-message-id last-msg)))
+           (turn (benedict-turn-create (benedict-session-id session)
+                                       :prompt-message-id prompt-id)))
+      (when prompt-id
+        (benedict-turn-add-message-id turn prompt-id))
+      (setf (benedict-session-active-turn session) turn)))
   (benedict-core--set-run-state session 'running)
   (benedict-core--set-turn-state session 'model-dispatch)
   (benedict-core--emit session 'run-started)
-  (benedict-core--emit session 'turn-started)
+  (benedict-core--emit session 'turn-started
+                       :turn-id (benedict-turn-id (benedict-session-active-turn session)))
   (benedict-core-step session)
   session)
 
@@ -675,14 +718,18 @@ APPROVED-CAPABILITIES configure runtime behavior."
   (unless (eq (benedict-session-run-state session) 'running)
     (benedict-core--set-run-state session 'running))
   (benedict-core--set-turn-state session 'model-dispatch)
-  (let ((request (benedict-core--provider-request session))
-        (dispatch (or (benedict-session-provider-dispatch-fn session)
-                      benedict-session-provider-dispatch-fn
-                      #'benedict-provider-dispatch)))
+  (let* ((turn (benedict-session-active-turn session))
+         (turn-id (and turn (benedict-turn-id turn)))
+         (request (benedict-core--provider-request session))
+         (dispatch (or (benedict-session-provider-dispatch-fn session)
+                       benedict-session-provider-dispatch-fn
+                       #'benedict-provider-dispatch)))
     (if (and (plist-get request :provider)
              (plist-get request :model))
         (let* ((request-id (benedict-session-start-request session nil))
+               (_ (when turn (setf (benedict-turn-request-id turn) request-id)))
                (_ (benedict-core--emit session 'request-started
+                                       :turn-id turn-id
                                        :request request
                                        :request-id request-id))
                (handle
@@ -710,20 +757,28 @@ APPROVED-CAPABILITIES configure runtime behavior."
                     (plist-put inflight :request handle)))))
       (benedict-core--set-run-state session 'idle)
       (benedict-core--set-turn-state session 'turn-complete)
+      (when turn
+        (setf (benedict-session-turns session)
+              (append (benedict-session-turns session) (list turn)))
+        (setf (benedict-session-active-turn session) nil))
       (benedict-core--emit session 'dispatch-needed))))
 
 (defun benedict-core-continue (session)
   "Continue SESSION when it is waiting and no external decision is required."
-  (when (benedict-session-outstanding-yields session)
-    (error "Session has outstanding yields that must be resolved"))
-  (benedict-core--set-run-state session 'running)
-  (benedict-core-step session))
+  (let ((turn (benedict-session-active-turn session)))
+    (when (and turn (benedict-turn-outstanding-yields turn))
+      (error "Session has outstanding yields that must be resolved"))
+    (benedict-core--set-run-state session 'running)
+    (benedict-core-step session)))
 
 (defun benedict-core-resume (session yield-id decision)
   "Resolve YIELD-ID on SESSION using DECISION and continue when possible."
-  (let ((yield (or (benedict-core--remove-yield session yield-id)
-                   (error "No outstanding yield %S" yield-id))))
+  (let* ((yield (or (benedict-core--remove-yield session yield-id)
+                    (error "No outstanding yield %S" yield-id)))
+         (turn (benedict-session-active-turn session))
+         (turn-id (when turn (benedict-turn-id turn))))
     (benedict-core--emit session 'yield-resolved
+                         :turn-id turn-id
                          :yield yield
                          :decision decision)
     (pcase (plist-get yield :type)
@@ -737,39 +792,39 @@ APPROVED-CAPABILITIES configure runtime behavior."
                            (cl-remove-if (lambda (cap) (member cap existing))
                                          capabilities)))
              (benedict-core--emit session 'approval-resolved
+                                  :turn-id turn-id
                                   :yield yield
                                   :decision decision)
              (benedict-core--set-run-state session 'running)
              (benedict-core--set-turn-state session 'harness-executing)
-             (benedict-core--record-tool-result
-              session
-              (benedict-core--invoke-tool session invocation))
-             (let ((remaining (plist-get yield :remaining-tool-calls)))
-               (if (and remaining
-                        (eq (benedict-core--execute-tool-calls session remaining) 'waiting))
-                   session
-                 (benedict-core--set-turn-state session 'tool-results-ready)
-                 (benedict-core-step session))))
+             (let ((result (benedict-core--invoke-tool session invocation)))
+               (benedict-core--record-tool-result session result)
+               (let ((remaining (plist-get yield :remaining-tool-calls)))
+                 (if (and remaining
+                          (eq (benedict-core--execute-tool-calls session remaining) 'waiting))
+                     session
+                   (benedict-core--set-turn-state session 'tool-results-ready)
+                   (benedict-core-step session)))))
          (let* ((invocation (plist-get yield :invocation))
                 (tool-call (plist-get yield :tool-call)))
            (ignore tool-call)
            (benedict-core--emit session 'approval-resolved
+                                :turn-id turn-id
                                 :yield yield
                                 :decision decision)
            (benedict-core--set-run-state session 'running)
-           (benedict-core--record-tool-result
-            session
-            (benedict-core--action-tool-result
-             (benedict-core-action-append-tool-result
-              invocation
-              "Tool denied by user")))
-           (if (and (plist-get yield :remaining-tool-calls)
-                    (eq (benedict-core--execute-tool-calls
-                         session
-                         (plist-get yield :remaining-tool-calls))
-                        'waiting))
-               session
-             (benedict-core-step session)))))
+           (let ((result (benedict-core--action-tool-result
+                          (benedict-core-action-append-tool-result
+                           invocation
+                           "Tool denied by user"))))
+             (benedict-core--record-tool-result session result)
+             (if (and (plist-get yield :remaining-tool-calls)
+                      (eq (benedict-core--execute-tool-calls
+                           session
+                           (plist-get yield :remaining-tool-calls))
+                          'waiting))
+                 session
+               (benedict-core-step session))))))
       (_ (benedict-core-continue session))))
   session)
 
@@ -781,10 +836,18 @@ APPROVED-CAPABILITIES configure runtime behavior."
         (benedict-provider-abort handle)))
     (benedict-session-clear-request session))
   (benedict-session-discard-draft session)
-  (setf (benedict-session-outstanding-yields session) nil)
-  (benedict-core--set-turn-state session 'turn-complete)
-  (benedict-core--set-run-state session 'cancelled)
-  (benedict-core--emit session 'run-stopped :reason 'user-stopped)
+  (let ((turn (benedict-session-active-turn session)))
+    (when turn
+      (setf (benedict-turn-outstanding-yields turn) nil)
+      (benedict-turn-cancel turn)
+      (setf (benedict-session-turns session)
+            (append (benedict-session-turns session) (list turn)))
+      (setf (benedict-session-active-turn session) nil))
+    (benedict-core--set-turn-state session 'turn-complete)
+    (benedict-core--set-run-state session 'cancelled)
+    (benedict-core--emit session 'run-stopped
+                         :turn-id (when turn (benedict-turn-id turn))
+                         :reason 'user-stopped))
   session)
 
 (provide 'benedict-core)

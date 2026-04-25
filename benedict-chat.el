@@ -392,9 +392,10 @@ Returns the session or nil if agent frame is disabled."
 
 (defun benedict-chat--pending-approval-yield (session)
   "Return SESSION's first outstanding approval yield, or nil."
-  (cl-find-if (lambda (yield)
-                (eq (plist-get yield :type) 'approval-request))
-              (benedict-session-outstanding-yields session)))
+  (when-let ((turn (benedict-session-active-turn session)))
+    (cl-find-if (lambda (yield)
+                  (eq (plist-get yield :type) 'approval-request))
+                (benedict-turn-outstanding-yields turn))))
 
 (defun benedict-chat--apply-request-result-extras (buffer result)
   "Apply RESULT metadata update for the current session in BUFFER."
@@ -564,10 +565,11 @@ When SKIP-CONTEXT is non-nil, do not append context slices."
 (defun benedict-chat-continue-checkpoint ()
   "Continue the active session when core is waiting without a user decision."
   (interactive)
-  (let ((session (benedict-chat--current-session)))
+  (let* ((session (benedict-chat--current-session))
+         (turn (benedict-session-active-turn session)))
     (unless (eq (benedict-session-run-state session) 'waiting)
       (user-error "Session is not waiting"))
-    (when (benedict-session-outstanding-yields session)
+    (when (and turn (benedict-turn-outstanding-yields turn))
       (user-error "Session has outstanding yields to resolve"))
     (benedict-core-continue session)
     (message "Benedict: session continued")))

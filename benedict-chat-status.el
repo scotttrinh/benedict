@@ -40,12 +40,13 @@ Values:
 
 (defun benedict-chat-status--status-phase ()
   "Return the current session phase for status display."
-  (let ((session benedict-chat--session))
+  (let* ((session benedict-chat--session)
+         (turn (when session (benedict-session-active-turn session))))
     (cond
      ((null session) 'idle)
      ((eq (benedict-session-run-state session) 'error) 'error)
      ((eq (benedict-session-run-state session) 'cancelled) 'canceled)
-     ((benedict-session-outstanding-yields session) 'waiting)
+     ((and turn (benedict-turn-outstanding-yields turn)) 'waiting)
      ((benedict-session-draft session) 'streaming)
      ((benedict-session-request-active-p session) 'sending)
      ((eq (benedict-session-run-state session) 'running) 'running)

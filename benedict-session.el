@@ -39,8 +39,8 @@
   flywire-session attached-frontends
   ;; Runtime state
   (run-state 'idle)
-  turn-state
-  outstanding-yields
+  active-turn
+  turns
   events
   provider-dispatch-fn
   action-pipeline-functions

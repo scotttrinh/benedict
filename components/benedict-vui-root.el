@@ -37,9 +37,8 @@
       (list :session-id (benedict-session-id session)
             :title (benedict-session-title session)
             :state (benedict-session-run-state session)
-            :turn-state (benedict-session-turn-state session)
-            :outstanding-yield-count
-            (length (benedict-session-outstanding-yields session))
+            :active-turn (when-let ((turn (benedict-session-active-turn session)))
+                           (benedict-turn-projection turn))
             :root (benedict-session-root session)
             :instruction-sources (copy-tree (plist-get meta :instruction-sources))
             :store-path (plist-get meta :store-path)
@@ -50,11 +49,12 @@
 (defun benedict-vui-root--session-approval (session)
   "Return SESSION's current approval yield, or nil."
   (and session
-       (copy-tree
-        (cl-find-if
-         (lambda (yield)
-           (eq (plist-get yield :type) 'approval-request))
-         (benedict-session-outstanding-yields session)))))
+       (when-let ((turn (benedict-session-active-turn session)))
+         (copy-tree
+          (cl-find-if
+           (lambda (yield)
+             (eq (plist-get yield :type) 'approval-request))
+           (benedict-turn-outstanding-yields turn))))))
 
 (defun benedict-vui-root--toggle-collapsed-block (collapsed-blocks block-id &optional next)
   "Return COLLAPSED-BLOCKS updated for BLOCK-ID.
