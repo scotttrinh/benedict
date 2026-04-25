@@ -141,8 +141,7 @@ CONFIG is a plist with keys: :provider :model :profile :tools
                 (:profile (setf (benedict-session-profile session) value))
                 (:tools (setf (benedict-session-tools session) value))
                 (:system-prompt
-                 (setf (benedict-session-system-prompt session)
-                       (benedict-session--validate-system-prompt value)))
+                 (setf (benedict-session-system-prompt session) value))
                 (:autonomy (setf (benedict-session-autonomy session) value))
                 (:verbosity (setf (benedict-session-verbosity session) value))
                 (:loop-config (setf (benedict-session-loop-config session) value))))

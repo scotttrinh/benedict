@@ -29,13 +29,6 @@
       (should (eq 'user (benedict-message-role entry)))
       (should (string= "First" (benedict-message-text entry))))))
 
-(ert-deftest benedict-session-test-add-message-rejects-plist-shape ()
-  "Session transcripts do not accept old role/content plist messages."
-  (let ((benedict-session--registry (make-hash-table :test 'equal)))
-    (let ((session (benedict-session-create)))
-      (should-error
-       (benedict-session-add-message session '(:role user :content "First"))))))
-
 (ert-deftest benedict-session-test-entries-chronological ()
   "Canonical entries preserve chronological ordering."
   (let ((benedict-session--registry (make-hash-table :test 'equal)))

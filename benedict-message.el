@@ -131,8 +131,6 @@ and EFFECTS mirror the structured tool result contract."
 
 (defun benedict-message-copy (message)
   "Return a durable copy of canonical MESSAGE."
-  (unless (benedict-message-p message)
-    (error "Expected canonical benedict-message, got: %S" message))
   (benedict-message-create
    :id (benedict-message-id message)
    :kind (benedict-message-kind message)

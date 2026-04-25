@@ -47,20 +47,13 @@
 
 ;;; Canonical Message Accessors
 
-(defun benedict-provider--require-message (message)
-  "Return canonical MESSAGE or signal a provider-boundary error."
-  (unless (benedict-message-p message)
-    (error "Provider request messages must be canonical benedict-message values: %S"
-           message))
-  message)
-
 (defun benedict-provider-message-role (message)
   "Return canonical MESSAGE role for provider serialization."
-  (benedict-message-role (benedict-provider--require-message message)))
+  (benedict-message-role message))
 
 (defun benedict-provider-message-content (message)
   "Return canonical MESSAGE textual content for provider serialization."
-  (let* ((canonical (benedict-provider--require-message message))
+  (let* ((canonical message)
          (role (benedict-message-role canonical)))
     (or (benedict-message-text canonical)
         (and (eq role 'tool)
@@ -70,15 +63,15 @@
 
 (defun benedict-provider-message-tool-calls (message)
   "Return canonical MESSAGE tool-call data for provider serialization."
-  (benedict-message-tool-calls (benedict-provider--require-message message)))
+  (benedict-message-tool-calls message))
 
 (defun benedict-provider-message-tool-result-id (message)
   "Return canonical MESSAGE tool-result call ID for provider serialization."
-  (benedict-message-tool-result-id (benedict-provider--require-message message)))
+  (benedict-message-tool-result-id message))
 
 (defun benedict-provider-message-tool-result-name (message)
   "Return canonical MESSAGE tool-result name for provider serialization."
-  (benedict-message-tool-result-name (benedict-provider--require-message message)))
+  (benedict-message-tool-result-name message))
 
 (defun benedict-provider-request-messages (request provider-name)
   "Return canonical messages from REQUEST for PROVIDER-NAME.
@@ -86,7 +79,7 @@ Signal when REQUEST does not carry a non-empty canonical transcript."
   (let ((messages (plist-get request :messages)))
     (unless (and (listp messages) messages)
       (error "%s request requires a non-empty :messages list" provider-name))
-    (mapcar #'benedict-provider--require-message messages)))
+    messages))
 
 (cl-defun benedict-provider-result-create
     (&key provider model text thinking tool-calls usage latency metadata raw)

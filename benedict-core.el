@@ -527,8 +527,6 @@ Return 'complete when all calls are handled, or 'waiting when a yield blocks."
          (history (benedict-session-entries-chronological session))
          (system (benedict-session-system-prompt session))
          (messages (append system history)))
-    (unless (cl-every #'benedict-message-p messages)
-      (error "Provider request messages must be canonical benedict-message values"))
     (list :provider provider
           :model (benedict-session-model session)
           :profile (benedict-session-profile session)

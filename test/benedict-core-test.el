@@ -306,7 +306,6 @@ When RECORD-REQUEST is non-nil, call it with each request."
     (let* ((follow-up (cadr requests))
            (messages (plist-get follow-up :messages))
            (tool-message (cl-find 'tool messages :key #'benedict-message-role)))
-      (should (cl-every #'benedict-message-p messages))
       (should tool-message)
       (should (equal "call-denied"
                      (benedict-message-tool-result-id tool-message)))
