@@ -280,30 +280,49 @@ talking to one assistant, even when multiple workers are active underneath.
 
 ** Gateway and Channel Layer
 
-The assistant always runs within a long-lived Emacs server process.  Gateways
-are alternate entry points that connect to that process — they do not run
-separate assistant instances.
+Gateways are Emacs packages (plugins) that run inside the same Emacs process
+as the assistant.  There are no external relay processes or bridges — the
+gateway is native elisp, just like every other part of the system.
 
-This layer is responsible for:
+A gateway plugin manages:
 
-- accepting inbound requests from multiple channels
-- authenticating and identifying users
-- mapping channel messages into the assistant's shared session model
-- attaching channel metadata and reply routes
-- delivering responses, updates, and notifications back to the originating
-  channel
-- enabling handoff from low-bandwidth interfaces to richer review surfaces
+- a persistent connection to the external platform (typically via
+  =websocket.el= or HTTP polling)
+- protocol details (authentication, heartbeat, rate limiting, reconnection)
+- inbound message dispatch to =benedict-handle-message=
+- outbound reply delivery via the platform's API (=url-retrieve=, =plz.el=,
+  etc.)
+- session mapping (channel/DM/thread → assistant session)
 
-Examples of gateways include:
+This is consistent with the "Emacs as runtime" principle: the Emacs process
+that holds the assistant can interact with almost everything natively.  The
+rich ecosystem of existing Emacs packages for messaging platforms provides
+most of the protocol-level work:
 
-- direct Emacs invocation (the primary interface)
-- =emacsclient= into the long-lived Emacs server (local or remote)
-- terminal or web clients
-- Slack, Discord, WhatsApp
-- webhook or automation triggers
+- Discord: =discord.el=, =websocket.el=
+- Slack: =slack.el=
+- Matrix: =ement.el=
+- IRC: =erc= (built-in)
+- Email: =notmuch=, =mu4e=, =gnus= (built-in)
 
-All gateways talk to the same Emacs process and session model.  A gateway is
-an alternate surface over shared assistant state, not a separate assistant.
+Each gateway plugin wires platform-specific message handling into a common
+interface:
+
+#+begin_example
+(benedict-handle-message
+  :gateway :discord
+  :channel "channel-id"
+  :user "user-id"
+  :text "fix the failing auth test"
+  :reply-fn #'benedict-discord--send-reply)
+#+end_example
+
+All gateways dispatch into the same assistant session model.  A gateway is an
+alternate surface over shared assistant state, not a separate assistant.
+
+Gateway lifecycle (connection management, reconnection, heartbeats) is handled
+by Emacs's built-in process management and timers — the same temporal
+primitives the assistant uses for scheduled actions.
 
 ** Personal Assistant Runtime
 
@@ -1249,147 +1268,401 @@ This implies a lineage model:
 - final effect
 
 
-* User Flows
+* Architectural Flows
 
-** Flow: Everyday Personal Assistance
+These flows describe how the system's subsystems interact for common
+categories of work.
 
-1. The user asks the assistant to summarize the day, check pending org tasks,
-   and remind them what they intended to work on.
-2. The assistant uses host-native plugins for org and memory.
-3. No worker is required because the actions are low-risk and host-native.
-4. The assistant responds directly and may update temporary task state.
+** Flow: Direct Emacs Action
 
-** Flow: Remote Persistent Assistant via Emacsclient
+The assistant acts directly via elisp when the work is low-risk and tightly
+coupled to Emacs state.
 
-1. The assistant runs inside a long-lived Emacs session on a VPS or VM.
-2. The user connects through =emacsclient= from another machine.
-3. The gateway layer associates the request with the user's existing assistant
-   identity, session history, and active tasks.
-4. The assistant handles the request normally, using its remote host-native
-   capabilities and delegating risky execution to workers as needed.
-5. The response is delivered back through the =emacsclient= connection.
+1. User request arrives (from Emacs UI or a gateway plugin).
+2. The assistant evaluates the request using context from buffers, org, project
+   state, etc.
+3. The assistant acts directly: navigates, summarizes, captures, updates.
+4. No worker is involved.
 
-This preserves an Emacs-native workflow while allowing the assistant itself to
-live in a persistent remote environment.
+** Flow: Delegated Coding Task
 
-** Flow: Messaging-App Invocation
-
-1. The user sends a message to the assistant through Slack, Discord, WhatsApp,
-   or another messaging gateway.
-2. The gateway authenticates the user, maps the message into the assistant's
-   shared session model, and records the channel as a reply route.
-3. The assistant interprets the request, consults memory and active tasks, and
-   may delegate work to one or more workers.
-4. The assistant replies through the same messaging channel with:
-   - a direct answer
-   - a progress summary
-   - a clarification question
-   - a request for capability escalation
-   - a pointer to a richer review surface when artifact inspection is needed
-5. If the task eventually requires detailed review, the assistant can hand the
-   user off to Emacs or another richer client while preserving the same
-   underlying session.
-
-This enables ambient access to the assistant without requiring the user to open
-Emacs first.
-
-** Flow: Coding Task Delegation
-
-1. The user asks the assistant to fix a failing test in a project.
-2. The assistant gathers context from the Emacs environment:
-   - current project and active buffers
-   - local org notes
-   - current git state via magit
-3. The assistant activates the coding plugin and spawns a coding worker
-   subagent into a remote VM via tool call.
-4. The worker clones the repo inside the VM.
-5. The worker reads code, edits, runs tests, and commits changes.
-6. The worker writes an artifact envelope to the stable artifacts directory:
-   - git format-patch files
-   - test logs
-   - structured summary
-   - open questions if any
-7. On sandbox teardown, the lifecycle hook syncs artifacts back to the control
-   plane.
-8. The assistant reviews the envelope, presents the summary and diff to the
-   user, and applies patches via =git am= if approved.
-9. If the user wants, the assistant may continue with local follow-up, such as
-   updating org notes or drafting a commit message.
-
-** Flow: Up-Front Permission Negotiation
-
-1. The user asks for a substantial coding task.
-2. The assistant predicts that it will need:
-   - coding worker in remote VM
-   - repo read/write in worker
-   - git and shell execution in worker
-   - outbound network for docs and package metadata
-   - final patch application to host only after review
-3. The assistant presents a single permission bundle request.
-4. The user grants the bundle for the duration of the task.
-5. The assistant proceeds without repeated command prompts.
-
-** Flow: Mid-Task Escalation
-
-1. A worker discovers that it cannot complete the task without network access.
-2. The worker requests escalation through the assistant.
-3. The assistant summarizes why the escalation is needed and how it will change
-   the execution boundary.
-4. The user grants or denies the escalation.
-5. The worker resumes under the updated policy or adapts accordingly.
-
-** Flow: Org-Backed Planning and Execution
-
-1. The user asks the assistant to shape a project effort.
-2. The assistant reads relevant org nodes on host and synthesizes a plan.
-3. The assistant may spawn a coding worker to perform exploratory analysis in a
-   sandbox.
-4. The worker returns findings and candidate patches or implementation notes.
-5. The assistant updates the relevant org nodes on host, subject to org write
-   capability.
-6. The conversation remains centered on one personal assistant, even though both
-   host and worker execution were involved.
-
-** Flow: Risky Personal Assistant Action via Worker
-
-1. The user asks the assistant to perform a risky shell-heavy local task.
-2. Instead of acting directly, the assistant provisions a local sandbox worker.
-3. The worker performs the risky execution in isolation.
-4. The assistant reviews the output and applies only the desired effects.
-
-This demonstrates that even "personal assistant work" can often be reframed as
-control-plane orchestration plus worker execution.
-
-** Flow: Drafting and Sending Email
-
-1. The user asks the assistant to reply to an email thread.
-2. The assistant uses host mail plugins to inspect the thread.
-3. The assistant may optionally delegate drafting help to a drafting worker.
-4. The assistant produces a draft on host.
-5. Sending remains a distinct identity-bearing action requiring explicit final
-   confirmation or an appropriately granted send capability.
-
-** Flow: Parallel Coding Workers
-
-1. The user asks for a broad refactor.
-2. The assistant decomposes the task into multiple bounded worker tasks.
-3. Each worker subagent operates in its own remote VM sandbox.
-4. Workers return artifact envelopes (each with their own patch sets).
-5. The assistant compares, merges, or sequences patches for user review.
-
-The user still experiences one coherent assistant-driven workflow.
+1. The assistant gathers context from the Emacs environment.
+2. The assistant spawns a coding worker subagent into a remote VM via tool call.
+3. The worker clones the repo, edits, builds, tests, and commits.
+4. The worker writes an artifact envelope to the stable artifacts directory.
+5. On sandbox teardown, the lifecycle hook syncs artifacts back.
+6. The assistant reviews the envelope and applies patches via =git am= if
+   approved.
 
 ** Flow: Cross-Gateway Continuity
 
-1. The user starts a conversation in Emacs.
-2. Later, the user checks in from Slack or another messaging gateway.
-3. The assistant continues the same underlying task, reports worker status, and
-   answers questions using the same memory and artifact graph.
-4. When the user returns to Emacs or =emacsclient=, they can inspect the same
-   session with full history, artifacts, and review tools.
+1. A request arrives from any gateway (Emacs, Discord, emacsclient, etc.).
+2. The gateway plugin dispatches to =benedict-handle-message= with a reply
+   function.
+3. The assistant resolves the session and continues any in-progress work.
+4. The response is delivered back through the originating gateway's reply
+   function.
 
-This continuity is a core property of the system: gateways are alternate
-surfaces over shared assistant state, not separate silos.
+The user can start a task from Emacs, check on it from Discord, and review
+artifacts back in Emacs — same session, same state.
+
+** Flow: Mid-Task Escalation
+
+1. A worker discovers it needs capabilities beyond its envelope.
+2. The worker requests escalation through the assistant.
+3. The assistant presents the escalation rationale to the user (via whichever
+   gateway is active).
+4. The user grants or denies.
+5. The worker resumes under the updated policy.
+
+** Flow: Parallel Workers
+
+1. The assistant decomposes a task into multiple bounded subtasks.
+2. Each worker subagent operates in its own remote VM sandbox.
+3. Workers return artifact envelopes independently.
+4. The assistant compares, merges, or sequences patches for user review.
+
+
+* Day-in-the-Life Scenarios
+
+These scenarios describe how Benedict fits into the daily life of a developer
+who manages multiple workstreams across repos and teams, has a busy family
+life, uses agents for research and personal planning, and juggles calendars,
+email, Slack, and other communication channels.
+
+The assistant runs as a persistent Emacs process on a remote server, reachable
+through direct Emacs sessions, =emacsclient=, and messaging gateways like
+Discord.
+
+** Morning: Briefing and Triage
+
+6:45 AM.  Before getting out of bed, the user opens Discord on their phone and
+messages the assistant:
+
+#+begin_example
+> what's my day look like?
+#+end_example
+
+The assistant (running on the remote Emacs server) checks org-agenda, calendar
+integrations, and email:
+
+#+begin_example
+3 meetings today: standup at 9:30, 1:1 with Jamie at 11, sprint planning at 2.
+
+Email: 4 new threads overnight.  One from infra about the prod cert rotation —
+looks like it needs a response today.  The rest are low priority.
+
+Slack: 2 mentions in #backend-platform.  Ana asked about the migration rollback
+plan.  Derek left a question on your RFC draft.
+
+Org: you have "finish auth-service PR review" marked as today's priority.
+The auth-service CI has been red since yesterday — 2 failing tests in the
+token validation suite.
+#+end_example
+
+The user replies from Discord:
+
+#+begin_example
+> draft a reply to the infra cert thread — tell them we can coordinate
+> Thursday.  also, can you look at those failing auth tests?
+#+end_example
+
+The assistant drafts the email reply using the mail plugin and presents it
+inline in Discord for review.  Simultaneously, it spawns a coding worker into
+a remote VM to investigate the failing tests.  Both happen in parallel — the
+draft appears in seconds, the coding worker runs in the background.
+
+#+begin_example
+Draft ready:
+
+  "Hi team — Thursday works for us to coordinate the cert rotation.  I can
+   block out 2-3pm if that works on your end.  Let me know if you need
+   anything from our service configs ahead of time."
+
+Send? [y/n]
+
+Also: coding worker is investigating the auth-service test failures.  I'll
+have results in a few minutes.
+#+end_example
+
+The user approves the email send from Discord, puts the phone down, and starts
+the morning routine with the family.
+
+** Commute: Catching Up on Worker Results
+
+8:15 AM.  On the train, the user checks Discord again:
+
+#+begin_example
+> how'd the auth tests go?
+#+end_example
+
+The coding worker finished 20 minutes ago.  The assistant summarizes the
+artifact envelope:
+
+#+begin_example
+Fixed.  Root cause: the token validation test was using a hardcoded expiry
+timestamp that passed the epoch boundary on April 11.
+
+Patch: 1 file changed, 3 insertions, 2 deletions.
+Tests: all 47 passing after the fix.
+
+The patch is ready to apply when you're at your desk.  Want me to open a
+PR, or would you rather review the diff first?
+#+end_example
+
+The user replies:
+
+#+begin_example
+> open the PR, assign it to me, mark it as fixing issue #342
+#+end_example
+
+The assistant applies the patch to the local checkout, creates the branch,
+pushes, and opens the PR using the magit and forge plugins.
+
+** Desk: Multi-Repo Workstream Management
+
+9:00 AM.  The user sits down at their desk and connects to the remote Emacs
+server via =emacsclient=.  The assistant's full state is right there — the
+morning's Discord conversation, the coding worker's artifacts, the auth-service
+PR that's now open.
+
+The user has three active workstreams across different repos and teams:
+
+1. *auth-service*: the PR from this morning, plus the broader auth middleware
+   rewrite (tracked in org)
+2. *data-pipeline*: a new ingestion pipeline, currently blocked on a schema
+   design decision
+3. *frontend-dashboard*: a React dashboard the user is reviewing for a junior
+   teammate
+
+The user asks:
+
+#+begin_example
+> give me a status on all three workstreams
+#+end_example
+
+The assistant reads org nodes, checks git state across repos, and scans recent
+Slack threads:
+
+#+begin_example
+auth-service:
+  - PR #87 (your fix from this morning) is open, CI pending
+  - auth middleware rewrite: 3 of 7 subtasks done per your org notes
+  - Derek's RFC comment is still unanswered (Slack #backend-platform)
+
+data-pipeline:
+  - blocked on schema decision — you noted "waiting for Ana's input" on Monday
+  - Ana's Slack message from last night might be related — she asked about
+    the migration rollback plan, which touches the same schema
+
+frontend-dashboard:
+  - PR #201 from Kai has been open for 3 days, no review yet
+  - 2 new commits pushed yesterday
+#+end_example
+
+The user says:
+
+#+begin_example
+> review Kai's PR.  also spawn a worker to prototype option B for the
+> data-pipeline schema — the one we discussed on Friday, with the
+> partitioned events table.
+#+end_example
+
+The assistant opens PR #201 in a magit diff buffer for the user to review
+interactively, while simultaneously spawning a coding worker to prototype the
+schema design in the data-pipeline repo.
+
+** Midday: Personal Life Interleaved
+
+11:30 AM.  Between meetings, the user messages from Discord:
+
+#+begin_example
+> my wife asked me to figure out summer camp options for the kids.
+> ages 6 and 9, we're in Austin, looking for something STEM-oriented,
+> preferably outdoors, 2-3 weeks in June or July.  budget around
+> $500/kid/week.  can you research this?
+#+end_example
+
+The assistant spawns a research worker to search for options.  This worker has
+network access and returns a structured summary rather than patches:
+
+#+begin_example
+Research in progress.  I'll compile options with dates, costs, and
+registration deadlines.  Expect results in 5-10 minutes.
+#+end_example
+
+A few minutes later:
+
+#+begin_example
+Found 6 options that match.  Top 3:
+
+1. Austin Tinkering School — ages 5-12, outdoor STEM builds, $450/wk
+   June 9-27 or July 7-25.  Registration open, ~60% full.
+
+2. Girlstart (coed despite name) — robotics + nature science, $475/wk
+   June 16 - July 3.  Waitlist for July sessions.
+
+3. UT Austin STEM Camp — university campus, ages 8-12 (only fits your
+   9yo), $525/wk, June-July flexible weeks.
+
+Full details saved to your org inbox under "Summer Camp Research."
+Want me to draft a summary to send to your wife?
+#+end_example
+
+The user says:
+
+#+begin_example
+> yeah, send her options 1 and 2 with a note that I think Tinkering School
+> looks best.  also add a reminder to register by May 1 if we decide.
+#+end_example
+
+The assistant drafts the email (mail plugin), presents it for confirmation,
+and adds an org TODO with a deadline for May 1.
+
+** Afternoon: Deep Work with Background Monitoring
+
+2:30 PM.  After sprint planning, the user settles into deep work on the auth
+middleware rewrite.  They're working in Emacs directly.
+
+#+begin_example
+> I'm going to focus on the auth middleware for the next couple hours.
+> keep an eye on Slack for me — only interrupt if something is urgent
+> or if anyone asks about the data-pipeline schema.
+#+end_example
+
+The assistant acknowledges and begins monitoring Slack via the gateway plugin.
+It uses its judgment to filter:
+
+- A thread about office snacks: ignored.
+- A CI notification for an unrelated repo: ignored.
+- Ana responds in #data-pipeline about the schema: the assistant surfaces it.
+
+#+begin_example
+Ana replied in #data-pipeline:
+
+  "The partitioned events table makes sense but I'm worried about the
+   migration path from the current flat table.  Can we get a rough
+   migration plan before committing?"
+
+Also, your schema prototype worker finished.  It produced a working migration
+script and seed data.  Want me to share the prototype with Ana on Slack,
+or would you rather review it first?
+#+end_example
+
+The user glances at the worker's summary in the artifacts buffer, decides it
+looks good:
+
+#+begin_example
+> share the migration script with Ana in the thread, tell her we can walk
+> through it at tomorrow's sync
+#+end_example
+
+The assistant posts to the Slack thread via the gateway plugin and continues
+quietly monitoring.
+
+** Evening: Family Time with Ambient Availability
+
+7:00 PM.  The user is done for the day.  At dinner, their phone buzzes with a
+Discord notification from the assistant:
+
+#+begin_example
+Heads up: CI passed on your auth-service PR (#87).  Jamie approved it.
+Want me to merge, or leave it for tomorrow?
+#+end_example
+
+#+begin_example
+> merge it
+#+end_example
+
+The assistant merges the PR via forge and updates the org subtask.
+
+Later, after the kids are in bed:
+
+#+begin_example
+> what's left on the auth middleware rewrite?  give me the org tree
+#+end_example
+
+The assistant renders the org subtree with current status:
+
+#+begin_example
+Auth Middleware Rewrite [4/7]:
+  DONE design new session token format
+  DONE implement token validation
+  DONE write migration for session store
+  DONE fix test failures (PR #87, merged today)
+  TODO implement token refresh endpoint
+  TODO update API gateway integration
+  TODO load testing and benchmarks
+#+end_example
+
+#+begin_example
+> schedule a coding worker for the token refresh endpoint tomorrow
+> morning.  here's roughly what it needs to do: [describes the approach
+> in a few sentences]
+#+end_example
+
+The assistant creates a deferred task: at 8:00 AM tomorrow, spawn a coding
+worker with the described task, the auth-service repo, and the user's notes
+as context.  The user will get the artifact envelope to review when they sit
+down.
+
+** Weekend: Planning and Personal Projects
+
+Saturday morning.  The user messages from Discord while the kids watch
+cartoons:
+
+#+begin_example
+> I want to set up a home lab server.  I'm thinking a small NixOS box
+> that could also run Benedict eventually.  can you research options?
+> budget around $500 for hardware.
+#+end_example
+
+The assistant spawns a research worker.
+
+Meanwhile:
+
+#+begin_example
+> also, pull up my reading list and tell me which books I haven't
+> started yet
+#+end_example
+
+The assistant checks the org reading list (no worker needed, just org plugin):
+
+#+begin_example
+Unstarted books on your reading list:
+
+- "Designing Data-Intensive Applications" (added March 2)
+- "The Art of Doing Science and Engineering" (added Feb 15)
+- "Surely You're Joking, Mr. Feynman" (added Jan 20)
+
+You finished "A Philosophy of Software Design" last week — want me to
+archive it and capture any notes?
+#+end_example
+
+The research worker returns with home lab options.  The assistant saves the
+full comparison to org and gives a summary via Discord.  The user bookmarks
+it to discuss with their partner later.
+
+** Recurring Background Behaviors
+
+Throughout all of this, the assistant is also running scheduled and
+event-triggered behaviors configured through plugins:
+
+- *Every morning at 6:30 AM*: compile the daily briefing (agenda, overnight
+  email/Slack summary, org priorities) so it's ready when the user first
+  checks in.
+- *On PR CI completion*: check if any of the user's open PRs have new status
+  and notify via Discord if actionable.
+- *On Slack mention*: evaluate urgency and either surface immediately, batch
+  for next check-in, or silently note for later.
+- *Weekly on Sunday evening*: summarize the week's completed tasks, open
+  items carried forward, and upcoming deadlines.  Save to org and optionally
+  send via Discord.
+- *On org deadline approaching*: remind the user N days before (configurable
+  per-tag or per-project).
+
+These behaviors are configured as timer and hook registrations within plugins,
+not as separate cron jobs or external automations.
 
 
 * Example Worker Taxonomy
