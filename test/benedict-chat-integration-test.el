@@ -66,7 +66,7 @@
                    (meta (benedict-session-meta session))
                    (sources (plist-get meta :instruction-sources))
                    (system-prompt (car (benedict-session-system-prompt session)))
-                   (content (plist-get system-prompt :content))
+                   (content (benedict-message-text system-prompt))
                    (buffer-text (buffer-string)))
               (should session)
               (should (member "AGENTS.md" sources))
@@ -220,9 +220,8 @@
                  (with-current-buffer loaded-buffer
                    (vui-flush-sync)
                    (should (string-match-p "Saved to:" (buffer-string))))
-                 (benedict-session-add-message loaded '(:role user :content "after reload"))
-                 (benedict-session-dispatch loaded
-                                            (benedict-session--build-request loaded)))
+                 (benedict-core-add-user-input loaded "after reload")
+                 (benedict-core-run loaded))
                (run-at-time
                 0.4 nil
                 (lambda ()

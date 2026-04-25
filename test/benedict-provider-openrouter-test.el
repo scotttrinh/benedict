@@ -8,6 +8,7 @@
   (add-to-list 'load-path repo))
 
 (require 'benedict-provider)
+(require 'benedict-message)
 (require 'benedict-tools)
 (require 'benedict-provider-openrouter)
 (require 'benedict-provider-vercel)
@@ -25,6 +26,44 @@
      :end   (:type integer :description "Optional end line."))
     :required (:path))
   "Canonical JSON-Schema snippet used by provider serialization tests.")
+
+(ert-deftest benedict-provider-openrouter-serializes-canonical-transcript ()
+  "Provider payload encoding consumes canonical messages, not pre-shaped wire plists."
+  (let* ((assistant (benedict-message-create
+                     :kind 'message
+                     :role 'assistant
+                     :blocks '((:type text :text "")
+                               (:type tool-call
+                                :id "call-1"
+                                :name lookup
+                                :arguments (:query "phase four")))))
+         (tool-result (benedict-message-tool-result
+                       "call-1" 'lookup 'success "lookup result"))
+         (request (list :model "openrouter/test"
+                        :messages (list (benedict-message-user-text "find it")
+                                        assistant
+                                        tool-result)))
+         (body (benedict-provider-openrouter--build-body request))
+         (messages (benedict-provider-test--json-get body "messages"))
+         (assistant-wire (cadr messages))
+         (tool-wire (caddr messages))
+         (tool-calls (benedict-provider-test--json-get assistant-wire "tool_calls"))
+         (function (benedict-provider-test--json-get (car tool-calls) "function")))
+    (should (= 3 (length messages)))
+    (should (equal (benedict-provider-test--json-get (car messages) "role") "user"))
+    (should (equal (benedict-provider-test--json-get assistant-wire "role") "assistant"))
+    (should (equal (benedict-provider-test--json-get function "name") "lookup"))
+    (should (equal (benedict-provider-test--json-get tool-wire "role") "tool"))
+    (should (equal (benedict-provider-test--json-get tool-wire "tool_call_id") "call-1"))
+    (should (equal (benedict-provider-test--json-get tool-wire "content") "lookup result"))))
+
+(ert-deftest benedict-provider-openrouter-rejects-provider-shaped-messages ()
+  "Provider payload encoding rejects legacy provider-shaped message plists."
+  (should-error
+   (benedict-provider-openrouter--build-body
+    '(:model "openrouter/test"
+      :messages ((:role user :content "old shape"))))
+   :type 'error))
 
 (defmacro benedict-provider-openrouter-test--with-clean-state (&rest body)
   "Run BODY with a cleared OpenRouter state table before/after."
@@ -71,11 +110,12 @@
        context (list :usage '((prompt_tokens . 1) (completion_tokens . 2) (total_tokens . 3))))
       (benedict-provider-openrouter--finalize-stream context)
       (should result)
-      (should (equal (plist-get result :usage)
+      (should (benedict-provider-result-p result))
+      (should (equal (benedict-provider-result-usage result)
                      '((prompt_tokens . 1) (completion_tokens . 2) (total_tokens . 3))))
-      (should (equal (plist-get (plist-get result :message) :content) "Hello"))
-      (should (plist-get result :thinking))
-      (should (numberp (plist-get result :latency)))
+      (should (equal (benedict-provider-result-text result) "Hello"))
+      (should (benedict-provider-result-thinking result))
+      (should (numberp (benedict-provider-result-latency result)))
       (should (null (benedict-provider-openrouter--state-get request-id))))))
 
 (ert-deftest benedict-provider-openrouter-request-id-shape ()
@@ -132,10 +172,9 @@
       (benedict-provider-openrouter--finalize-stream context)
 
       (should result)
-      (let* ((message (plist-get result :message))
-             (tool-calls (plist-get message :tool-calls))
+      (let* ((tool-calls (benedict-provider-result-tool-calls result))
              (call (car tool-calls)))
-        (should (equal (plist-get message :content) ""))
+        (should (equal (benedict-provider-result-text result) ""))
         (should (= (length tool-calls) 1))
         (should (equal (plist-get call :id) "call_123"))
         (should (eq (plist-get call :name) 'project-search))

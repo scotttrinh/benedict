@@ -19,8 +19,6 @@
   (cond
    ((null message) nil)
    ((benedict-message-p message) message)
-   ((listp message)
-    (benedict-message-from-data message))
    (t nil)))
 
 (defun benedict-vui-turn--normalize-role (role)

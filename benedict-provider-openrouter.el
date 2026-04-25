@@ -645,10 +645,7 @@ Returns non-nil when a delta was dispatched."
          (chunks (plist-get state :message-chunks))
          (content (or (plist-get state :final-message-text)
                       (mapconcat #'identity (nreverse chunks) "")))
-         (role (or (plist-get state :role) 'assistant))
          (tool-calls (benedict-provider-openrouter--finalize-tool-calls context))
-         (message (or (plist-get state :final-message)
-                      (list :role role :content content :tool-calls tool-calls)))
          (thinking (benedict-provider-openrouter--finalize-reasoning context))
          (end-time (current-time))
          (start-time (or (plist-get state :start-time)
@@ -656,16 +653,20 @@ Returns non-nil when a delta was dispatched."
          (latency (if start-time
                       (float-time (time-subtract end-time start-time))
                     0.0))
-         (result (list :message message
-                       :model (or (plist-get state :model)
-                                  benedict-provider-openrouter-default-model)
-                       :provider 'openrouter
-                       :usage (plist-get state :usage)
-                       :thinking thinking
-                       :latency latency
-                       :raw (plist-get state :raw-last)
-                       :empty-response (and (string-empty-p (or content ""))
-                                            (null tool-calls)))))
+         (model (or (plist-get state :model)
+                    benedict-provider-openrouter-default-model))
+         (empty-response (and (string-empty-p (or content ""))
+                              (null tool-calls)))
+         (result (benedict-provider-result-create
+                  :text content
+                  :tool-calls tool-calls
+                  :model model
+                  :provider 'openrouter
+                  :usage (plist-get state :usage)
+                  :thinking thinking
+                  :latency latency
+                  :raw (plist-get state :raw-last)
+                  :metadata (list :empty-response empty-response))))
     (benedict-provider-openrouter--state-update request-id
                                                 :status :completed
                                                 :end-time end-time
@@ -674,8 +675,8 @@ Returns non-nil when a delta was dispatched."
       (lgr-info lgr "Stream complete"
                 :request-id request-id
                 :latency latency
-                :model (plist-get result :model)
-                :empty-response (plist-get result :empty-response)))
+                :model model
+                :empty-response empty-response))
     (benedict-provider-openrouter--stream-cleanup context)
     (benedict-provider-openrouter--state-clear request-id)
     (let ((on-complete (plist-get context :on-complete))
@@ -794,14 +795,16 @@ Returns non-nil when a delta was dispatched."
                     0.0))
          (empty-response (and (string-empty-p (or (plist-get decoded-message :content) ""))
                               (not (plist-get decoded-message :tool-calls))))
-         (result (list :message decoded-message
-                       :usage usage
-                       :model model
-                       :provider 'openrouter
-                       :status status-code
-                       :latency latency
-                       :raw parsed
-                       :empty-response empty-response)))
+         (result (benedict-provider-result-create
+                  :text (plist-get decoded-message :content)
+                  :tool-calls (plist-get decoded-message :tool-calls)
+                  :usage usage
+                  :model model
+                  :provider 'openrouter
+                  :latency latency
+                  :raw parsed
+                  :metadata (list :status status-code
+                                  :empty-response empty-response))))
         (log-level (if empty-response 'warn 'info))
     (benedict-provider-openrouter--state-update
      request-id :usage usage :model model :latency latency
@@ -945,9 +948,7 @@ When STREAM is non-nil, include the \"stream\": true flag in the payload."
 
 (defun benedict-provider-openrouter--build-body (request &optional stream)
   "Build an alist for REQUEST, optionally STREAM."
-  (let ((messages (plist-get request :messages)))
-    (unless (and (listp messages) messages)
-      (error "OpenRouter request requires a non-empty :messages list"))
+  (let ((messages (benedict-provider-request-messages request "OpenRouter")))
     (let ((body `(("model" . ,(or (plist-get request :model)
                                   benedict-provider-openrouter-default-model))
                   ("messages" . ,(mapcar #'benedict-provider-openrouter--serialize-message
@@ -986,12 +987,12 @@ When STREAM is non-nil, include the \"stream\": true flag in the payload."
       (nreverse body))))
 
 (defun benedict-provider-openrouter--serialize-message (message)
-  "Serialize MESSAGE plist to an alist for JSON encoding."
-  (let* ((role (or (plist-get message :role) (plist-get message :type)))
-         (content (plist-get message :content))
-         (name (plist-get message :name))
-         (tool-calls (plist-get message :tool-calls))
-         (tool-call-id (plist-get message :tool-call-id)))
+  "Serialize canonical MESSAGE to an alist for JSON encoding."
+  (let* ((role (benedict-provider-message-role message))
+         (content (benedict-provider-message-content message))
+         (name (benedict-provider-message-tool-result-name message))
+         (tool-calls (benedict-provider-message-tool-calls message))
+         (tool-call-id (benedict-provider-message-tool-result-id message)))
     (unless role
       (error "Message requires :role"))
     (let ((payload `(("role" . ,(benedict-provider-openrouter--role-string role)))))

@@ -79,19 +79,21 @@ SCRIPT entries are consumed FIFO."
   "Return the content from the last user ROLE in MESSAGES."
   (let* ((user (cl-find-if
                 (lambda (msg)
-                  (let* ((role (plist-get msg :role))
+                  (let* ((role (benedict-provider-message-role msg))
                          (role-sym (cond
                                     ((symbolp role) role)
                                     ((stringp role) (intern (downcase role)))
                                     (t (intern (format "%s" role))))))
                     (eq role-sym 'user)))
                 (reverse messages))))
-    (or (plist-get user :content) "")))
+    (if user
+        (benedict-provider-message-content user)
+      "")))
 
 (defun benedict-provider-fake--build-usage (messages content)
   "Rudimentary usage payload derived from MESSAGES and CONTENT length."
   (let* ((prompt (apply #'+ (mapcar (lambda (msg)
-                                      (length (or (plist-get msg :content) "")))
+                                      (length (benedict-provider-message-content msg)))
                                     messages)))
          (completion (length content)))
     `(("prompt_tokens" . ,prompt)
@@ -193,7 +195,7 @@ SCRIPT entries are consumed FIFO."
 
 (defun benedict-provider-fake--success-payload (request entry start-time latency thinking)
   "Create a success payload using REQUEST, ENTRY, START-TIME, LATENCY, and THINKING."
-  (let* ((messages (plist-get request :messages))
+  (let* ((messages (benedict-provider-request-messages request "Fake"))
          (content (or (plist-get entry :content)
                       (format "Fake echo: %s"
                               (benedict-provider-fake--last-user-content messages))))
@@ -203,17 +205,17 @@ SCRIPT entries are consumed FIFO."
          (usage (or (plist-get entry :usage)
                     (benedict-provider-fake--build-usage messages content)))
          (final-thinking (or thinking (plist-get entry :thinking)))
-         (tool-calls (plist-get entry :tool-calls))
-         (message (list :role role :content content)))
-    (when tool-calls
-      (setq message (plist-put message :tool-calls tool-calls)))
-    (list :message message
-          :model model
-          :provider 'fake
-          :usage usage
-          :thinking final-thinking
-          :latency (or (plist-get entry :latency)
-                       (or latency (float-time (time-subtract (current-time) start-time)))))))
+         (tool-calls (plist-get entry :tool-calls)))
+    (ignore role)
+    (benedict-provider-result-create
+     :text content
+     :tool-calls tool-calls
+     :model model
+     :provider 'fake
+     :usage usage
+     :thinking final-thinking
+     :latency (or (plist-get entry :latency)
+                  (or latency (float-time (time-subtract (current-time) start-time)))))))
 
 (defun benedict-provider-fake--error-payload (entry)
   "Create an error payload using ENTRY plist."

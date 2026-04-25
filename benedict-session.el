@@ -64,6 +64,14 @@
 (defvar benedict-session--request-seq 0
   "Sequence number for generating unique request IDs.")
 
+(defun benedict-session--validate-system-prompt (system-prompt)
+  "Validate SYSTEM-PROMPT and return it."
+  (unless (or (null system-prompt)
+              (and (listp system-prompt)
+                   (cl-every #'benedict-message-p system-prompt)))
+    (error "Session system prompt must be a list of canonical benedict-message values"))
+  system-prompt)
+
 (defun benedict-session--generate-id ()
   "Generate a unique session ID."
   (format "ses-%s-%s" (format-time-string "%Y%m%d%H%M%S")
@@ -110,7 +118,8 @@ Optional keyword arguments:
                    :profile profile
                    :meta meta
                    :tools tools
-                   :system-prompt system-prompt
+                   :system-prompt (benedict-session--validate-system-prompt
+                                   system-prompt)
                    :autonomy autonomy
                    :verbosity verbosity
                    :harness initial-harness
@@ -131,36 +140,15 @@ CONFIG is a plist with keys: :provider :model :profile :tools
                 (:model (setf (benedict-session-model session) value))
                 (:profile (setf (benedict-session-profile session) value))
                 (:tools (setf (benedict-session-tools session) value))
-                (:system-prompt (setf (benedict-session-system-prompt session) value))
+                (:system-prompt
+                 (setf (benedict-session-system-prompt session)
+                       (benedict-session--validate-system-prompt value)))
                 (:autonomy (setf (benedict-session-autonomy session) value))
                 (:verbosity (setf (benedict-session-verbosity session) value))
                 (:loop-config (setf (benedict-session-loop-config session) value))))
   (benedict-session--sync-harness-budgets session)
   (benedict-session-touch session)
   session)
-
-;;; Request Building
-
-(defun benedict-session--build-request (session)
-  "Build a provider request plist from SESSION state."
-  (let* ((provider (benedict-session-provider session))
-         (model (benedict-session-model session))
-         (profile (benedict-session-profile session))
-         (tools (benedict-session-tools session))
-         (system (benedict-session-system-prompt session))
-         (autonomy (benedict-session-autonomy session))
-         (verbosity (benedict-session-verbosity session))
-         (history (mapcar (lambda (entry)
-                            (benedict-message->provider-message entry provider))
-                          (benedict-session-entries-chronological session)))
-         (messages (if system (append system history) history)))
-    (list :provider provider
-          :model model
-          :profile profile
-          :tools tools
-          :autonomy autonomy
-          :verbosity verbosity
-          :messages messages)))
 
 (defun benedict-session-get (id)
   "Get session by ID from registry."
@@ -257,7 +245,7 @@ Each function receives (SESSION EVENT-TYPE PAYLOAD).")
 
 (defun benedict-session-add-entry (session entry)
   "Add canonical ENTRY to SESSION, assigning ID and timestamp when missing."
-  (let ((normalized (benedict-message-from-data entry)))
+  (let ((normalized (benedict-message-copy entry)))
     (unless (benedict-message-id normalized)
       (setf (benedict-message-id normalized)
             (format "msg-%03d" (cl-incf (benedict-session-message-seq session)))))
@@ -285,22 +273,28 @@ Each function receives (SESSION EVENT-TYPE PAYLOAD).")
   "Update message with ID in SESSION, merging the change plist.
 Return the updated message or nil if not found."
   (when-let ((entry (benedict-session-get-entry session id)))
-    (let ((updated
-           (benedict-message-from-data
-            (list :id (benedict-message-id entry)
-                  :kind (benedict-message-kind entry)
-                  :role (or (plist-get updates :role)
-                            (benedict-message-role entry))
-                  :content (or (plist-get updates :content)
-                               (benedict-message-text entry))
-                  :thinking (or (plist-get updates :thinking)
-                                (benedict-message-thinking entry))
-                  :tool-calls (or (plist-get updates :tool-calls)
-                                  (benedict-message-tool-calls entry))
-                  :timestamp (or (plist-get updates :timestamp)
-                                 (benedict-message-timestamp entry))
-                  :metadata (or (plist-get updates :metadata)
-                                (benedict-message-metadata entry))))))
+    (let ((updated (benedict-message-copy entry)))
+      (when (plist-member updates :role)
+        (setf (benedict-message-role updated) (plist-get updates :role)))
+      (when (or (plist-member updates :content)
+                (plist-member updates :thinking)
+                (plist-member updates :tool-calls))
+        (setf (benedict-message-blocks updated)
+              (benedict-message-blocks
+               (benedict-message-assistant-response
+                :text (if (plist-member updates :content)
+                          (plist-get updates :content)
+                        (benedict-message-text entry))
+                :thinking (if (plist-member updates :thinking)
+                              (plist-get updates :thinking)
+                            (benedict-message-thinking entry))
+                :tool-calls (if (plist-member updates :tool-calls)
+                                (plist-get updates :tool-calls)
+                              (benedict-message-tool-calls entry))))))
+      (when (plist-member updates :timestamp)
+        (setf (benedict-message-timestamp updated) (plist-get updates :timestamp)))
+      (when (plist-member updates :metadata)
+        (setf (benedict-message-metadata updated) (copy-tree (plist-get updates :metadata))))
       (setf (benedict-session-entries session)
             (cl-loop for candidate in (benedict-session-entries session)
                      collect (if (equal (benedict-message-id candidate) id)
@@ -368,11 +362,11 @@ Return the updated message or nil if not found."
 METADATA is an optional plist merged into the message.
 Return the created message."
   (when-let ((draft (benedict-session-draft session)))
-    (let ((msg (list :role 'assistant
-                     :content (plist-get draft :content)
-                     :tool-calls (plist-get draft :tool-calls)
-                     :thinking (plist-get draft :thinking)
-                     :metadata metadata)))
+    (let ((msg (benedict-message-assistant-response
+                :text (plist-get draft :content)
+                :tool-calls (plist-get draft :tool-calls)
+                :thinking (plist-get draft :thinking)
+                :metadata metadata)))
       (setf (benedict-session-draft session) nil)
       (benedict-session--emit session 'draft-finalized)
       (benedict-session-add-message session msg))))

@@ -1,8 +1,9 @@
 ;;; benedict-message.el --- Canonical transcript entries for Benedict -*- lexical-binding: t; -*-
 
 ;;; Commentary:
-;; Provider-agnostic message structures and translation helpers used by the
-;; runtime, persistence, and UI layers.
+;; Provider-agnostic message structures and helpers used by the runtime,
+;; persistence, and UI layers.  Provider wire serialization belongs in
+;; `benedict-provider.el' and concrete provider modules.
 
 ;;; Code:
 
@@ -66,6 +67,46 @@ EFFECTS carries observed side-effect summaries."
    :blocks (list (benedict-message--text-block text))
    :metadata metadata))
 
+(defun benedict-message-system-text (text &optional metadata)
+  "Create a canonical system text message for TEXT and METADATA."
+  (benedict-message-create
+   :kind 'message
+   :role 'system
+   :blocks (list (benedict-message--text-block text))
+   :metadata metadata))
+
+(cl-defun benedict-message-assistant-response
+    (&key text thinking tool-calls metadata)
+  "Create a canonical assistant response.
+TEXT is assistant text content.  THINKING preserves reasoning details.
+TOOL-CALLS is a list of canonical tool-call plists containing :id, :name, and
+:arguments.  METADATA is copied into the message metadata slot."
+  (let ((blocks nil))
+    (push (benedict-message--text-block text) blocks)
+    (when thinking
+      (push (benedict-message--thinking-block thinking) blocks))
+    (dolist (tool-call tool-calls)
+      (push (benedict-message--tool-call-block tool-call) blocks))
+    (benedict-message-create
+     :kind 'message
+     :role 'assistant
+     :blocks (nreverse blocks)
+     :metadata metadata)))
+
+(cl-defun benedict-message-assistant-tool-call
+    (id name arguments &key text thinking metadata status)
+  "Create a canonical assistant message containing one tool call.
+ID, NAME, and ARGUMENTS identify the tool request.  TEXT, THINKING, METADATA,
+and STATUS preserve optional assistant content and execution state."
+  (benedict-message-assistant-response
+   :text text
+   :thinking thinking
+   :tool-calls (list (list :id id
+                           :name name
+                           :arguments arguments
+                           :status status))
+   :metadata metadata))
+
 (defun benedict-message-tool-result
     (tool-call-id name status content &optional details ui effects)
   "Create a canonical tool result message.
@@ -88,56 +129,17 @@ and EFFECTS mirror the structured tool result contract."
                     tool-call-id name status content details ui effects))
      :metadata metadata)))
 
-(defun benedict-message-from-data (message)
-  "Normalize MESSAGE data into a `benedict-message'."
-  (if (benedict-message-p message)
-      (benedict-message-create
-       :id (benedict-message-id message)
-       :kind (benedict-message-kind message)
-       :role (benedict-message-role message)
-       :blocks (benedict-message--copy-blocks (benedict-message-blocks message))
-       :metadata (copy-tree (benedict-message-metadata message))
-       :timestamp (benedict-message-timestamp message))
-    (let* ((role (plist-get message :role))
-           (kind (or (plist-get message :kind) 'message))
-           (content (plist-get message :content))
-           (thinking (plist-get message :thinking))
-           (tool-calls (let ((value (plist-get message :tool-calls)))
-                         (cond
-                          ((vectorp value) (append value nil))
-                          ((listp value) value)
-                          (t nil))))
-           (tool-call-id (plist-get message :tool-call-id))
-           (name (plist-get message :name))
-           (metadata (copy-tree (plist-get message :metadata)))
-           (tool-result-details (or (plist-get metadata :details)
-                                    (plist-get metadata :error)))
-           (tool-result-ui (plist-get metadata :ui))
-           (tool-result-effects (plist-get metadata :effects))
-           (blocks nil))
-      (when (or content (memq role '(assistant user system tool)))
-        (push (benedict-message--text-block content) blocks))
-      (when thinking
-        (push (benedict-message--thinking-block thinking) blocks))
-      (dolist (tool-call tool-calls)
-        (push (benedict-message--tool-call-block tool-call) blocks))
-      (when (eq role 'tool)
-        (push (benedict-message--tool-result-block
-               tool-call-id
-               name
-               (or (plist-get metadata :status) 'success)
-               content
-               tool-result-details
-               tool-result-ui
-               tool-result-effects)
-              blocks))
-      (benedict-message-create
-       :id (plist-get message :id)
-       :kind kind
-       :role role
-       :blocks (nreverse blocks)
-       :metadata metadata
-       :timestamp (plist-get message :timestamp)))))
+(defun benedict-message-copy (message)
+  "Return a durable copy of canonical MESSAGE."
+  (unless (benedict-message-p message)
+    (error "Expected canonical benedict-message, got: %S" message))
+  (benedict-message-create
+   :id (benedict-message-id message)
+   :kind (benedict-message-kind message)
+   :role (benedict-message-role message)
+   :blocks (benedict-message--copy-blocks (benedict-message-blocks message))
+   :metadata (copy-tree (benedict-message-metadata message))
+   :timestamp (benedict-message-timestamp message)))
 
 (defun benedict-message--block-of-type (message type)
   "Return the first block of TYPE in MESSAGE."
@@ -240,30 +242,6 @@ and EFFECTS mirror the structured tool result contract."
                    (lambda (block) (eq (plist-get block :type) 'tool-result))
                    blocks))
       (nreverse blocks))))
-
-(defun benedict-message->provider-message (message provider-id)
-  "Convert canonical MESSAGE to a provider request message for PROVIDER-ID."
-  (ignore provider-id)
-  (let* ((role (benedict-message-role message))
-         (tool-result (and (eq role 'tool)
-                           (benedict-message--tool-result-block-data message)))
-         (content (or (benedict-message-text message)
-                      (and tool-result (plist-get tool-result :content))
-                      ""))
-         (payload (list :role role
-                        :content content))
-         (tool-calls (mapcar (lambda (call)
-                               (list :id (plist-get call :id)
-                                     :name (plist-get call :name)
-                                     :arguments (plist-get call :arguments)))
-                             (benedict-message-tool-calls message)))
-         )
-    (when tool-calls
-      (setq payload (plist-put payload :tool-calls tool-calls)))
-    (when tool-result
-      (setq payload (plist-put payload :tool-call-id (plist-get tool-result :tool-call-id)))
-      (setq payload (plist-put payload :name (plist-get tool-result :name))))
-    payload))
 
 (provide 'benedict-message)
 ;;; benedict-message.el ends here

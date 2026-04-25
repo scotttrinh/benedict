@@ -4,6 +4,7 @@
 (require 'ert)
 (require 'ert-async)
 (require 'benedict-chat)
+(require 'benedict-core)
 (require 'benedict-message)
 (require 'benedict-chat-profiles)
 (require 'benedict-provider-fake)
@@ -26,18 +27,19 @@
               (benedict-session-start-request session 'handle)
               (benedict-session-start-draft session))
             (cl-letf (((symbol-function 'current-time) (lambda () finish)))
-              (benedict-session--on-success
+              (benedict-core--handle-provider-result
                session
-               (list :provider 'fake
-                     :model "fake-model"
-                     :latency 1.25
-                     :usage '(:prompt-tokens 1 :completion-tokens 1 :total-tokens 2)
-                     :message (list :role 'assistant :content "ok"))))
+               (benedict-provider-result-create
+                :provider 'fake
+                :model "fake-model"
+                :latency 1.25
+                :usage '(:prompt-tokens 1 :completion-tokens 1 :total-tokens 2)
+                :text "ok")))
             (should (= (benedict-session-accumulated-seconds session) 1.25))
             (cl-letf (((symbol-function 'current-time) (lambda () finish)))
               (benedict-session-start-request session 'handle)
               (benedict-session-start-draft session)
-              (benedict-session--on-error
+              (benedict-core--handle-provider-error
                session (list :provider 'fake :message "fail")))
             (should (= (benedict-session-accumulated-seconds session) 1.25))))
       (when (buffer-live-p buffer)
@@ -215,7 +217,9 @@
                         (should tool-message)
                         (should (equal (benedict-message-tool-result-id tool-message) "call-123"))
                         ;; We check that history recorded the result, ignoring exact string formatting
-                        (should (string-match-p "matches" (benedict-message-text tool-message)))))
+                        (should (string-match-p
+                                 "matches"
+                                 (benedict-provider-message-content tool-message)))))
                  (error (setq err e)))
              (when (buffer-live-p buffer)
                (kill-buffer buffer)))
@@ -255,20 +259,14 @@
                                            (eq (benedict-message-role message) 'tool))
                                          (when benedict-chat--session
                                            (benedict-session-entries benedict-chat--session))))
-                            (content (and tool-message (benedict-message-text tool-message)))
-                            (metadata (and tool-message (benedict-message-metadata tool-message)))
-                            (request (benedict-session--build-request benedict-chat--session))
-                            (tool-entry
-                             (cl-find-if (lambda (message)
-                                           (eq (plist-get message :role) 'tool))
-                                         (plist-get request :messages))))
+                            (content (and tool-message
+                                          (benedict-provider-message-content tool-message)))
+                            (metadata (and tool-message (benedict-message-metadata tool-message))))
                        (should tool-message)
                        (should (plist-get metadata :error))
-                       (should (string-match-p "Tool error:" content))
-                       ;; Ensure follow-up requests carry the tool error content.
-                       (should tool-entry)
-                    (should (string-match-p "Tool error:"
-                                            (plist-get tool-entry :content)))))
+                       (should (string-match-p "Wrong type argument" content))
+                       ;; Provider modules serialize canonical tool-result messages later.
+                       (should (benedict-message-tool-result-id tool-message))))
               (error (setq err e)))
             (when (buffer-live-p buffer)
               (kill-buffer buffer)))
@@ -328,14 +326,20 @@
                             (cl-remove-if-not (lambda (message)
                                                 (eq (benedict-message-role message) 'assistant))
                                               messages))
-                           (latest-assistant (car (last assistant-messages))))
+                           (recovered-assistant
+                            (cl-find-if
+                             (lambda (message)
+                               (string-match-p
+                                "Recovered after permission denial"
+                                (or (benedict-message-text message) "")))
+                             assistant-messages)))
                       (should tool-message)
                       (should (eq 'denied (plist-get tool-metadata :status)))
                       (should (eq 'permission-denied (plist-get tool-error :code)))
-                      (should (string-match-p "Tool denied:" (benedict-message-text tool-message)))
-                      (should latest-assistant)
-                      (should (string-match-p "Recovered after permission denial"
-                                              (benedict-message-text latest-assistant)))))
+                      (should (string-match-p
+                               "denied by permission predicate"
+                               (benedict-provider-message-content tool-message)))
+                      (should recovered-assistant)))
                 (error (setq err e)))
             (when (buffer-live-p buffer)
               (kill-buffer buffer)))

@@ -35,13 +35,15 @@
        (benedict-provider-fake-script
         (list (list :type 'success :delay 0.01))))
     (benedict-provider-dispatch
-     (list :messages (list (list :role 'user :content "hello fake")))
+     (list :messages (list (benedict-message-user-text "hello fake")))
      :on-success (lambda (payload)
-                   (should (equal (plist-get (plist-get payload :message) :content)
+                   (should (benedict-provider-result-p payload))
+                   (should (equal (benedict-provider-result-text payload)
                                   "Fake echo: hello fake"))
-                   (should (equal (plist-get payload :provider) 'fake))
-                   (should (equal (plist-get payload :model) benedict-provider-fake-default-model))
-                   (let ((usage (plist-get payload :usage)))
+                   (should (equal (benedict-provider-result-provider payload) 'fake))
+                   (should (equal (benedict-provider-result-model payload)
+                                  benedict-provider-fake-default-model))
+                   (let ((usage (benedict-provider-result-usage payload)))
                      (should usage)
                      (should (assoc-string "prompt_tokens" usage))
                      (should (assoc-string "completion_tokens" usage)))
@@ -54,7 +56,7 @@
        (benedict-provider-fake-script
         (list (list :type 'error :message "boom" :code "fake_error" :status 500))))
     (benedict-provider-dispatch
-     (list :messages (list (list :role 'user :content "trigger error")))
+     (list :messages (list (benedict-message-user-text "trigger error")))
      :on-error (lambda (payload)
                  (should (equal (plist-get payload :message) "boom"))
                  (should (equal (plist-get payload :code) "fake_error"))
@@ -74,13 +76,13 @@
                     :delay 0.01))))
     (let ((chunks nil))
       (benedict-provider-dispatch
-       (list :messages (list (list :role 'user :content "streaming test")))
+       (list :messages (list (benedict-message-user-text "streaming test")))
        :on-delta (lambda (&rest payload)
                    (should (eq (plist-get payload :kind) 'content-delta))
                    (push (plist-get payload :text) chunks))
        :on-success (lambda (payload)
                      (should (equal (nreverse chunks) '("chunk-1" "chunk-2")))
-                     (should (equal (plist-get (plist-get payload :message) :content)
+                     (should (equal (benedict-provider-result-text payload)
                                     "Fake echo: streaming test"))
                      (funcall done))))))
 
@@ -92,7 +94,7 @@
     (let ((callback-fired nil))
       (let ((handle
              (benedict-provider-dispatch
-              (list :messages (list (list :role 'user :content "cancel me")))
+              (list :messages (list (benedict-message-user-text "cancel me")))
               :on-success (lambda (_payload)
                             (setq callback-fired t)
                             (funcall done "Callback should not have fired after cancel")))))
@@ -116,21 +118,24 @@
                  (setq captured (list :provider (benedict-provider-id provider)
                                       :request request))
                  (funcall (plist-get callbacks :on-success)
-                          '(:message (:role assistant :content "override")
-                            :provider dispatch-test
-                            :model "dispatch/model"))
+                          (benedict-provider-result-create
+                           :text "override"
+                           :provider 'dispatch-test
+                           :model "dispatch/model"))
                  '(:provider dispatch-test :request-id "dispatch-test"))
          :capabilities nil
          :cancel #'ignore)
       (let ((result nil))
         (benedict-provider-dispatch
-         '(:provider dispatch-test :model "dispatch/model" :messages [(:role user :content "hi")])
+         (list :provider 'dispatch-test
+               :model "dispatch/model"
+               :messages (list (benedict-message-user-text "hi")))
          :on-success (lambda (payload)
                        (setq result payload)))
         (should (eq (plist-get captured :provider) 'dispatch-test))
         (should (eq (plist-get (plist-get captured :request) :provider) 'dispatch-test))
-        (should (equal (plist-get result :provider) 'dispatch-test))
-        (should (equal (plist-get result :model) "dispatch/model"))))))
+        (should (equal (benedict-provider-result-provider result) 'dispatch-test))
+        (should (equal (benedict-provider-result-model result) "dispatch/model"))))))
 
 (ert-deftest benedict-provider-abort-uses-handle-provider ()
   "Abort honors HANDLE provider instead of global provider state."

@@ -42,17 +42,17 @@
                   :status (nth (mod (+ seed index) 3) '(pending running success)))
             tool-calls))
     (let ((calls (nreverse tool-calls)))
-      (list :role 'assistant
-            :content text
-            :thinking (unless (zerop (mod seed 3)) thinking)
-            :tool-calls calls
-            :metadata (list :provider 'fake
-                            :model (format "fake/model-%d" seed)
-                            :tool-call-statuses
-                            (mapcar (lambda (call)
-                                      (cons (plist-get call :id)
-                                            (plist-get call :status)))
-                                    calls))))))
+      (benedict-message-assistant-response
+       :text text
+       :thinking (unless (zerop (mod seed 3)) thinking)
+       :tool-calls calls
+       :metadata (list :provider 'fake
+                       :model (format "fake/model-%d" seed)
+                       :tool-call-statuses
+                       (mapcar (lambda (call)
+                                 (cons (plist-get call :id)
+                                       (plist-get call :status)))
+                               calls))))))
 
 (defun benedict-propcheck-test--session-entry (index)
   "Return a randomized canonical entry for INDEX."
@@ -62,19 +62,18 @@
          (status (benedict-propcheck-test--tool-status seed)))
     (pcase (mod index 3)
       (0 (benedict-message-user-text text))
-      (1 (benedict-message-from-data
-          (list :role 'assistant
-                :content text
-                :thinking (unless (zerop (mod seed 2))
-                            (propcheck-generate-string
-                             (format "entry-thinking-%d" index)))
-                :tool-calls (list (list :id (format "call-%d" index)
-                                        :name (intern (format "tool-%d" seed))
-                                        :arguments
-                                        (format "{\"path\":\"%s\"}" path)
-                                        :status 'success))
-                :metadata (list :provider 'fake
-                                :model (format "fake/model-%d" seed)))))
+      (1 (benedict-message-assistant-response
+          :text text
+          :thinking (unless (zerop (mod seed 2))
+                      (propcheck-generate-string
+                       (format "entry-thinking-%d" index)))
+          :tool-calls (list (list :id (format "call-%d" index)
+                                  :name (intern (format "tool-%d" seed))
+                                  :arguments
+                                  (format "{\"path\":\"%s\"}" path)
+                                  :status 'success))
+          :metadata (list :provider 'fake
+                          :model (format "fake/model-%d" seed))))
       (_ (benedict-message-tool-result
           (format "call-%d" index)
           (intern (format "tool-%d" seed))
@@ -86,20 +85,12 @@
                   :body (format "Body %d" seed)))
           (benedict-propcheck-test--tool-effects seed path))))))
 
-(propcheck-deftest benedict-prop-message-normalization-roundtrip ()
-  "Assistant canonical messages survive normalization round-trips."
-  (let* ((fixture (benedict-propcheck-test--assistant-message-fixture))
-         (canonical (benedict-message-from-data fixture))
+(propcheck-deftest benedict-prop-message-store-roundtrip ()
+  "Assistant canonical messages survive store round-trips."
+  (let* ((canonical (benedict-propcheck-test--assistant-message-fixture))
          (roundtrip
-          (benedict-message-from-data
-           (list :id (benedict-message-id canonical)
-                 :kind (benedict-message-kind canonical)
-                 :role (benedict-message-role canonical)
-                 :content (benedict-message-text canonical)
-                 :thinking (benedict-message-thinking canonical)
-                 :tool-calls (benedict-message-tool-calls canonical)
-                 :timestamp (benedict-message-timestamp canonical)
-                 :metadata (copy-tree (benedict-message-metadata canonical))))))
+          (benedict-store--message-from-sexp
+           (benedict-store--message->sexp canonical))))
     (propcheck-should
      (equal (benedict-store--message->sexp canonical)
             (benedict-store--message->sexp roundtrip)))))
@@ -141,9 +132,7 @@
                      :model (format "fake/model-%d" seed)
                      :meta (list :instruction-sources '("AGENTS.md")
                                  :branch-parent-id (format "parent-%d" seed))))
-           (loaded nil)
-           (original-request nil)
-           (loaded-request nil))
+           (loaded nil))
       (unwind-protect
           (progn
             (setf (benedict-session-loop-config session)
@@ -158,19 +147,14 @@
               (benedict-session-add-entry
                session
                (benedict-propcheck-test--session-entry index)))
-            (setq original-request (benedict-session--build-request session))
             (benedict-session-save session :root root)
             (setq loaded (benedict-session-load
                           (benedict-store-session-path (benedict-session-id session) root)))
-            (setq loaded-request (benedict-session--build-request loaded))
             (propcheck-should
              (equal (mapcar #'benedict-store--message->sexp
                             (benedict-session-entries-chronological session))
                     (mapcar #'benedict-store--message->sexp
                             (benedict-session-entries-chronological loaded))))
-            (propcheck-should
-             (equal (plist-get original-request :messages)
-                    (plist-get loaded-request :messages)))
             (propcheck-should
              (equal (benedict-session-loop-config session)
                     (benedict-session-loop-config loaded)))

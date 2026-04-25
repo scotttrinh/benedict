@@ -15,10 +15,8 @@
   "Mounted streaming message uses display content and nav-index fallback key."
   (with-mounted-vui-component
       (vui-component 'benedict-vui-turn-list
-                     :conversation (list (list :role 'assistant
-                                               :content "Hidden raw content"
-                                               :display-content "Streaming partial"
-                                               :streaming t))
+                     :conversation (list (benedict-message-assistant-text
+                                          "Streaming partial"))
                      :streaming nil
                      :collapsed-blocks nil
                      :on-toggle-block #'ignore)
@@ -35,10 +33,13 @@
   "Mounted turn list propagates message keys across id and nav-index cases."
   (with-mounted-vui-component
       (vui-component 'benedict-vui-turn-list
-                     :conversation (list (list :id "u1" :role 'user :content "Question with id")
-                                         (list :role 'assistant :content "Answer without id")
-                                         (list :role 'user :content "Question without id")
-                                         (list :id "a2" :role 'assistant :content "Answer with id"))
+                     :conversation (let ((u1 (benedict-message-user-text "Question with id"))
+                                         (a1 (benedict-message-assistant-text "Answer without id"))
+                                         (u2 (benedict-message-user-text "Question without id"))
+                                         (a2 (benedict-message-assistant-text "Answer with id")))
+                                     (setf (benedict-message-id u1) "u1")
+                                     (setf (benedict-message-id a2) "a2")
+                                     (list u1 a1 u2 a2))
                      :streaming nil
                      :collapsed-blocks nil
                      :on-toggle-block #'ignore)
@@ -79,19 +80,20 @@
 (ert-deftest benedict-vui-turn-list-derive-turns-exposes-turn-metadata ()
   "Derived turns expose lifecycle and outcome metadata at turn scope."
   (let* ((messages (benedict-vui-turn-list--normalize-messages
-                    (list (list :id "u1" :role 'user :content "Question one")
-                          (list :id "a1" :role 'assistant
-                                :content "Answer one"
-                                :thinking "Reasoning"
-                                :tool-calls (list (list :id "call-1"
-                                                        :name "bash"
-                                                        :arguments "pwd")))
-                          (list :id "t1" :role 'tool
-                                :tool-call-id "call-1"
-                                :name "bash"
-                                :content "Tool error: boom"
-                                :metadata '(:status failure
-                                           :error (:message "boom"))))))
+                    (let ((u1 (benedict-message-user-text "Question one"))
+                          (a1 (benedict-message-assistant-response
+                               :text "Answer one"
+                               :thinking "Reasoning"
+                               :tool-calls (list (list :id "call-1"
+                                                       :name "bash"
+                                                       :arguments "pwd"))))
+                          (t1 (benedict-message-tool-result
+                               "call-1" "bash" 'failure "Tool error: boom"
+                               '(:message "boom"))))
+                      (setf (benedict-message-id u1) "u1")
+                      (setf (benedict-message-id a1) "a1")
+                      (setf (benedict-message-id t1) "t1")
+                      (list u1 a1 t1))))
          (turns (benedict-vui-turn-list--derive-turns messages nil))
          (turn (car turns))
          (summary (plist-get turn :execution-summary))
@@ -114,7 +116,9 @@
 (ert-deftest benedict-vui-turn-list-derive-turns-merges-active-streaming-into-last-turn ()
   "Active streaming is attached to the current turn and marked as in-flight."
   (let* ((messages (benedict-vui-turn-list--normalize-messages
-                    (list (list :id "u1" :role 'user :content "Question one"))))
+                    (let ((u1 (benedict-message-user-text "Question one")))
+                      (setf (benedict-message-id u1) "u1")
+                      (list u1))))
          (turns (benedict-vui-turn-list--derive-turns
                  messages
                  '(:status active

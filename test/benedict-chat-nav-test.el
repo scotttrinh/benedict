@@ -8,7 +8,13 @@
 (require 'ert)
 (require 'vui)
 (require 'benedict-chat)
+(require 'benedict-message)
 (require 'benedict-session)
+
+(defun benedict-chat-nav-test--message-with-id (message id)
+  "Return MESSAGE with ID assigned."
+  (setf (benedict-message-id message) id)
+  message)
 
 (defmacro benedict-chat-nav-test--with-chat-buffer (session &rest body)
   "Mount SESSION in a chat buffer and evaluate BODY."
@@ -32,10 +38,18 @@
         (session (benedict-session-create :title "nav"
                                           :provider 'fake
                                           :model "fake/model")))
-    (benedict-session-add-message session '(:id "u1" :role user :content "First question"))
-    (benedict-session-add-message session '(:id "a1" :role assistant :content "First answer"))
-    (benedict-session-add-message session '(:id "u2" :role user :content "Second question"))
-    (benedict-session-add-message session '(:id "a2" :role assistant :content "Second answer"))
+    (benedict-session-add-message
+     session (benedict-chat-nav-test--message-with-id
+              (benedict-message-user-text "First question") "u1"))
+    (benedict-session-add-message
+     session (benedict-chat-nav-test--message-with-id
+              (benedict-message-assistant-text "First answer") "a1"))
+    (benedict-session-add-message
+     session (benedict-chat-nav-test--message-with-id
+              (benedict-message-user-text "Second question") "u2"))
+    (benedict-session-add-message
+     session (benedict-chat-nav-test--message-with-id
+              (benedict-message-assistant-text "Second answer") "a2"))
     (benedict-chat-nav-test--with-chat-buffer session
       (goto-char (point-min))
       (benedict-chat-nav-next-prompt)
@@ -60,21 +74,22 @@
         (session (benedict-session-create :title "execution"
                                           :provider 'fake
                                           :model "fake/model")))
-    (benedict-session-add-message session '(:id "u1" :role user :content "Question"))
+    (benedict-session-add-message
+     session (benedict-chat-nav-test--message-with-id
+              (benedict-message-user-text "Question") "u1"))
     (benedict-session-add-message
      session
-     '(:id "a1"
-       :role assistant
-       :content "Final answer"
+     (benedict-chat-nav-test--message-with-id
+      (benedict-message-assistant-response
+       :text "Final answer"
        :thinking "Reasoning"
-       :tool-calls ((:id "call-1" :name "bash" :arguments "pwd"))))
+       :tool-calls '((:id "call-1" :name "bash" :arguments "pwd")))
+      "a1"))
     (benedict-session-add-message
      session
-     '(:id "t1"
-       :role tool
-       :tool-call-id "call-1"
-       :name "bash"
-       :content "done"))
+     (benedict-chat-nav-test--message-with-id
+      (benedict-message-tool-result "call-1" "bash" 'success "done")
+      "t1"))
     (benedict-chat-nav-test--with-chat-buffer session
       (should-not (string-match-p "Execution details" (buffer-string)))
       (goto-char (point-min))

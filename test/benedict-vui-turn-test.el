@@ -8,6 +8,7 @@
 (require 'ert)
 (require 'vui)
 (require 'test/benedict-vui-test-utils)
+(require 'benedict-message)
 (require 'benedict-vui-turn)
 
 (defun benedict-vui-turn-test--face-member-p (actual expected)
@@ -26,6 +27,11 @@
     (should (benedict-vui-turn-test--face-member-p actual face))
     pos))
 
+(defun benedict-vui-turn-test--with-id (message id)
+  "Return MESSAGE with ID."
+  (setf (benedict-message-id message) id)
+  message)
+
 (ert-deftest benedict-vui-turn-active-turn-without-execution-renders-working-state ()
   "Active turns without execution blocks still render a working activity lane."
   (with-mounted-vui-component
@@ -39,9 +45,10 @@
                                  :has-execution-blocks nil
                                  :execution-expanded nil
                                  :execution-summary nil
-                                 :messages (list (list :id "u1" :role 'user :content "Question")
-                                                 (list :role 'assistant
-                                                       :content "Draft answer"))))
+                                 :messages (let ((u1 (benedict-message-user-text "Question"))
+                                                 (a1 (benedict-message-assistant-text "Draft answer")))
+                                             (setf (benedict-message-id u1) "u1")
+                                             (list u1 a1))))
     (let ((text (buffer-string)))
       (should (string-match-p "Prompt" text))
       (should (string-match-p "Activity" text))
@@ -66,15 +73,17 @@
                                  :execution-summary '(:tool-count 1
                                                      :tool-names ("bash")
                                                      :has-thinking t)
-                                 :messages (list (list :id "u1" :role 'user :content "Question")
-                                                 (list :id "a1"
-                                                       :role 'assistant
-                                                       :content "Final answer"
-                                                       :thinking "Reasoning"
-                                                       :tool-calls (list
-                                                                    (list :id "call-1"
-                                                                          :name "bash"
-                                                                          :arguments "pwd"))))))
+                                 :messages (let ((u1 (benedict-message-user-text "Question"))
+                                                 (a1 (benedict-message-assistant-response
+                                                      :text "Final answer"
+                                                      :thinking "Reasoning"
+                                                      :tool-calls (list
+                                                                   (list :id "call-1"
+                                                                         :name "bash"
+                                                                         :arguments "pwd")))))
+                                             (setf (benedict-message-id u1) "u1")
+                                             (setf (benedict-message-id a1) "a1")
+                                             (list u1 a1))))
     (let* ((text (buffer-string))
            (details-pos (string-match "Execution details" text))
            (thinking-pos (string-match "THINKING" text)))
@@ -95,15 +104,16 @@
                                  :historical t
                                  :execution-expanded nil
                                  :execution-summary nil
-                                 :messages (list (list :id "a1"
-                                                       :role 'assistant
-                                                       :content "Recovered answer")
-                                                 (list :id "t1"
-                                                       :role 'tool
-                                                       :tool-call-id "call-1"
-                                                       :name "bash"
-                                                       :content "tool output"
-                                                       :metadata '(:status success)))))
+                                 :messages (list
+                                            (benedict-vui-turn-test--with-id
+                                             (benedict-message-assistant-text
+                                              "Recovered answer")
+                                             "a1")
+                                            (benedict-vui-turn-test--with-id
+                                             (benedict-message-tool-result
+                                              "call-1" "bash" 'success
+                                              "tool output")
+                                             "t1"))))
     (let* ((text (buffer-string))
            (prompt-pos (string-match "Prompt" text))
            (prompt-text-pos (string-match "Recovered answer" text))
@@ -134,16 +144,20 @@
                                                      :has-errors nil
                                                      :has-approvals t
                                                      :highlights nil)
-                                 :messages (list (list :id "u1" :role 'user :content "Question")
-                                                 (list :id "a1"
-                                                       :role 'assistant
-                                                       :content "Final answer"
-                                                       :thinking "Reasoning"
-                                                       :tool-calls (list
-                                                                    (list :id "call-1"
-                                                                          :name "bash"
-                                                                          :arguments "pwd"
-                                                                          :status 'awaiting-approval))))))
+                                 :messages (list
+                                            (benedict-vui-turn-test--with-id
+                                             (benedict-message-user-text "Question")
+                                             "u1")
+                                            (benedict-vui-turn-test--with-id
+                                             (benedict-message-assistant-response
+                                              :text "Final answer"
+                                              :thinking "Reasoning"
+                                              :tool-calls
+                                              (list (list :id "call-1"
+                                                          :name "bash"
+                                                          :arguments "pwd"
+                                                          :status 'awaiting-approval)))
+                                             "a1"))))
     (let ((text (buffer-string)))
       (should (string-match-p "Execution details" text))
       (should (string-match-p "THINKING" text))
@@ -165,15 +179,19 @@
                                  :execution-summary '(:tool-count 1
                                                      :tool-names ("bash")
                                                      :has-thinking t)
-                                 :messages (list (list :id "u1" :role 'user :content "Question")
-                                                 (list :id "a1"
-                                                       :role 'assistant
-                                                       :content "Final answer"
-                                                       :thinking "Reasoning"
-                                                       :tool-calls (list
-                                                                    (list :id "call-1"
-                                                                          :name "bash"
-                                                                          :arguments "pwd"))))))
+                                 :messages (list
+                                            (benedict-vui-turn-test--with-id
+                                             (benedict-message-user-text "Question")
+                                             "u1")
+                                            (benedict-vui-turn-test--with-id
+                                             (benedict-message-assistant-response
+                                              :text "Final answer"
+                                              :thinking "Reasoning"
+                                              :tool-calls
+                                              (list (list :id "call-1"
+                                                          :name "bash"
+                                                          :arguments "pwd")))
+                                             "a1"))))
     (let ((text (buffer-string)))
       (should (string-match-p "Show details" text))
       (should-not (string-match-p "Execution details" text))

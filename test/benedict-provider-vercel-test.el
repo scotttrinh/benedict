@@ -9,6 +9,7 @@
   (add-to-list 'load-path repo))
 
 (require 'benedict-provider-vercel)
+(require 'benedict-message)
 (require 'benedict-credentials)
 
 (ert-deftest benedict-provider-vercel-resolve-from-file ()
@@ -38,7 +39,7 @@
                (lambda () (list :token "secret-token" :source 'env))))
       (benedict-provider-vercel--send
        nil
-       (list :messages (list (list :role 'user :content "hi")) :stream nil))
+       (list :messages (list (benedict-message-user-text "hi")) :stream nil))
       (let ((request-log (assoc "Vercel HTTP request" logged)))
         (should request-log)
         (let* ((args (cdr request-log))

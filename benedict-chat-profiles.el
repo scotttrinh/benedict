@@ -10,6 +10,7 @@
 (require 'project)
 (require 'subr-x)
 (require 'benedict)
+(require 'benedict-message)
 (require 'benedict-tools)
 
 (defvar benedict-provider)
@@ -275,7 +276,7 @@ Resolution order: buffer override → profile :provider → global `benedict-pro
 (defun benedict-chat-profiles--system-messages (&optional profile)
   "Return a list of system messages for PROFILE."
   (when-let ((content (benedict-chat-profiles--system-content profile)))
-    (list (list :role 'system :content content))))
+    (list (benedict-message-system-text content))))
 
 (defun benedict-chat-profiles--registered-tool-ids ()
   "Return tool IDs registered in `benedict-tools-list'."

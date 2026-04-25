@@ -484,9 +484,10 @@ Returns the displayed buffer's name."
   (vector (list (cons "text" text))))
 
 (defun benedict-provider-gemini--serialize-message (message)
-  "Serialize MESSAGE plist into Gemini content entry."
-  (let* ((role (plist-get message :role))
-         (content (benedict-provider-gemini--stringify (plist-get message :content)))
+  "Serialize canonical MESSAGE into Gemini content entry."
+  (let* ((role (benedict-provider-message-role message))
+         (content (benedict-provider-gemini--stringify
+                   (benedict-provider-message-content message)))
          (normalized (benedict-provider-gemini--normalize-role role)))
     (unless (and (stringp content) (>= (length content) 0))
       (setq content ""))
@@ -502,7 +503,8 @@ Returns the displayed buffer's name."
   "Return cons of (SYSTEM . REMAINDER) for MESSAGES."
   (let (system remainder)
     (dolist (message messages)
-      (let ((role (benedict-provider-gemini--normalize-role (plist-get message :role))))
+      (let ((role (benedict-provider-gemini--normalize-role
+                   (benedict-provider-message-role message))))
         (if (and (eq role 'system) (not system))
             (setq system message)
           (push message remainder))))
@@ -513,8 +515,7 @@ Returns the displayed buffer's name."
 When WRAP is non-nil, wrap the request in a Code Assist-compatible structure
 using PROJECT-ID."
   (let ((messages (plist-get request :messages)))
-    (unless (and (listp messages) messages)
-      (error "Gemini request requires a non-empty :messages list"))
+    (setq messages (benedict-provider-request-messages request "Gemini"))
     (pcase-let* ((`(,system ,content-messages)
                    (benedict-provider-gemini--extract-system-prompt messages))
                  (model (or (plist-get request :model)
@@ -529,8 +530,8 @@ using PROJECT-ID."
                     (list (cons "role" "system")
                           (cons "parts"
                                 (benedict-provider-gemini--parts-from-text
-                                 (benedict-provider-gemini--stringify
-                                  (plist-get system :content))))))
+                                (benedict-provider-gemini--stringify
+                                  (benedict-provider-message-content system))))))
               body))
       (let (generation)
         (when (plist-member request :temperature)
@@ -617,16 +618,16 @@ When WRAP is non-nil, use the Cloud Code Assist endpoint and /v1internal prefix.
              (text (benedict-provider-gemini--parts->text parts))
              (usage (benedict-provider-gemini--usage-from-metadata
                      (plist-get effective :usageMetadata)))
-             (message (list :role 'assistant :content text))
              (request-id (plist-get context :request-id))
              (start (plist-get context :start-time))
              (latency (and start (float-time (time-subtract (current-time) start))))
-             (result (list :message message
-                           :model (plist-get context :model)
-                           :provider 'gemini
-                           :usage usage
-                           :latency latency
-                           :raw effective)))
+             (result (benedict-provider-result-create
+                      :text text
+                      :model (plist-get context :model)
+                      :provider 'gemini
+                      :usage usage
+                      :latency latency
+                      :raw effective)))
          (let ((lgr (benedict-provider-gemini--logger)))
            (lgr-info lgr "Gemini completion"
                      :request-id request-id

@@ -19,21 +19,29 @@
 ;;; Registry Tests
 
 (ert-deftest benedict-session-test-add-message-creates-canonical-entry ()
-  "Adding a legacy message also stores a canonical entry."
+  "Adding a canonical message stores a durable canonical entry."
   (let ((benedict-session--registry (make-hash-table :test 'equal)))
     (let* ((session (benedict-session-create))
-           (message (benedict-session-add-message session '(:role user :content "First")))
+           (message (benedict-session-add-message
+                     session (benedict-message-user-text "First")))
            (entry (car (benedict-session-entries session))))
       (should (string= (benedict-message-id message) (benedict-message-id entry)))
       (should (eq 'user (benedict-message-role entry)))
       (should (string= "First" (benedict-message-text entry))))))
 
+(ert-deftest benedict-session-test-add-message-rejects-plist-shape ()
+  "Session transcripts do not accept old role/content plist messages."
+  (let ((benedict-session--registry (make-hash-table :test 'equal)))
+    (let ((session (benedict-session-create)))
+      (should-error
+       (benedict-session-add-message session '(:role user :content "First"))))))
+
 (ert-deftest benedict-session-test-entries-chronological ()
   "Canonical entries preserve chronological ordering."
   (let ((benedict-session--registry (make-hash-table :test 'equal)))
     (let ((session (benedict-session-create)))
-      (benedict-session-add-message session '(:role user :content "First"))
-      (benedict-session-add-message session '(:role assistant :content "Second"))
+      (benedict-session-add-message session (benedict-message-user-text "First"))
+      (benedict-session-add-message session (benedict-message-assistant-text "Second"))
       (let ((entries (benedict-session-entries-chronological session)))
         (should (string= "First" (benedict-message-text (car entries))))
         (should (string= "Second" (benedict-message-text (cadr entries))))))))
@@ -89,8 +97,10 @@
   "Adding a message assigns a sequential ID."
   (let ((benedict-session--registry (make-hash-table :test 'equal)))
     (let ((session (benedict-session-create)))
-      (let ((m1 (benedict-session-add-message session '(:role user :content "First")))
-            (m2 (benedict-session-add-message session '(:role assistant :content "Second"))))
+      (let ((m1 (benedict-session-add-message session
+                                              (benedict-message-user-text "First")))
+            (m2 (benedict-session-add-message session
+                                              (benedict-message-assistant-text "Second"))))
         (should (string= "msg-001" (benedict-message-id m1)))
         (should (string= "msg-002" (benedict-message-id m2)))))))
 
@@ -98,7 +108,7 @@
   "Can retrieve message by ID."
   (let ((benedict-session--registry (make-hash-table :test 'equal)))
     (let ((session (benedict-session-create)))
-      (benedict-session-add-message session '(:role user :content "Find me"))
+      (benedict-session-add-message session (benedict-message-user-text "Find me"))
       (let ((found (benedict-session-get-message session "msg-001")))
         (should found)
         (should (string= "Find me" (benedict-message-text found)))))))
@@ -169,7 +179,8 @@
            (loaded nil))
       (unwind-protect
           (progn
-            (benedict-session-add-message session '(:role user :content "Persist me"))
+            (benedict-session-add-message session
+                                          (benedict-message-user-text "Persist me"))
             (benedict-session-save session :root root)
             (setq loaded (benedict-session-load
                           (benedict-store-session-path (benedict-session-id session) root)))

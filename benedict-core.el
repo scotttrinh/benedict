@@ -297,7 +297,7 @@ METADATA is appended to the action plist."
 
 (defun benedict-core--message-content (message)
   "Return display content for provider MESSAGE."
-  (or (plist-get message :content) ""))
+  (benedict-provider-result-text (benedict-provider-require-result message)))
 
 (defun benedict-core--normalize-tool-result (tool-call raw-result)
   "Normalize RAW-RESULT for TOOL-CALL into a canonical result plist."
@@ -522,13 +522,13 @@ Return 'complete when all calls are handled, or 'waiting when a yield blocks."
     'complete))
 
 (defun benedict-core--provider-request (session)
-  "Build a provider request from SESSION state."
+  "Build a canonical provider request from SESSION state."
   (let* ((provider (benedict-session-provider session))
-         (history (mapcar (lambda (entry)
-                            (benedict-message->provider-message entry provider))
-                          (benedict-session-entries-chronological session)))
+         (history (benedict-session-entries-chronological session))
          (system (benedict-session-system-prompt session))
-         (messages (if system (append system history) history)))
+         (messages (append system history)))
+    (unless (cl-every #'benedict-message-p messages)
+      (error "Provider request messages must be canonical benedict-message values"))
     (list :provider provider
           :model (benedict-session-model session)
           :profile (benedict-session-profile session)
@@ -551,32 +551,34 @@ Return 'complete when all calls are handled, or 'waiting when a yield blocks."
 
 (defun benedict-core--handle-provider-result (session result)
   "Apply provider RESULT to SESSION and continue the turn if needed."
+  (setq result (benedict-provider-require-result result))
   (let* ((inflight (benedict-session-inflight session))
          (started (and inflight (plist-get inflight :started-at)))
-         (usage (plist-get result :usage)))
-    (when-let ((provider (plist-get result :provider)))
+         (usage (benedict-provider-result-usage result)))
+    (when-let ((provider (benedict-provider-result-provider result)))
       (setf (benedict-session-provider session) provider))
-    (when-let ((model (plist-get result :model)))
+    (when-let ((model (benedict-provider-result-model result)))
       (setf (benedict-session-model session) model))
     (when started
       (let* ((elapsed (float-time (time-subtract (current-time) started)))
-             (duration (or (plist-get result :latency) elapsed)))
+             (duration (or (benedict-provider-result-latency result) elapsed)))
         (setf (benedict-session-last-phase session) 'complete)
         (setf (benedict-session-last-elapsed session) elapsed)
         (setf (benedict-session-last-usage session) usage)
         (benedict-session-accumulate-usage session usage duration))))
   (benedict-session-clear-request session)
-  (let* ((message (plist-get result :message))
-         (thinking (plist-get result :thinking))
-         (tool-calls (plist-get message :tool-calls))
-         (metadata (list :provider (plist-get result :provider)
-                         :model (plist-get result :model)
-                         :usage (plist-get result :usage)))
+  (let* ((thinking (benedict-provider-result-thinking result))
+         (tool-calls (benedict-provider-result-tool-calls result))
+         (metadata (list :provider (benedict-provider-result-provider result)
+                         :model (benedict-provider-result-model result)
+                         :usage (benedict-provider-result-usage result)
+                         :provider-metadata
+                         (benedict-provider-result-metadata result)))
          (assistant
           (if (and (benedict-session-draft session)
                    (not (string-empty-p (plist-get (benedict-session-draft session) :content))))
               (let ((draft (benedict-session-draft session))
-                    (final-content (benedict-core--message-content message)))
+                    (final-content (benedict-provider-result-text result)))
                 (when thinking
                   (setf (benedict-session-draft session)
                         (plist-put draft :thinking thinking)))
@@ -593,11 +595,11 @@ Return 'complete when all calls are handled, or 'waiting when a yield blocks."
               (benedict-session-discard-draft session)
               (benedict-session-add-message
                session
-               (list :role 'assistant
-                     :content (benedict-core--message-content message)
-                     :tool-calls tool-calls
-                     :thinking thinking
-                     :metadata metadata)))))
+               (benedict-message-assistant-response
+                :text (benedict-provider-result-text result)
+                :tool-calls tool-calls
+                :thinking thinking
+                :metadata metadata)))))
          (assistant-tool-calls (benedict-message-tool-calls assistant)))
     (benedict-core--emit session 'request-completed
                          :success t

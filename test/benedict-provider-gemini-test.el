@@ -135,9 +135,13 @@
 (ert-deftest benedict-provider-gemini-payload-shape ()
   "Payload encoding follows Gemini content schema."
   (let* ((request (list :model "gemini-test"
-                        :messages (list (list :role 'system :content "system prompt")
-                                        (list :role 'user :content "hi")
-                                        (list :role 'assistant :content "hello"))
+                        :messages (list (benedict-message-create
+                                         :kind 'message
+                                         :role 'system
+                                         :blocks '((:type text
+                                                   :text "system prompt")))
+                                        (benedict-message-user-text "hi")
+                                        (benedict-message-assistant-text "hello"))
                         :temperature 0.3
                         :max-tokens 256))
          ;; OAuth mode triggers wrapping
@@ -163,7 +167,7 @@
 (ert-deftest benedict-provider-gemini-payload-shape-unwrapped ()
   "Payload encoding in api-key mode is not wrapped."
   (let* ((request (list :model "gemini-test"
-                        :messages (list (list :role 'user :content "hi"))))
+                        :messages (list (benedict-message-user-text "hi"))))
          (benedict-provider-gemini-auth-method 'api-key)
          (encoded (benedict-provider-gemini--encode-payload request))
          (decoded (json-parse-string encoded :object-type 'alist :array-type 'list)))
@@ -249,7 +253,9 @@
                (lambda (&rest _) nil))
               ((symbol-function 'benedict-provider-gemini--resolve-credential)
                (lambda () (list :access "secret-token" :project-id "proj-123"))))
-      (benedict-provider-gemini--send nil (list :messages (list (list :role 'user :content "hi"))))
+      (benedict-provider-gemini--send
+       nil
+       (list :messages (list (benedict-message-user-text "hi"))))
       (let ((request-log (assoc "Gemini HTTP request" logged)))
         (should request-log)
         (let ((args (cdr request-log)))

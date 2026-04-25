@@ -15,6 +15,15 @@
 
 (require 'benedict-core)
 
+(cl-defun benedict-agent-loop-test--result (&key text tool-calls)
+  "Return a strict provider result for loop coverage.
+TEXT and TOOL-CALLS are forwarded to `benedict-provider-result-create'."
+  (benedict-provider-result-create
+   :provider 'fake
+   :model "fake-model"
+   :text (or text "")
+   :tool-calls tool-calls))
+
 (defun benedict-agent-loop-test--dispatch (responses)
   "Return a synchronous fake provider dispatch over RESPONSES."
   (let ((queue responses))
@@ -39,16 +48,11 @@
                       (funcall
                        (plist-get callbacks :on-success)
                        (if (= requests 1)
-                           '(:provider fake
-                             :model "fake-model"
-                             :message (:role assistant
-                                       :content ""
-                                       :tool-calls ((:id "call-1"
-                                                     :name tool-a
-                                                     :arguments nil))))
-                         '(:provider fake
-                           :model "fake-model"
-                           :message (:role assistant :content "done"))))))))
+                           (benedict-agent-loop-test--result
+                            :tool-calls '((:id "call-1"
+                                           :name tool-a
+                                           :arguments nil)))
+                         (benedict-agent-loop-test--result :text "done")))))))
       (benedict-core-add-user-input session "Use the tool")
       (benedict-core-run session)
       (should (= 2 requests))
@@ -65,9 +69,7 @@
                     :model "fake-model"
                     :provider-dispatch-fn
                     (benedict-agent-loop-test--dispatch
-                     (list '(:provider fake
-                             :model "fake-model"
-                             :message (:role assistant :content "Done.")))))))
+                     (list (benedict-agent-loop-test--result :text "Done."))))))
       (benedict-core-add-user-input session "Hello")
       (benedict-core-run session)
       (should (eq 'idle (benedict-session-run-state session)))

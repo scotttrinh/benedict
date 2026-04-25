@@ -12,19 +12,6 @@
 (require 'benedict-message)
 (require 'benedict-vui-turn)
 
-(defun benedict-vui-turn-list--alist-to-plist (alist)
-  "Convert ALIST into a plist with keyword keys."
-  (let (plist)
-    (dolist (pair alist plist)
-      (let* ((key (car pair))
-             (keyword (cond
-                       ((keywordp key) key)
-                       ((symbolp key) (intern (format ":%s" (symbol-name key))))
-                       ((stringp key) (intern (concat ":" (downcase key))))
-                       (t nil))))
-        (when keyword
-          (setq plist (plist-put plist keyword (cdr pair))))))))
-
 (defun benedict-vui-turn-list--normalize-message (message)
   "Return MESSAGE normalized to a canonical entry or nil."
   (cond
@@ -33,15 +20,6 @@
    ((vectorp message)
     (benedict-vui-turn-list--normalize-message (append message nil)))
    ((benedict-message-p message) message)
-   ((listp message)
-    (let* ((plist (if (and (consp (car message))
-                           (not (keywordp (caar message))))
-                      (benedict-vui-turn-list--alist-to-plist message)
-                    (copy-sequence message)))
-           (display-content (plist-get plist :display-content)))
-      (when display-content
-        (setq plist (plist-put plist :content display-content)))
-      (benedict-message-from-data plist)))
    (t (benedict-message-assistant-text (format "%s" message)))))
 
 (defun benedict-vui-turn-list--normalize-messages (messages)
@@ -95,12 +73,11 @@ Each normalized message is a canonical entry."
   "Return a synthetic assistant message for STREAMING, or nil."
   (when (and (listp streaming)
              (eq (plist-get streaming :status) 'active))
-    (benedict-message-from-data
-     (list :role 'assistant
-           :content (plist-get streaming :content)
-           :thinking (plist-get streaming :thinking)
-           :tool-calls (plist-get streaming :tool-calls)
-           :metadata '(:streaming t)))))
+    (benedict-message-assistant-response
+     :text (plist-get streaming :content)
+     :thinking (plist-get streaming :thinking)
+     :tool-calls (plist-get streaming :tool-calls)
+     :metadata '(:streaming t))))
 
 (defun benedict-vui-turn-list--message-text (message)
   "Return the primary text content for MESSAGE, or nil."

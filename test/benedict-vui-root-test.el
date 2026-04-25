@@ -8,6 +8,8 @@
 (require 'ert)
 (require 'cl-lib)
 (require 'vui)
+(require 'benedict-message)
+(require 'benedict-provider)
 (require 'benedict-session)
 (require 'test/benedict-vui-test-utils)
 (require 'benedict-vui-root)
@@ -20,6 +22,13 @@
    event-type
    payload)
   (vui-flush-sync))
+
+(defun benedict-vui-root-test--set-run-state (session state)
+  "Set SESSION run STATE and emit the matching event."
+  (let ((old (benedict-session-run-state session)))
+    (setf (benedict-session-run-state session) state)
+    (benedict-vui-root-test--emit-session-event
+     session 'state-changed :axis 'run :old old :new state)))
 
 (ert-deftest benedict-vui-root-mount-renders-baseline-layout ()
   "Mounted root renders the empty-session baseline without stray widgets."
@@ -68,7 +77,7 @@
   (with-mounted-vui-root
     (should-not (string-match-p "Hello from session" (buffer-string)))
     (benedict-session-add-message session
-                                  '(:role user :content "Hello from session"))
+                                  (benedict-message-user-text "Hello from session"))
     (vui-flush-sync)
     (should (string-match-p "Hello from session" (buffer-string)))
     (should-not (string-match-p "ACTIVE" (buffer-string)))
@@ -92,7 +101,7 @@
 (ert-deftest benedict-vui-root-state-and-request-events-update-status ()
   "Mounted root clears errors and updates header/status details from session events."
   (with-mounted-vui-root
-    (benedict-session-set-state session 'error)
+    (benedict-vui-root-test--set-run-state session 'error)
     (vui-flush-sync)
     (should (string-match-p "Session error: idle -> error" (buffer-string)))
     (benedict-vui-root-test--emit-session-event
@@ -105,16 +114,17 @@
      session
      'request-completed
      :success t
-     :result '(:provider anthropic
-               :model "vendor/claude-test"
-               :usage (:total 321 :cost 0.25)))
+     :result (benedict-provider-result-create
+              :provider 'anthropic
+              :model "vendor/claude-test"
+              :usage '(:total 321 :cost 0.25)))
     (let ((text (buffer-string)))
       (should (string-match-p "ANT" text))
       (should (string-match-p "claude-test" text))
       (should (string-match-p "321 tokens" text))
       (should-not (string-match-p "Transient boom" text)))
-    (benedict-session-set-state session 'running)
-    (benedict-session-set-state session 'idle)
+    (benedict-vui-root-test--set-run-state session 'running)
+    (benedict-vui-root-test--set-run-state session 'idle)
     (vui-flush-sync)
     (should-not (string-match-p "Session error:" (buffer-string)))))
 
@@ -183,10 +193,10 @@
       (benedict-vui-root-test--emit-session-event
        session
        'approval-requested
-       :approval '(:type tool-approval
-                   :tool-id write
-                   :approval confirm
-                   :args (:path "README.org")))
+       :yield '(:type approval-request
+                :tool-id write
+                :approval confirm
+                :args (:path "README.org")))
       (should (string-match-p "Approval request: write" (buffer-string)))
       (should (string-match-p "Approve" (buffer-string)))
       (should (string-match-p "Deny" (buffer-string)))

@@ -361,7 +361,11 @@ Returns the session or nil if agent frame is disabled."
              (benedict-chat-profiles--system-content profile)
              (benedict-instructions-build-system-prompt selection)))
            (system (when system-content
-                     (list (list :role 'system :content system-content))))
+                     (list (benedict-message-create
+                            :kind 'message
+                            :role 'system
+                            :blocks (list (list :type 'text
+                                                :text system-content))))))
            (autonomy (benedict-chat-profiles--profile-autonomy profile))
            (verbosity (benedict-chat-profiles--profile-verbosity profile))
            (loop-config (list :max-turns (benedict-chat-profiles--effective-limit
@@ -398,18 +402,25 @@ Returns the session or nil if agent frame is disabled."
     (let* ((session benedict-chat--session)
            (message (and session (benedict-chat-nav--find-last-assistant)))
            (message-metadata (and message (benedict-message-metadata message)))
-           (provider (or (plist-get result :provider)
+           (provider (or (and (benedict-provider-result-p result)
+                              (benedict-provider-result-provider result))
                          (and session (benedict-session-provider session))
                          (benedict-chat-profiles--resolve-provider)))
-           (model (or (plist-get result :model)
+           (model (or (and (benedict-provider-result-p result)
+                           (benedict-provider-result-model result))
                       (and session (benedict-session-model session))))
            (metadata (or message-metadata
                          (list :provider provider
                                :model model
-                               :latency (plist-get result :latency)
-                               :usage (plist-get result :usage))))
-           (thinking (plist-get result :thinking))
-           (empty-response (plist-get result :empty-response)))
+                               :latency (and (benedict-provider-result-p result)
+                                             (benedict-provider-result-latency result))
+                               :usage (and (benedict-provider-result-p result)
+                                           (benedict-provider-result-usage result)))))
+           (thinking (and (benedict-provider-result-p result)
+                          (benedict-provider-result-thinking result)))
+           (empty-response (and (benedict-provider-result-p result)
+                                (plist-get (benedict-provider-result-metadata result)
+                                           :empty-response))))
       (when message
         (let ((updated (copy-sequence metadata)))
           (when empty-response

@@ -89,6 +89,14 @@
    :metadata (benedict-store--copy-plist (plist-get data :metadata))
    :timestamp (plist-get data :timestamp)))
 
+(defun benedict-store--messages->sexp (messages)
+  "Serialize canonical MESSAGES into readable plists."
+  (mapcar #'benedict-store--message->sexp messages))
+
+(defun benedict-store--messages-from-sexp (data)
+  "Deserialize DATA into canonical messages."
+  (mapcar #'benedict-store--message-from-sexp data))
+
 (defun benedict-store--harness->sexp (harness)
   "Serialize HARNESS into a plist."
   (when harness
@@ -178,7 +186,8 @@
         :profile (benedict-session-profile session)
         :meta (benedict-store--copy-plist (benedict-session-meta session))
         :tools (benedict-store--copy-plist (benedict-session-tools session))
-        :system-prompt (benedict-store--copy-plist (benedict-session-system-prompt session))
+        :system-prompt (benedict-store--messages->sexp
+                        (benedict-session-system-prompt session))
         :autonomy (benedict-session-autonomy session)
         :verbosity (benedict-session-verbosity session)
         :harness (benedict-store--harness->sexp (benedict-session-harness session))
@@ -215,7 +224,8 @@
    :profile (plist-get metadata :profile)
    :meta (benedict-store--copy-plist (plist-get metadata :meta))
    :tools (benedict-store--copy-plist (plist-get metadata :tools))
-   :system-prompt (benedict-store--copy-plist (plist-get metadata :system-prompt))
+   :system-prompt (benedict-store--messages-from-sexp
+                   (plist-get metadata :system-prompt))
    :autonomy (plist-get metadata :autonomy)
    :verbosity (plist-get metadata :verbosity)
    :harness (benedict-store--harness-from-sexp (plist-get metadata :harness))

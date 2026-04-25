@@ -14,6 +14,21 @@
 
 (require 'benedict-core)
 
+(cl-defun benedict-core-test--result
+    (&key text tool-calls provider model usage thinking latency metadata)
+  "Return a strict provider result for core coverage.
+TEXT, TOOL-CALLS, PROVIDER, MODEL, USAGE, THINKING, LATENCY, and METADATA are
+forwarded to `benedict-provider-result-create'."
+  (benedict-provider-result-create
+   :provider (or provider 'fake)
+   :model (or model "fake-model")
+   :text (or text "")
+   :tool-calls tool-calls
+   :usage usage
+   :thinking thinking
+   :latency latency
+   :metadata metadata))
+
 (defun benedict-core-test--dispatch (responses &optional record-request)
   "Return a synchronous fake provider dispatch over RESPONSES.
 When RECORD-REQUEST is non-nil, call it with each request."
@@ -44,9 +59,7 @@ When RECORD-REQUEST is non-nil, call it with each request."
                    :model "fake-model"
                    :provider-dispatch-fn
                    (benedict-core-test--dispatch
-                    (list '(:provider fake
-                            :model "fake-model"
-                            :message (:role assistant :content "Done.")))
+                    (list (benedict-core-test--result :text "Done."))
                     (lambda (request)
                       (setq requests (append requests (list request))))))))
     (benedict-core-add-user-input session "Hello")
@@ -78,7 +91,7 @@ When RECORD-REQUEST is non-nil, call it with each request."
                    (benedict-core-test--event-types session)))))
 
 (ert-deftest benedict-core-provider-request-includes-session-controls ()
-  "Core provider requests include autonomy and verbosity controls."
+  "Core provider requests include runtime controls and canonical transcript."
   (let* ((captured nil)
          (autonomy '(:max-turns 2 :max-time 30))
          (verbosity 'concise)
@@ -89,15 +102,17 @@ When RECORD-REQUEST is non-nil, call it with each request."
                    :verbosity verbosity
                    :provider-dispatch-fn
                    (benedict-core-test--dispatch
-                    (list '(:provider fake
-                            :model "fake-model"
-                            :message (:role assistant :content "Done.")))
+                    (list (benedict-core-test--result :text "Done."))
                     (lambda (request)
                       (setq captured request))))))
     (benedict-core-add-user-input session "Hello")
     (benedict-core-run session)
     (should (equal autonomy (plist-get captured :autonomy)))
-    (should (eq verbosity (plist-get captured :verbosity)))))
+    (should (eq verbosity (plist-get captured :verbosity)))
+    (should (cl-every #'benedict-message-p (plist-get captured :messages)))
+    (should (equal '(user)
+                   (mapcar #'benedict-message-role
+                           (plist-get captured :messages))))))
 
 (ert-deftest benedict-core-continues-after-auto-approved-tool-result ()
   "A provider -> tool -> provider loop completes without chat buffers."
@@ -114,16 +129,11 @@ When RECORD-REQUEST is non-nil, call it with each request."
                                             "tool output")))
                    :provider-dispatch-fn
                    (benedict-core-test--dispatch
-                    (list '(:provider fake
-                            :model "fake-model"
-                            :message (:role assistant
-                                      :content ""
-                                      :tool-calls ((:id "call-1"
-                                                    :name lookup
-                                                    :arguments nil))))
-                          '(:provider fake
-                            :model "fake-model"
-                            :message (:role assistant :content "Final.")))
+                    (list (benedict-core-test--result
+                           :tool-calls '((:id "call-1"
+                                          :name lookup
+                                          :arguments nil)))
+                          (benedict-core-test--result :text "Final."))
                     (lambda (request)
                       (setq requests (append requests (list request))))))))
     (benedict-core-add-user-input session "Use a tool")
@@ -157,16 +167,11 @@ When RECORD-REQUEST is non-nil, call it with each request."
                                             "wrote note")))
                    :provider-dispatch-fn
                    (benedict-core-test--dispatch
-                    (list '(:provider fake
-                            :model "fake-model"
-                            :message (:role assistant
-                                      :content ""
-                                      :tool-calls ((:id "call-approval"
-                                                    :name write-note
-                                                    :arguments nil))))
-                          '(:provider fake
-                            :model "fake-model"
-                            :message (:role assistant :content "Recovered.")))
+                    (list (benedict-core-test--result
+                           :tool-calls '((:id "call-approval"
+                                          :name write-note
+                                          :arguments nil)))
+                          (benedict-core-test--result :text "Recovered."))
                     (lambda (request)
                       (setq requests (append requests (list request))))))))
     (benedict-core-add-user-input session "Write something")
@@ -214,16 +219,11 @@ When RECORD-REQUEST is non-nil, call it with each request."
                                             "authorized content")))
                    :provider-dispatch-fn
                    (benedict-core-test--dispatch
-                    (list '(:provider fake
-                            :model "fake-model"
-                            :message (:role assistant
-                                      :content ""
-                                      :tool-calls ((:id "call-rewrite"
-                                                    :name read-file
-                                                    :arguments (:path "../README.org")))))
-                          '(:provider fake
-                            :model "fake-model"
-                            :message (:role assistant :content "Done.")))))))
+                    (list (benedict-core-test--result
+                           :tool-calls '((:id "call-rewrite"
+                                          :name read-file
+                                          :arguments (:path "../README.org"))))
+                          (benedict-core-test--result :text "Done."))))))
     (benedict-core-add-user-input session "Read the file")
     (benedict-core-run session)
     (should (equal '(:path "/repo/README.org") seen-args))
@@ -256,16 +256,11 @@ When RECORD-REQUEST is non-nil, call it with each request."
                                             "wrote safe file")))
                    :provider-dispatch-fn
                    (benedict-core-test--dispatch
-                    (list '(:provider fake
-                            :model "fake-model"
-                            :message (:role assistant
-                                      :content ""
-                                      :tool-calls ((:id "call-updated-approval"
-                                                    :name write-file
-                                                    :arguments (:path "/tmp/unsafe.el")))))
-                          '(:provider fake
-                            :model "fake-model"
-                            :message (:role assistant :content "Done.")))))))
+                    (list (benedict-core-test--result
+                           :tool-calls '((:id "call-updated-approval"
+                                          :name write-file
+                                          :arguments (:path "/tmp/unsafe.el"))))
+                          (benedict-core-test--result :text "Done."))))))
     (benedict-core-add-user-input session "Write the file")
     (benedict-core-run session)
     (let* ((yield (car (benedict-session-outstanding-yields session)))
@@ -278,7 +273,8 @@ When RECORD-REQUEST is non-nil, call it with each request."
 
 (ert-deftest benedict-core-action-denial-can-return-tool-result ()
   "An action can append an in-band tool result and continue."
-  (let* ((session (benedict-core-create-session
+  (let* ((requests nil)
+         (session (benedict-core-create-session
                    :provider 'fake
                    :model "fake-model"
                    :tools (list (list :id 'danger
@@ -292,16 +288,13 @@ When RECORD-REQUEST is non-nil, call it with each request."
                             "Denied by test action pipeline")))
                    :provider-dispatch-fn
                    (benedict-core-test--dispatch
-                    (list '(:provider fake
-                            :model "fake-model"
-                            :message (:role assistant
-                                      :content ""
-                                      :tool-calls ((:id "call-denied"
-                                                    :name danger
-                                                    :arguments nil))))
-                          '(:provider fake
-                            :model "fake-model"
-                            :message (:role assistant :content "Handled.")))))))
+                    (list (benedict-core-test--result
+                           :tool-calls '((:id "call-denied"
+                                          :name danger
+                                          :arguments nil)))
+                          (benedict-core-test--result :text "Handled."))
+                    (lambda (request)
+                      (setq requests (append requests (list request))))))))
     (benedict-core-add-user-input session "Do risky work")
     (benedict-core-run session)
     (should (eq (benedict-session-run-state session) 'idle))
@@ -309,7 +302,16 @@ When RECORD-REQUEST is non-nil, call it with each request."
       (should (eq (benedict-message-status tool-message) 'denied))
       (should (string-match-p "Denied by test action pipeline"
                               (plist-get (benedict-message-tool-result-details tool-message)
-                                         :message))))))
+                                         :message))))
+    (let* ((follow-up (cadr requests))
+           (messages (plist-get follow-up :messages))
+           (tool-message (cl-find 'tool messages :key #'benedict-message-role)))
+      (should (cl-every #'benedict-message-p messages))
+      (should tool-message)
+      (should (equal "call-denied"
+                     (benedict-message-tool-result-id tool-message)))
+      (should (string-match-p "Denied by test action pipeline"
+                              (benedict-provider-message-content tool-message))))))
 
 (ert-deftest benedict-core-malformed-action-stage-emits-contract-violation ()
   "Malformed action pipeline output is reported at the pipeline boundary."
@@ -324,16 +326,11 @@ When RECORD-REQUEST is non-nil, call it with each request."
                                             (error "Must not run"))))
                    :provider-dispatch-fn
                    (benedict-core-test--dispatch
-                    (list '(:provider fake
-                            :model "fake-model"
-                            :message (:role assistant
-                                      :content ""
-                                      :tool-calls ((:id "call-contract"
-                                                    :name lookup
-                                                    :arguments nil))))
-                          '(:provider fake
-                            :model "fake-model"
-                            :message (:role assistant :content "Handled.")))))))
+                    (list (benedict-core-test--result
+                           :tool-calls '((:id "call-contract"
+                                          :name lookup
+                                          :arguments nil)))
+                          (benedict-core-test--result :text "Handled."))))))
     (benedict-core-add-user-input session "Use a tool")
     (benedict-core-run session)
     (let* ((event (cl-find 'contract-violation (benedict-session-events session)
@@ -361,16 +358,11 @@ When RECORD-REQUEST is non-nil, call it with each request."
                                             (error "Must not run"))))
                    :provider-dispatch-fn
                    (benedict-core-test--dispatch
-                    (list '(:provider fake
-                            :model "fake-model"
-                            :message (:role assistant
-                                      :content ""
-                                      :tool-calls ((:id "call-invalid-action"
-                                                    :name lookup
-                                                    :arguments nil))))
-                          '(:provider fake
-                            :model "fake-model"
-                            :message (:role assistant :content "Handled.")))))))
+                    (list (benedict-core-test--result
+                           :tool-calls '((:id "call-invalid-action"
+                                          :name lookup
+                                          :arguments nil)))
+                          (benedict-core-test--result :text "Handled."))))))
     (benedict-core-add-user-input session "Use a tool")
     (benedict-core-run session)
     (let ((tool-message (nth 2 (benedict-session-entries-chronological session))))
@@ -399,16 +391,11 @@ When RECORD-REQUEST is non-nil, call it with each request."
                                         :fn (lambda (&rest _args) "ok")))
                      :provider-dispatch-fn
                      (benedict-core-test--dispatch
-                      (list '(:provider fake
-                              :model "fake-model"
-                              :message (:role assistant
-                                        :content ""
-                                        :tool-calls ((:id "call-context"
-                                                      :name lookup
-                                                      :arguments nil))))
-                            '(:provider fake
-                              :model "fake-model"
-                              :message (:role assistant :content "Done.")))))))
+                      (list (benedict-core-test--result
+                             :tool-calls '((:id "call-context"
+                                            :name lookup
+                                            :arguments nil)))
+                            (benedict-core-test--result :text "Done."))))))
       (benedict-core-add-user-input session "Use a tool")
       (benedict-core-run session)
       (should seen-context)

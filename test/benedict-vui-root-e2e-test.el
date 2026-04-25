@@ -21,9 +21,7 @@
   "Submit PROMPT through SESSION for mounted root test flows."
   (benedict-session-add-message
    session
-   (list :role 'user
-         :content prompt
-         :time (current-time)))
+   (benedict-message-user-text prompt))
   (benedict-core-run session))
 
 (defun benedict-vui-root-e2e-test--buffer-text ()
