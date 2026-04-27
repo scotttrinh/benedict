@@ -35,7 +35,8 @@
 (ert-deftest-async benedict-vui-root-e2e-simple-success-lifecycle (done)
   "Simple success shows user + assistant lifecycle and settles session state."
   (benedict-test-with-bindings done
-      ((benedict-provider 'fake)
+      ((benedict-session--registry (make-hash-table :test 'equal))
+       (benedict-provider 'fake)
        (benedict-provider-fake-latency-seconds 0.01)
        (benedict-provider-fake-script
         (list (list :type 'success :content "Hello there"))))
@@ -55,7 +56,8 @@
 (ert-deftest-async benedict-vui-root-e2e-streaming-chunks-incremental-draft (done)
   "Streaming chunks appear incrementally before final assistant message settles."
   (benedict-test-with-bindings done
-      ((benedict-provider 'fake)
+      ((benedict-session--registry (make-hash-table :test 'equal))
+       (benedict-provider 'fake)
        (benedict-provider-fake-latency-seconds 0.01)
        (benedict-provider-fake-streaming-chunk-delay 0.08)
        (benedict-provider-fake-script
@@ -83,7 +85,8 @@
 (ert-deftest-async benedict-vui-root-e2e-streaming-tool-calls-show-use-and-result-status (done)
   "Streaming + tool calls render tool use/result blocks with statuses."
   (benedict-test-with-bindings done
-      ((benedict-provider 'fake)
+      ((benedict-session--registry (make-hash-table :test 'equal))
+       (benedict-provider 'fake)
        (benedict-provider-fake-latency-seconds 0.01)
        (benedict-provider-fake-streaming-chunk-delay 0.02)
        (benedict-provider-fake-script
@@ -119,7 +122,8 @@
 (ert-deftest-async benedict-vui-root-e2e-turn-progression-promotes-answer-and-collapses-execution (done)
   "A streaming turn settles into answer-first history with expandable execution detail."
   (benedict-test-with-bindings done
-      ((benedict-provider 'fake)
+      ((benedict-session--registry (make-hash-table :test 'equal))
+       (benedict-provider 'fake)
        (benedict-provider-fake-latency-seconds 0.01)
        (benedict-provider-fake-streaming-chunk-delay 0.08)
        (benedict-provider-fake-script
@@ -207,7 +211,8 @@
 (ert-deftest-async benedict-vui-root-e2e-streaming-thinking-payload-visible (done)
   "Streaming + thinking payload renders the thinking block label."
   (benedict-test-with-bindings done
-      ((benedict-provider 'fake)
+      ((benedict-session--registry (make-hash-table :test 'equal))
+       (benedict-provider 'fake)
        (benedict-provider-fake-latency-seconds 0.01)
        (benedict-provider-fake-streaming-chunk-delay 0.01)
        (benedict-provider-fake-script
@@ -227,7 +232,8 @@
 (ert-deftest-async benedict-vui-root-e2e-provider-model-update-reflects-in-header (done)
   "Provider/model changes from completion render in header badge."
   (benedict-test-with-bindings done
-      ((benedict-provider 'fake)
+      ((benedict-session--registry (make-hash-table :test 'equal))
+       (benedict-provider 'fake)
        (benedict-provider-fake-latency-seconds 0.01)
        (benedict-provider-fake-script
         (list (list :type 'success
@@ -246,7 +252,8 @@
 (ert-deftest-async benedict-vui-root-e2e-usage-renders-in-status-bar (done)
   "Usage payload renders tokens and cost in the status bar."
   (benedict-test-with-bindings done
-      ((benedict-provider 'fake)
+      ((benedict-session--registry (make-hash-table :test 'equal))
+       (benedict-provider 'fake)
        (benedict-provider-fake-latency-seconds 0.01)
        (benedict-provider-fake-script
         (list (list :type 'success
@@ -310,7 +317,8 @@
 (ert-deftest-async benedict-vui-root-e2e-empty-assistant-response-does-not-crash (done)
   "Empty assistant responses keep UI/session stable without streaming residue."
   (benedict-test-with-bindings done
-      ((benedict-provider 'fake)
+      ((benedict-session--registry (make-hash-table :test 'equal))
+       (benedict-provider 'fake)
        (benedict-provider-fake-latency-seconds 0.01)
        (benedict-provider-fake-script
         (list (list :type 'success :content ""))))
@@ -330,7 +338,8 @@
 (ert-deftest-async benedict-vui-root-e2e-multi-turn-continuity-keeps-navigation-stable (done)
   "Multi-turn scripted runs preserve transcript continuity and navigation properties."
   (benedict-test-with-bindings done
-      ((benedict-provider 'fake)
+      ((benedict-session--registry (make-hash-table :test 'equal))
+       (benedict-provider 'fake)
        (benedict-provider-fake-latency-seconds 0.01)
        (benedict-provider-fake-script
         (list (list :type 'success :content "First answer")

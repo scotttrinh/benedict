@@ -10,11 +10,21 @@
 (require 'benedict-chat)
 (require 'benedict-message)
 (require 'benedict-session)
+(require 'benedict-turn)
 
 (defun benedict-chat-nav-test--message-with-id (message id)
   "Return MESSAGE with ID assigned."
   (setf (benedict-message-id message) id)
   message)
+
+(defun benedict-chat-nav-test--completed-turn (session id prompt-id outcome-id message-ids)
+  "Return completed turn for SESSION with ID, PROMPT-ID, OUTCOME-ID, and MESSAGE-IDS."
+  (benedict-turn-create (benedict-session-id session)
+                        :id id
+                        :state 'turn-complete
+                        :prompt-message-id prompt-id
+                        :outcome-message-id outcome-id
+                        :message-ids message-ids))
 
 (defmacro benedict-chat-nav-test--with-chat-buffer (session &rest body)
   "Mount SESSION in a chat buffer and evaluate BODY."
@@ -38,6 +48,7 @@
         (session (benedict-session-create :title "nav"
                                           :provider 'fake
                                           :model "fake/model")))
+    (puthash (benedict-session-id session) session benedict-session--registry)
     (benedict-session-add-message
      session (benedict-chat-nav-test--message-with-id
               (benedict-message-user-text "First question") "u1"))
@@ -50,6 +61,11 @@
     (benedict-session-add-message
      session (benedict-chat-nav-test--message-with-id
               (benedict-message-assistant-text "Second answer") "a2"))
+    (setf (benedict-session-turns session)
+          (list (benedict-chat-nav-test--completed-turn
+                 session "turn-1" "u1" "a1" '("u1" "a1"))
+                (benedict-chat-nav-test--completed-turn
+                 session "turn-2" "u2" "a2" '("u2" "a2"))))
     (benedict-chat-nav-test--with-chat-buffer session
       (goto-char (point-min))
       (benedict-chat-nav-next-prompt)
@@ -74,6 +90,7 @@
         (session (benedict-session-create :title "execution"
                                           :provider 'fake
                                           :model "fake/model")))
+    (puthash (benedict-session-id session) session benedict-session--registry)
     (benedict-session-add-message
      session (benedict-chat-nav-test--message-with-id
               (benedict-message-user-text "Question") "u1"))
@@ -90,6 +107,9 @@
      (benedict-chat-nav-test--message-with-id
       (benedict-message-tool-result "call-1" "bash" 'success "done")
       "t1"))
+    (setf (benedict-session-turns session)
+          (list (benedict-chat-nav-test--completed-turn
+                 session "turn-1" "u1" "a1" '("u1" "a1" "t1"))))
     (benedict-chat-nav-test--with-chat-buffer session
       (should-not (string-match-p "Execution details" (buffer-string)))
       (goto-char (point-min))

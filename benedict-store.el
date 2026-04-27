@@ -167,7 +167,7 @@
         (delete-file temp-path)))))
 
 (defun benedict-store--turn->sexp (turn)
-  "Convert benedict-turn struct to serializable sexp."
+  "Convert TURN to a serializable sexp."
   (when turn
     (list :id (benedict-turn-id turn)
           :session-id (benedict-turn-session-id turn)

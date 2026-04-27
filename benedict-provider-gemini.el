@@ -510,11 +510,21 @@ Returns the displayed buffer's name."
           (push message remainder))))
     (list system (nreverse remainder))))
 
+(defun benedict-provider-gemini--serialize-tool (tool)
+  "Serialize a benedict TOOL spec to Gemini functionDeclaration."
+  (let ((name (plist-get tool :name))
+        (doc (plist-get tool :description))
+        (schema (plist-get tool :parameters)))
+    (list (cons "name" name)
+          (cons "description" (or doc ""))
+          (cons "parameters" schema))))
+
 (defun benedict-provider-gemini--build-body (request &optional project-id wrap)
   "Return JSON-ready alist for REQUEST.
 When WRAP is non-nil, wrap the request in a Code Assist-compatible structure
 using PROJECT-ID."
-  (let ((messages (plist-get request :messages)))
+  (let ((messages (plist-get request :messages))
+        (tools (plist-get request :tools)))
     (setq messages (benedict-provider-request-messages request "Gemini"))
     (pcase-let* ((`(,system ,content-messages)
                    (benedict-provider-gemini--extract-system-prompt messages))
@@ -533,6 +543,11 @@ using PROJECT-ID."
                                 (benedict-provider-gemini--stringify
                                   (benedict-provider-message-content system))))))
               body))
+      (when tools
+        (let ((declarations (mapcar #'benedict-provider-gemini--serialize-tool tools)))
+          (push (cons "tools"
+                      (vector (list (cons "functionDeclarations" (vconcat declarations)))))
+                body)))
       (let (generation)
         (when (plist-member request :temperature)
           (let ((value (plist-get request :temperature)))
@@ -603,6 +618,48 @@ When WRAP is non-nil, use the Cloud Code Assist endpoint and /v1internal prefix.
         (setq result (plist-put result :total total)))
       result)))
 
+(defun benedict-provider-gemini--object-get (object key)
+  "Return KEY from Gemini JSON OBJECT regardless of parsed container type."
+  (let* ((name (substring (symbol-name key) 1))
+         (string-key name)
+         (symbol-key (intern name)))
+    (cond
+     ((hash-table-p object)
+      (or (gethash key object)
+          (gethash string-key object)
+          (gethash symbol-key object)))
+     ((and (consp object) (consp (car object)))
+      (or (alist-get key object)
+          (alist-get string-key object nil nil #'string=)
+          (alist-get symbol-key object)))
+     ((listp object)
+      (plist-get object key))
+     (t nil))))
+
+(defun benedict-provider-gemini--tool-args-json (args)
+  "Return canonical JSON argument string for Gemini ARGS."
+  (if args
+      (json-encode args)
+    "{}"))
+
+(defun benedict-provider-gemini--extract-tool-calls (parts)
+  "Return extracted Gemini tool-call plists from PARTS."
+  (let (calls)
+    (cl-loop for part in (cond
+                          ((vectorp parts) (append parts nil))
+                          ((listp parts) parts)
+                          (t nil))
+             for call = (benedict-provider-gemini--object-get part :functionCall)
+             when call
+             do (let* ((name (benedict-provider-gemini--object-get call :name))
+                       (args (benedict-provider-gemini--object-get call :args))
+                       (args-json (benedict-provider-gemini--tool-args-json args)))
+                  (push (list :id (format "call_%s" (md5 (format "%s%s" name (random))))
+                              :name name
+                              :arguments args-json)
+                        calls)))
+    (nreverse calls)))
+
 (defun benedict-provider-gemini--handle-success (body context)
   "Handle successful BODY for CONTEXT."
   (condition-case err
@@ -616,6 +673,7 @@ When WRAP is non-nil, use the Cloud Code Assist endpoint and /v1internal prefix.
              (parts (or (and content (plist-get content :parts))
                         (plist-get first :parts)))
              (text (benedict-provider-gemini--parts->text parts))
+             (tool-calls (benedict-provider-gemini--extract-tool-calls parts))
              (usage (benedict-provider-gemini--usage-from-metadata
                      (plist-get effective :usageMetadata)))
              (request-id (plist-get context :request-id))
@@ -623,6 +681,7 @@ When WRAP is non-nil, use the Cloud Code Assist endpoint and /v1internal prefix.
              (latency (and start (float-time (time-subtract (current-time) start))))
              (result (benedict-provider-result-create
                       :text text
+                      :tool-calls tool-calls
                       :model (plist-get context :model)
                       :provider 'gemini
                       :usage usage

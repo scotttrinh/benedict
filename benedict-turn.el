@@ -2,7 +2,7 @@
 
 ;;; Commentary:
 ;; A turn represents one logical unit of work from user input through final
-;; assistant response, policy stop, cancellation, or error. It owns transient
+;; assistant response, policy stop, cancellation, or error.  It owns transient
 ;; inner state: control-owner/turn-state, message IDs that belong to the turn,
 ;; prompt and outcome message IDs, outstanding turn yields, request/draft linkage,
 ;; usage and timing telemetry, phase, and turn-local metadata.
@@ -27,20 +27,15 @@
 (defun benedict-turn-create (session-id &rest plist)
   "Create a new turn for SESSION-ID with PLIST."
   (let* ((now (current-time))
-         (id (format "turn-%s-%03d"
-                     (format-time-string "%Y%m%d%H%M%S" now)
-                     (cl-incf benedict-turn--seq)))
-         (turn (benedict-turn--create
-                :id id
-                :session-id session-id
-                :created-at now
-                :updated-at now)))
-    (cl-loop for (k v) on plist by #'cddr
-             do (pcase k
-                  (:state (setf (benedict-turn-state turn) v))
-                  (:phase (setf (benedict-turn-phase turn) v))
-                  (:prompt-message-id (setf (benedict-turn-prompt-message-id turn) v))
-                  (:metadata (setf (benedict-turn-metadata turn) v))))
+         (id (or (plist-get plist :id)
+                 (format "turn-%s-%03d"
+                         (format-time-string "%Y%m%d%H%M%S" now)
+                         (cl-incf benedict-turn--seq))))
+         (args (list :id id
+                     :session-id session-id
+                     :created-at now
+                     :updated-at now))
+         (turn (apply #'benedict-turn--create (append args plist))))
     turn))
 
 (defun benedict-turn-touch (turn)

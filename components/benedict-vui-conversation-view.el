@@ -7,25 +7,27 @@
 ;;; Code:
 
 (require 'vui)
+(require 'benedict-turn)
 (require 'benedict-vui-turn-list)
 (require 'benedict-vui-streaming-indicator)
 
-(defun benedict-vui-conversation-view--streaming-active-p (streaming)
-  "Return non-nil if STREAMING indicates active streaming."
-  (and (listp streaming)
-       (eq (plist-get streaming :status) 'active)))
+(defun benedict-vui-conversation-view--streaming-active-p (active-turn)
+  "Return non-nil if ACTIVE-TURN indicates active streaming."
+  (and active-turn
+       (not (memq (benedict-turn-state active-turn) '(idle error turn-complete cancelled)))))
 
-(vui-defcomponent benedict-vui-conversation-view (conversation streaming collapsed-blocks on-toggle-block)
+(vui-defcomponent benedict-vui-conversation-view (session turns active-turn collapsed-blocks on-toggle-block)
   "Main conversation area containing TurnList and StreamingIndicator."
   :render
   (vui-vstack
    (vui-component 'benedict-vui-turn-list
-    :conversation conversation
-    :streaming streaming
+    :session session
+    :turns turns
+    :active-turn active-turn
     :collapsed-blocks collapsed-blocks
     :on-toggle-block on-toggle-block)
    (vui-component 'benedict-vui-streaming-indicator
-    :visible (benedict-vui-conversation-view--streaming-active-p streaming))))
+    :visible (benedict-vui-conversation-view--streaming-active-p active-turn))))
 
 (provide 'benedict-vui-conversation-view)
 ;;; benedict-vui-conversation-view.el ends here

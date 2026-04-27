@@ -15,6 +15,7 @@
 (require 'benedict-session)
 (require 'benedict-store)
 (require 'benedict-tools)
+(require 'benedict-turn)
 
 ;;; Registry Tests
 
@@ -113,6 +114,32 @@
   (let ((benedict-session--registry (make-hash-table :test 'equal)))
     (let ((session (benedict-session-create)))
       (should (eq 'idle (benedict-session-run-state session))))))
+
+(ert-deftest benedict-session-approval-pending-p-no-active-turn ()
+  "Approval pending is nil when SESSION has no active turn."
+  (let ((benedict-session--registry (make-hash-table :test 'equal)))
+    (let ((session (benedict-session-create)))
+      (should-not (benedict-session-approval-pending-p session)))))
+
+(ert-deftest benedict-session-approval-pending-p-active-turn-without-approval ()
+  "Approval pending is nil when active turn has no approval yield."
+  (let ((benedict-session--registry (make-hash-table :test 'equal)))
+    (let* ((session (benedict-session-create))
+           (turn (benedict-turn-create (benedict-session-id session)
+                                       :outstanding-yields
+                                       '((:type checkpoint-request :id "yield-1")))))
+      (setf (benedict-session-active-turn session) turn)
+      (should-not (benedict-session-approval-pending-p session)))))
+
+(ert-deftest benedict-session-approval-pending-p-active-turn-with-approval ()
+  "Approval pending is non-nil when active turn has an approval yield."
+  (let ((benedict-session--registry (make-hash-table :test 'equal)))
+    (let* ((session (benedict-session-create))
+           (turn (benedict-turn-create (benedict-session-id session)
+                                       :outstanding-yields
+                                       '((:type approval-request :id "yield-1")))))
+      (setf (benedict-session-active-turn session) turn)
+      (should (benedict-session-approval-pending-p session)))))
 
 ;;; Draft Tests
 

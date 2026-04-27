@@ -176,6 +176,46 @@
     (should-not (benedict-provider-gemini-test--json-get decoded "request"))
     (should (benedict-provider-gemini-test--json-get decoded "contents"))))
 
+(ert-deftest benedict-provider-gemini-payload-includes-function-declarations ()
+  "Payload encoding includes Gemini functionDeclarations for request tools."
+  (let* ((request (list :model "gemini-test"
+                        :messages (list (benedict-message-user-text "hi"))
+                        :tools (list (list :name "read_file"
+                                           :description "Read a file"
+                                           :parameters '(("type" . "object")
+                                                         ("properties" . (("path" . (("type" . "string"))))))))))
+         (encoded (benedict-provider-gemini--encode-payload request))
+         (decoded (json-parse-string encoded :object-type 'alist :array-type 'list))
+         (tools (benedict-provider-gemini-test--json-get decoded "tools"))
+         (declarations (benedict-provider-gemini-test--json-get (car tools) "functionDeclarations"))
+         (declaration (car declarations)))
+    (should (= (length tools) 1))
+    (should (= (length declarations) 1))
+    (should (equal (benedict-provider-gemini-test--json-get declaration "name") "read_file"))
+    (should (equal (benedict-provider-gemini-test--json-get declaration "description") "Read a file"))
+    (should (benedict-provider-gemini-test--json-get declaration "parameters"))))
+
+(ert-deftest benedict-provider-gemini-extract-tool-calls-preserves-plist-args ()
+  "Function-call extraction encodes plist args parsed from JSON."
+  (let* ((parsed (json-parse-string
+                  "{\"functionCall\":{\"name\":\"read_file\",\"args\":{\"path\":\"README.org\",\"limit\":2}}}"
+                  :object-type 'plist
+                  :array-type 'list))
+         (call (car (benedict-provider-gemini--extract-tool-calls (list parsed))))
+         (args (json-parse-string (plist-get call :arguments)
+                                  :object-type 'plist
+                                  :array-type 'list)))
+    (should (equal (plist-get call :name) "read_file"))
+    (should (equal (plist-get args :path) "README.org"))
+    (should (= (plist-get args :limit) 2))))
+
+(ert-deftest benedict-provider-gemini-extract-tool-calls-encodes-nil-args-as-empty-object ()
+  "Function-call extraction emits an empty object string for nil args."
+  (let* ((parts (list (list :functionCall (list :name "noop" :args nil))))
+         (call (car (benedict-provider-gemini--extract-tool-calls parts))))
+    (should (equal (plist-get call :name) "noop"))
+    (should (equal (plist-get call :arguments) "{}"))))
+
 (ert-deftest benedict-provider-gemini-header-redaction ()
   "Header redaction masks bearer tokens."
   (let* ((headers (benedict-provider-gemini--build-headers "secret-token"))

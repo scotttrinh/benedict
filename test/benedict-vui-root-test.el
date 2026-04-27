@@ -72,12 +72,45 @@
           (should (string-match-p "Instructions: AGENTS.md, \\.wigg/specs/03_ui_ux.md" text))
           (should (string-match-p "/tmp/benedict/session-1" text)))))))
 
+(ert-deftest benedict-vui-root-mount-renders-active-turn-struct ()
+  "Mounted root renders an active turn without treating it as a plist."
+  (let ((benedict-session--registry (make-hash-table :test #'equal)))
+    (let* ((session (benedict-session-create :title "active"
+                                             :provider 'fake
+                                             :model "fake/model"))
+           (msg (benedict-session-add-message session
+                                             (benedict-message-user-text "Active root prompt")))
+           (turn (benedict-turn-create (benedict-session-id session)
+                                       :id "turn-active-root"
+                                       :prompt-message-id (benedict-message-id msg)
+                                       :message-ids (list (benedict-message-id msg))
+                                       :state 'running)))
+      (setf (benedict-session-active-turn session) turn)
+      (with-mounted-vui-component
+          (vui-component 'benedict-vui-root
+                         :session session
+                         :register-actions nil
+                         :on-provider-click nil
+                         :on-continue-checkpoint nil
+                         :on-stop-checkpoint nil
+                         :on-approve-approval nil
+                         :on-deny-approval nil)
+        (let ((text (buffer-string)))
+          (should (string-match-p "Active root prompt" text))
+          (should (string-match-p "Activity" text)))))))
+
 (ert-deftest benedict-vui-root-session-events-drive-mounted-lifecycle ()
   "Mounted root follows the canonical session event flow."
   (with-mounted-vui-root
     (should-not (string-match-p "Hello from session" (buffer-string)))
-    (benedict-session-add-message session
-                                  (benedict-message-user-text "Hello from session"))
+    (let* ((msg (benedict-session-add-message session
+                                              (benedict-message-user-text "Hello from session")))
+           (turn (benedict-turn-create (benedict-session-id session)
+                                       :prompt-message-id (benedict-message-id msg)
+                                       :state 'running
+                                       :message-ids (list (benedict-message-id msg)))))
+      (setf (benedict-session-active-turn session) turn)
+      (benedict-vui-root-test--emit-session-event session 'turn-started))
     (vui-flush-sync)
     (should (string-match-p "Hello from session" (buffer-string)))
     (should-not (string-match-p "ACTIVE" (buffer-string)))
@@ -95,6 +128,12 @@
       (should (string-match-p "Hello world" text))
       (should (string-match-p "Tool: bash" text)))
     (benedict-session-finalize-draft session)
+    (let* ((turn (benedict-session-active-turn session))
+           (msg (benedict-session-add-message session (benedict-message-assistant-text "Hello world"))))
+      (benedict-turn-complete turn (benedict-message-id msg))
+      (setf (benedict-session-active-turn session) nil)
+      (setf (benedict-session-turns session) (list turn))
+      (benedict-vui-root-test--emit-session-event session 'turn-completed))
     (vui-flush-sync)
     (should-not (string-match-p "ACTIVE" (buffer-string)))))
 

@@ -11,6 +11,7 @@
 (require 'benedict-event)
 (require 'benedict-harness)
 (require 'benedict-message)
+(require 'benedict-turn)
 
 (autoload 'benedict-store-save-session "benedict-store" nil nil)
 (autoload 'benedict-store-load-session "benedict-store" nil nil)
@@ -236,9 +237,10 @@ Each function receives (SESSION EVENT-TYPE PAYLOAD).")
 
 (defun benedict-session-approval-pending-p (session)
   "Return non-nil when SESSION is waiting on a tool approval."
-  (cl-some (lambda (yield)
-             (eq (plist-get yield :type) 'approval-request))
-           (benedict-session-outstanding-yields session)))
+  (when-let ((turn (benedict-session-active-turn session)))
+    (cl-some (lambda (yield)
+               (eq (plist-get yield :type) 'approval-request))
+             (benedict-turn-outstanding-yields turn))))
 
 ;;; Messages
 

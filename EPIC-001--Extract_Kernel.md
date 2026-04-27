@@ -732,6 +732,47 @@ Acceptance:
 - Tests fail if a new module relies on ambient turn inference or session-level
   turn-state/yield state.
 
+### Phase 4/5 Working-Set Review Note
+
+Review of the current working set against phases 4 and 5 found that the
+direction is broadly aligned with the plan, but the phase should not be treated
+as complete until the remaining boundary and hygiene gaps are closed.
+
+What looks aligned:
+
+- VUI turn-list grouping heuristics have largely been removed in favor of
+  explicit `benedict-turn` records.
+- Session/core state is moving toward `active-turn` plus completed `turns`
+  rather than independent session-level turn state.
+- Gemini provider code is starting to own provider-specific tool declaration
+  serialization and function-call response normalization.
+
+Remaining gaps to close:
+
+- `benedict-session-approval-pending-p` still calls the old ambient
+  `benedict-session-outstanding-yields` accessor. It should be removed or
+  migrated to inspect the active turn's `benedict-turn-outstanding-yields`.
+- `components/benedict-vui-root.el` treats `active-turn` like a plist in at
+  least one render path. Active turns are `benedict-turn` structs, so VUI code
+  should use turn accessors consistently.
+- Gemini function-call argument extraction only preserves hash-table args, but
+  this provider parses JSON objects as plists. Real tool-call arguments can
+  therefore be serialized as `{}` unless plist/list args are handled.
+- `components/benedict-vui-turn.el` resolves messages by looking up the turn's
+  session in the global registry. That may be acceptable temporarily because
+  session entries remain canonical, but it weakens the "VUI receives explicit
+  turn records from kernel/session" boundary and should be revisited.
+- The working set contains scratch/unowned files (`run_test.el`, `run_test2.el`,
+  and `components/gemini-tools-update.el`). These should be removed or promoted
+  into intentional, style-compliant files before the phase is considered clean.
+
+Verification from the review:
+
+- Focused tests passed:
+  `nix run .#test -- test/benedict-vui-root-test.el test/benedict-vui-turn-test.el test/benedict-vui-turn-list-test.el test/benedict-provider-gemini-test.el test/benedict-session-test.el`
+- `nix run .#lint` completed, but reported checkdoc issues, including the
+  untracked `components/gemini-tools-update.el` scratch file.
+
 ## Open Design Questions
 
 - Should `benedict-core-create-session` wrap `benedict-session-create`, or should

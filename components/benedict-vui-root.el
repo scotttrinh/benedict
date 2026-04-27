@@ -12,6 +12,7 @@
 (require 'benedict-message)
 (require 'benedict-provider)
 (require 'benedict-session)
+(require 'benedict-turn)
 (require 'benedict-vui-audit-log)
 (require 'benedict-vui-approval-block)
 (require 'benedict-vui-chat-header)
@@ -90,8 +91,8 @@ toggle based on current membership.  COLLAPSED-BLOCKS may be a list or hash tabl
 
 (vui-defcomponent benedict-vui-root (session register-actions on-provider-click on-continue-checkpoint on-stop-checkpoint on-approve-approval on-deny-approval)
   "Root component owning all shared application state."
-  :state ((conversation nil)
-          (streaming nil)
+  :state ((turns nil)
+          (active-turn nil)
           (provider 'openrouter)
           (model "claude-3-5-sonnet-20241022")
           (collapsed-blocks nil)
@@ -102,9 +103,8 @@ toggle based on current membership.  COLLAPSED-BLOCKS may be a list or hash tabl
           (error nil)
           (usage nil))
   :on-mount
-  (let* ((initial-conversation (and session
-                                    (benedict-session-entries-chronological session)))
-         (initial-streaming (benedict-vui-root--session-draft session))
+  (let* ((initial-turns (and session (benedict-session-turns session)))
+         (initial-active-turn (and session (benedict-session-active-turn session)))
          (initial-provider (and session (benedict-session-provider session)))
          (initial-model (and session (benedict-session-model session)))
          (initial-usage (and session (benedict-session-last-usage session)))
@@ -115,10 +115,10 @@ toggle based on current membership.  COLLAPSED-BLOCKS may be a list or hash tabl
                                   (benedict-harness-audit-log
                                    (benedict-session-harness session))))))
     (vui-batch
-      (when initial-conversation
-        (vui-set-state :conversation initial-conversation))
-      (when initial-streaming
-        (vui-set-state :streaming initial-streaming))
+      (when initial-turns
+        (vui-set-state :turns initial-turns))
+      (when initial-active-turn
+        (vui-set-state :active-turn initial-active-turn))
       (when initial-provider
         (vui-set-state :provider initial-provider))
       (when initial-model
@@ -153,12 +153,11 @@ toggle based on current membership.  COLLAPSED-BLOCKS may be a list or hash tabl
           (funcall register-actions nil))))
     (vui-vstack
      (vui-component 'benedict-vui-chat-header
-       :provider provider
-       :model model
-       :status (when (plist-get streaming :status)
-                 (plist-get streaming :status))
-       :title "Chat"
-       :on-provider-click on-provider-click)
+      :provider provider
+      :model model
+      :status (when active-turn (benedict-turn-state active-turn))
+      :title "Chat"
+      :on-provider-click on-provider-click)
      (vui-component 'benedict-vui-session-panel
       :session-info session-info
       :collapsed (benedict-vui-root--collapsed-p collapsed-blocks "session-panel")
@@ -169,13 +168,14 @@ toggle based on current membership.  COLLAPSED-BLOCKS may be a list or hash tabl
       :checkpoint checkpoint
       :on-continue on-continue-checkpoint
       :on-stop on-stop-checkpoint)
-      (vui-component 'benedict-vui-approval-block
+     (vui-component 'benedict-vui-approval-block
       :approval approval
       :on-approve on-approve-approval
       :on-deny on-deny-approval)
-      (vui-component 'benedict-vui-conversation-view
-       :conversation conversation
-       :streaming streaming
+     (vui-component 'benedict-vui-conversation-view
+       :session session
+       :turns turns
+       :active-turn active-turn
        :collapsed-blocks collapsed-blocks
        :on-toggle-block toggle-block)
      (vui-component 'benedict-vui-audit-log
@@ -205,58 +205,12 @@ Returns a function that when called unsubscribes from events."
 
 (defun benedict-vui-root--handle-session-event (session event-type payload)
   "Handle SESSION EVENT-TYPE with PAYLOAD, updating component state."
+  (vui-set-state :turns (and session (benedict-session-turns session)))
+  (vui-set-state :active-turn (and session (benedict-session-active-turn session)))
   (pcase event-type
-    ('message-added
-     (let ((entry (plist-get payload :entry)))
-       (when entry
-         (vui-set-state :conversation
-           (lambda (conv)
-             (append conv (list entry))))))
+    ((or 'message-added 'message-updated 'draft-started 'draft-updated 'draft-finalized
+         'turn-started 'run-started 'run-completed)
      (vui-set-state :session-info (benedict-vui-root--session-info session)))
-    ('message-updated
-     (when-let ((entry (plist-get payload :entry)))
-       (vui-set-state :conversation
-                      (lambda (conv)
-                        (cl-loop for message in conv
-                                 collect (if (equal (benedict-message-id message)
-                                                    (benedict-message-id entry))
-                                             entry
-                                           message))))))
-    ('draft-started
-     (vui-set-state :streaming
-                    (list :status 'active
-                          :content ""
-                          :thinking nil
-                          :tool-calls nil)))
-    ('draft-updated
-     (let ((delta (plist-get payload :delta))
-           (tool-call (plist-get payload :tool-call))
-           (streaming-payload (plist-get payload :payload)))
-       (if delta
-           (vui-set-state :streaming
-             (lambda (s)
-               (list :status (plist-get s :status)
-                     :content (concat (plist-get s :content) delta)
-                     :thinking (plist-get s :thinking)
-                     :tool-calls (plist-get s :tool-calls))))
-         (if tool-call
-           (vui-set-state :streaming
-             (lambda (s)
-               (list :status (plist-get s :status)
-                     :content (plist-get s :content)
-                     :thinking (plist-get s :thinking)
-                     :tool-calls (append (plist-get s :tool-calls)
-                                         (list tool-call)))))
-           (when (eq (plist-get streaming-payload :kind) 'thinking-delta)
-             (vui-set-state :streaming
-               (lambda (s)
-                 (list :status (plist-get s :status)
-                       :content (plist-get s :content)
-                       :thinking (concat (or (plist-get s :thinking) "")
-                                         (or (plist-get streaming-payload :text) ""))
-                       :tool-calls (plist-get s :tool-calls)))))))))
-    ('draft-finalized
-     (vui-set-state :streaming nil))
     ('checkpoint-requested
      (vui-set-state :checkpoint
                     (list :reason (plist-get payload :reason)
@@ -295,7 +249,8 @@ Returns a function that when called unsubscribes from events."
          (vui-set-state :checkpoint nil))
        (vui-set-state :approval (benedict-vui-root--session-approval session))
        (when (and (eq axis 'run)
-                  (memq old-state '(streaming running))
+                  (not (eq new-state 'error))
+                  (not (eq new-state 'running))
                   (eq new-state 'idle))
          (vui-set-state :error nil))))
     ('session-saved
@@ -304,23 +259,24 @@ Returns a function that when called unsubscribes from events."
      (let ((success (plist-get payload :success))
            (error-payload (plist-get payload :error))
            (result (plist-get payload :result)))
-      (vui-set-state :session-info (benedict-vui-root--session-info session))
-      (when success
-        (unless (benedict-provider-result-p result)
-          (error "Request-completed result must be a benedict-provider-result"))
-        (when-let ((provider (benedict-provider-result-provider result)))
-          (vui-set-state :provider provider))
-        (when-let ((model (benedict-provider-result-model result)))
-          (vui-set-state :model model))
-        (when-let ((usage (benedict-provider-result-usage result)))
-          (vui-set-state :usage usage))
-         (vui-set-state :error nil))
-       (when (and (not success) error-payload)
-         (let ((error-message (cond
-                             ((plist-get error-payload :message)
-                              (plist-get error-payload :message))
-                             (t (format "Request failed: %S" error-payload)))))
-           (vui-set-state :error error-message)))))
+       (vui-set-state :session-info (benedict-vui-root--session-info session))
+       (if success
+           (progn
+             (unless (benedict-provider-result-p result)
+               (error "Request-completed result must be a benedict-provider-result"))
+             (when-let ((provider (benedict-provider-result-provider result)))
+               (vui-set-state :provider provider))
+             (when-let ((model (benedict-provider-result-model result)))
+               (vui-set-state :model model))
+             (when-let ((usage (benedict-provider-result-usage result)))
+               (vui-set-state :usage usage))
+             (vui-set-state :error nil))
+         (when error-payload
+           (let ((error-message (cond
+                                 ((plist-get error-payload :message)
+                                  (plist-get error-payload :message))
+                                 (t (format "Request failed: %S" error-payload)))))
+             (vui-set-state :error error-message))))))
     (_ nil)))
 
 (provide 'benedict-vui-root)

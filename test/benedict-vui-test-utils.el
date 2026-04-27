@@ -17,8 +17,7 @@
 
 Binds `session' in BODY so tests can drive session events directly."
   (declare (indent 0) (debug t))
-  `(let* ((benedict-session--registry (make-hash-table :test #'equal))
-          (session (benedict-session-create :title "test"
+  `(let* ((session (benedict-session-create :title "test"
                                            :provider 'fake
                                            :model benedict-provider-fake-default-model)))
      (with-mounted-vui-component
