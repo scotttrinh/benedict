@@ -1117,9 +1117,24 @@ regardless of model switching, but a switch makes them more likely:
    (they are real history and the UI shows them); the lowering pass omits them.
 3. **Images become placeholder text for non-vision models,** collapsing
    consecutive placeholders so a ten-image turn does not become ten lines of
-   noise.
+   noise. Tool results carrying images use a distinct placeholder, so the model
+   can tell an image it was shown from one a tool produced.
 4. **Nil content is normalized to an empty list,** since hand-built entries and
-   older session logs may violate the struct contract.
+   older session logs may violate the struct contract. *This rule needs no code
+   in elisp: nil is the empty list, and `benedict-entry-create` already runs
+   `benedict-entry-normalize-content`. It is retained because it is a real
+   requirement of the pass, discharged by the data model rather than by the
+   lowering module.*
+5. **Tool results orphaned by rule 2 are dropped.** An errored turn whose tools
+   had already run leaves results answering a call that rule 2 just removed. A
+   provider rejects an orphaned result exactly as hard as an orphaned call, so
+   removing one without the other trades a broken request for a different broken
+   request. Rules 1 and 5 are the two halves of one invariant: after the pass,
+   every tool call has a result and every result has a call.
+
+The set of surviving call ids is computed in its own sweep before the repair
+walk, so whether a result is orphaned does not depend on where it sits relative
+to its call.
 
 #### 7.8.7 Interaction with forking
 
@@ -1143,6 +1158,24 @@ Model switching should be visible in the transcript, not silent. When the active
 model changes mid-conversation, append a `role note` entry recording the change.
 The renderer marks the boundary; the lowering pass ignores it. Without this,
 reading back a session where quality changed at turn six is a mystery.
+
+#### 7.8.9 Notes have no wire role
+
+`note` is one of the four canonical roles (§4.5) and none of the wire protocols
+have anything to map it to. Lowering is where notes stop existing:
+
+- A note without `:context` is **dropped** — model-change markers, UI markers,
+  extension annotations. This is the same decision `benedict-entry-context-p`
+  makes for the kernel's context filter, applied again because
+  `benedict-api-lower` must be safe to call on a raw transcript path.
+- A note with `:context t` becomes a **`user` entry** with its content intact.
+
+The promotion is what makes "remember X for the rest of this session" (D4)
+actually reach a model. It happens once here rather than in each adapter for the
+same reason the degradation table does: the mapping is not a protocol difference,
+so expressing it in canonical space keeps every adapter's serializer dealing only
+with roles its protocol has. A promoted note is a user entry in every respect
+afterwards, including closing an open tool flow the way a typed message does.
 
 ---
 
@@ -1730,14 +1763,20 @@ and not the other, and a global filter discriminates via
 `benedict-current-session`.
 
 **Phase 2b — Lowering**
-`benedict-api-transform.el`. Origin test, degradation rules, tool-call id
-remapping, structural repair.
+`benedict-api-transform.el`. Origin test, degradation rules, note handling,
+tool-call id remapping, structural repair.
 *Exit:* with the fake provider impersonating two different model triples, build a
 transcript containing entries from both, lower it for each, and assert the
 degradation table of §7.8.4 holds in both directions. Assert a rewritten tool-call
 id propagates to its result. Assert an orphaned tool call yields a synthetic
-error result. This is pure data transformation and needs no network — it should be
-one of the most heavily tested modules in the system.
+error result, and that a result orphaned by a skipped errored turn is dropped
+(§7.8.6 rule 5). Assert a plain note vanishes and a context-flagged one arrives
+as a user entry (§7.8.9). Assert the fork-and-switch case of §7.8.7 — it is a
+fork, a model swap, and a lowering assertion, none of which need a network, and
+a bug there fails at the provider with an opaque error rather than locally, so
+it belongs in the phase that can catch it cheaply. This is pure data
+transformation and needs no network — it should be one of the most heavily
+tested modules in the system.
 
 **Phase 3 — First tool**
 `benedict-eval.el`.
@@ -1750,8 +1789,9 @@ turn sees it.
 *Exit:* a real multi-turn conversation with tool use against a cheap Vercel AI
 Gateway model. Separately: the adapter parses a recorded SSE stream fixture with
 byte-identical results. A two-turn test asserting reasoning-item continuity
-(§7.4). A fork-and-switch test (§7.8.7) confirming abandoned-branch signatures
-never reach the wire. This phase answers whether the API/provider split (§7.1) and
+(§7.4). The fork-and-switch case (§7.8.7) re-asserted over the real adapter,
+where what Phase 2b proved about the lowered entries is now proved about the
+bytes on the wire. This phase answers whether the API/provider split (§7.1) and
 the normalized event vocabulary (§7.3) actually hold — and it needs only one wire
 API to answer it (§7.4).
 
@@ -1896,6 +1936,24 @@ variables with the reducer creates a cycle. Firing a hook is not owning it.
 Nothing is lost for a reader, because §10.2 makes `apropos` on
 `"benedict-.*-functions"` the way these are found and it does not care which
 file they are in.
+
+**D16. Notes are dropped or promoted to `user` at lowering.** *(§7.8.9, §4.5)*
+§7.8.8 said the lowering pass "ignores" model-change notes and §4.5 said a note
+may opt into provider context; together they left a role no wire protocol can
+express arriving at every adapter. Lowering resolves it in canonical space:
+plain notes are dropped, context-flagged notes become `user` entries. The
+alternative — each adapter inventing the same note-to-message mapping — is a
+protocol difference that is not one, and D4's durable instructions would depend
+on every adapter having remembered to implement it.
+
+**D17. The tool-call id map is collected in its own pass.** *(§7.8.5, §7.8.6)*
+pi builds its id map while rewriting, in a single forward walk, so a result is
+only rewritten when its call was already visited. The same is true of its
+orphaned-call bookkeeping. Both are correct for a well-ordered transcript and
+fragile otherwise, and a transcript is exactly the thing this pass exists
+because it cannot assume about. Collecting the id map, and separately the set of
+surviving call ids, before either is applied costs a few lines in elisp and
+makes both rules order-independent.
 
 ---
 
