@@ -41,7 +41,16 @@
 ;; The store identifies a session only by object identity, and never reads its
 ;; slots.  That is what lets the kernel keep the store as an opaque handle, and
 ;; what lets these tests use any object at all as a stand-in for a session.
+;;
+;; Named rather than required, deliberately.  Reading a log is useful with no
+;; kernel loaded at all -- a session browser, a migration script, a test -- and
+;; `declare-function' plus these `defvar' declarations create no load-time
+;; dependency.  `add-hook' works on a hook variable that is not yet bound, so
+;; `benedict-store-install' is correct whether or not the kernel is present.
 (declare-function benedict-session-store "benedict-session" (session))
+(declare-function benedict-session-p "benedict-session" (object))
+(defvar benedict-entry-end-functions)
+(defvar benedict-head-change-functions)
 
 ;;;; Errors
 
@@ -363,16 +372,15 @@ DIRECTORY defaults to `benedict-store--directory'.  See
 
 ;;;; Subscribing a store to a session
 
-;; The kernel emits entries; the store subscribes.  These handlers exist now,
-;; with the arities the hooks will have, so that wiring them up later is an
-;; `add-hook' and nothing in this file has to change.  They are deliberately not
-;; installed here: guarding an `add-hook' against a hook variable that does not
-;; exist yet is the kind of thing that stays quietly broken.
+;; The kernel emits entries; the store subscribes.  Two hooks carry everything
+;; a log needs: `benedict-entry-end-functions' fires once an entry is complete
+;; and appended, and `benedict-head-change-functions' fires when head moves any
+;; other way -- in practice a fork, without which a session that ends on a
+;; branch reloads on the wrong one.
 ;;
-;; Note that SPEC-001 4.4 has no head-change hook, but a fork has to reach the
-;; log somehow and a branch affordance has to re-render on the same event.
-;; Phase 2 should add `benedict-head-change-functions'.  Until it does, a fork
-;; is durable only if something calls `benedict-store-set-head' directly.
+;; Installation is `benedict-store-install' rather than a bare `add-hook' at
+;; load time, so that requiring this file to read a log does not quietly
+;; subscribe the caller to every session in the image.
 
 (defvar benedict-store--attached
   (make-hash-table :test #'eq :weakness 'key)
@@ -395,10 +403,12 @@ Return the store that was attached, or nil when there was none."
   "Return the `benedict-store' persisting SESSION, or nil.
 
 Checks stores attached with `benedict-store-attach' first, then the
-session's own store slot if the session module is loaded.  SESSION is
-used only as an identity; this file never reads its slots."
+session's own store slot when the kernel is loaded and SESSION really is
+one.  Anything else is treated as an identity and nothing else, so a
+caller may use any object at all as a stand-in for a session."
   (or (gethash session benedict-store--attached)
-      (and (fboundp 'benedict-session-store)
+      (and (fboundp 'benedict-session-p)
+           (benedict-session-p session)
            (benedict-session-store session))))
 
 (defun benedict-store-on-entry-end (session entry)
@@ -414,13 +424,35 @@ SESSION has no store, so it is safe to install globally."
 (defun benedict-store-on-head-change (session _old new)
   "Record NEW as SESSION's head.  Return NEW.
 
-Intended for a head-change observation hook with the calling convention
-\(SESSION OLD-ID NEW-ID); OLD is ignored, since the log is a sequence of
-where head went rather than of how it moved.  Does nothing when SESSION
-has no store."
+Intended for `benedict-head-change-functions', whose calling convention
+is \(SESSION OLD-ID NEW-ID); OLD is ignored, since the log records where
+head went rather than how it moved.  Does nothing when SESSION has no
+store."
   (when-let* ((store (benedict-store-for-session session)))
     (benedict-store-set-head store new))
   new)
+
+;;;###autoload
+(defun benedict-store-install ()
+  "Subscribe the store to every session in this image.  Return t.
+
+Adds `benedict-store-on-entry-end' and `benedict-store-on-head-change' to
+the kernel's entry and head hooks.  Both no-op for a session with no
+store, so installing globally is safe and a session opts in simply by
+being created with one.
+
+Idempotent, because `add-hook' with a named function is: calling this
+twice, or reloading this file, subscribes nothing twice."
+  (add-hook 'benedict-entry-end-functions #'benedict-store-on-entry-end)
+  (add-hook 'benedict-head-change-functions #'benedict-store-on-head-change)
+  t)
+
+(defun benedict-store-uninstall ()
+  "Unsubscribe the store from the kernel's hooks.  Return t.
+Sessions keep their stores; nothing further is written to them."
+  (remove-hook 'benedict-entry-end-functions #'benedict-store-on-entry-end)
+  (remove-hook 'benedict-head-change-functions #'benedict-store-on-head-change)
+  t)
 
 (provide 'benedict-store)
 

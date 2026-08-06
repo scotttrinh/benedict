@@ -282,7 +282,7 @@ Returns a cons of BODY's value and the list of warning messages."
 ;;;; Subscription
 
 (ert-deftest benedict-store-persists-through-the-hook-handlers ()
-  "The handlers Phase 2 will install work now, with any object as a session."
+  "The hook handlers work with any object standing in for a session."
   (benedict-test-with-store-dir _dir
     (let* ((session (make-symbol "session"))
            (store (benedict-store-open "hooked"))

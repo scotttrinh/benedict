@@ -39,6 +39,11 @@ Each may only require from itself and the layers before it; see
 (require 'benedict)
 (require 'benedict-message)
 (require 'benedict-schema)
+(require 'benedict-tool)
+(require 'benedict-provider)
+(require 'benedict-session)
+(require 'benedict-core)
+(require 'benedict-provider-fake)
 (require 'benedict-store)
 
 (defun benedict-test-entry (role text &rest meta)
@@ -61,6 +66,139 @@ is not what these tests are checking and fsync per entry is slow."
           (write-region-inhibit-fsync t))
      (unwind-protect (progn ,@body)
        (delete-directory ,var t))))
+
+;;;; Driving the reducer
+
+;; The kernel re-enters itself only through `benedict-core-defer-function', and
+;; the fake provider paces its events through the same variable.  Binding it to
+;; a queue therefore takes both off the wall clock: a test runs the machine one
+;; transition at a time and asserts on what it finds in between.
+
+(defvar benedict-test-defer-queue nil
+  "Thunks the reducer and the fake provider have deferred, oldest first.")
+
+(defconst benedict-test-step-limit 500
+  "Most steps `benedict-test-drain' will run before declaring a runaway.
+A reducer that will not settle has to fail loudly rather than hang the
+suite until the runner's own timeout.")
+
+(defun benedict-test--defer (thunk)
+  "Queue THUNK for `benedict-test-step' instead of running it on a timer."
+  (setq benedict-test-defer-queue
+        (append benedict-test-defer-queue (list thunk))))
+
+(defmacro benedict-test-with-manual-defer (&rest body)
+  "Evaluate BODY with the reducer and the fake provider stepped by hand.
+The queue starts empty and any thunks left in it are discarded, so one
+test cannot leak work into the next."
+  (declare (indent 0) (debug body))
+  `(let ((benedict-test-defer-queue nil)
+         (benedict-core-defer-function #'benedict-test--defer))
+     ,@body))
+
+(defun benedict-test-step ()
+  "Run one deferred thunk.  Return non-nil when there was one to run."
+  (when-let* ((thunk (pop benedict-test-defer-queue)))
+    (funcall thunk)
+    t))
+
+(defun benedict-test-drain (&optional limit)
+  "Run deferred thunks until none remain.  Return the number run.
+
+Signals when more than LIMIT steps run, defaulting to
+`benedict-test-step-limit', because a reducer that never settles is a
+bug this suite should name rather than a hang the runner reports."
+  (let ((limit (or limit benedict-test-step-limit))
+        (steps 0))
+    (while (benedict-test-step)
+      (cl-incf steps)
+      (when (> steps limit)
+        (error "Reducer ran %d steps without settling" steps)))
+    steps))
+
+(defun benedict-test-run-until (predicate &optional limit)
+  "Step the reducer until PREDICATE returns non-nil.  Return its value.
+
+Returns nil when the queue empties or LIMIT steps pass first, so a caller
+that needs the condition met should assert on the return value."
+  (let ((limit (or limit benedict-test-step-limit))
+        (steps 0)
+        (result (funcall predicate)))
+    (while (and (not result) (< steps limit) (benedict-test-step))
+      (cl-incf steps)
+      (setq result (funcall predicate)))
+    result))
+
+;;;; Sessions on the fake provider
+
+(cl-defun benedict-test-session (turns &key tools system-prompt store
+                                       exhausted-action id transcript)
+  "Return a session whose model replays TURNS.
+
+TURNS is a fake-provider script; see `benedict-provider-fake-script'.
+TOOLS, SYSTEM-PROMPT, STORE, ID, and TRANSCRIPT are passed to
+`benedict-session-create'.  The model is reachable afterwards through
+`benedict-session-model', and its script through
+`benedict-provider-fake-script-of'."
+  (let* ((script (benedict-provider-fake-script
+                  turns :exhausted-action exhausted-action))
+         (model (benedict-provider-fake-model script)))
+    (benedict-session-create :id id
+                             :model model
+                             :tools tools
+                             :system-prompt system-prompt
+                             :store store
+                             :transcript transcript)))
+
+(defun benedict-test-record-states (session)
+  "Record SESSION's state transitions into a list and return the list cell.
+
+The returned cons has the transitions in order in its cdr, so a test
+reads them with (cdr CELL) after the run.  A session-local hook is used
+so that concurrent sessions in one test do not pollute each other."
+  (let ((cell (list 'states)))
+    (benedict-session-add-hook
+     session 'benedict-state-change-functions
+     (lambda (_session _old new) (setcdr cell (append (cdr cell) (list new)))))
+    cell))
+
+(defun benedict-test-states (cell)
+  "Return the states recorded into CELL by `benedict-test-record-states'."
+  (cdr cell))
+
+(defun benedict-test-entry-roles (session)
+  "Return the roles of the entries on SESSION's current path, in order."
+  (mapcar #'benedict-entry-role (benedict-session-path session)))
+
+(defun benedict-test-reset ()
+  "Clear global registries and hooks between tests.
+
+Tools, fake models, and every kernel hook are global, so a test that
+registers one has to be prevented from changing the next test's meaning."
+  (benedict-provider-fake-reset)
+  (dolist (hook '(benedict-run-start-functions
+                  benedict-run-end-functions
+                  benedict-turn-start-functions
+                  benedict-turn-end-functions
+                  benedict-entry-start-functions
+                  benedict-entry-update-functions
+                  benedict-entry-end-functions
+                  benedict-head-change-functions
+                  benedict-tool-start-functions
+                  benedict-tool-end-functions
+                  benedict-state-change-functions
+                  benedict-continue-predicate-functions
+                  benedict-context-filter-functions
+                  benedict-request-filter-functions
+                  benedict-tool-result-filter-functions
+                  benedict-tool-dispatch-functions))
+    (set hook nil)))
+
+(defmacro benedict-test-with-clean-registries (&rest body)
+  "Evaluate BODY with global hooks and the fake catalog reset before and after."
+  (declare (indent 0) (debug body))
+  `(unwind-protect (progn (benedict-test-reset) ,@body)
+     (benedict-test-reset)))
 
 (provide 'test-helper)
 
