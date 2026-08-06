@@ -167,7 +167,7 @@ A no-op when MODEL accepts image input."
 ;; rewrite does not depend on a result following its call in the entry list.
 
 (defun benedict-api-transform--tool-call-ids (entries model normalize)
-  "Return a hash table mapping original tool call ids to normalized ones.
+  "Return a hash table mapping ENTRIES' tool call ids to normalized ones.
 
 NORMALIZE is called with (ID MODEL ENTRY) and returns the id to use; an
 unchanged id records no mapping.  Only foreign entries are normalized,
