@@ -46,6 +46,7 @@ Each may only require from itself and the layers before it; see
 (require 'benedict-api-transform)
 (require 'benedict-provider-fake)
 (require 'benedict-store)
+(require 'benedict-eval)
 
 (defun benedict-test-entry (role text &rest meta)
   "Return an unappended entry with ROLE, a single text block TEXT, and META."
