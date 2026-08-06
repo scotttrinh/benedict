@@ -126,10 +126,10 @@ a complete, testable agent runtime with zero tools and no UI.
 | Module | Layer | Responsibility |
 |---|---|---|
 | `benedict-message.el` | kernel | Entry structs, content blocks, tree accessors |
-| `benedict-session.el` | kernel | Session struct, transcript head, queues |
+| `benedict-session.el` | kernel | Session struct, transcript head, queues, hook definitions and scoping (D15) |
 | `benedict-tool.el` | kernel | Tool struct, registry, invocation protocol |
 | `benedict-provider.el` | kernel | Provider/API registry, dispatch, model records |
-| `benedict-core.el` | kernel | Reducer, run state machine, hook definitions |
+| `benedict-core.el` | kernel | Reducer, run state machine |
 | `benedict-schema.el` | kernel | Parameter DSL → JSON Schema |
 | `benedict-http.el` | support | SSE reader, retry, error-body extraction |
 | `benedict-api-transform.el` | provider | Canonical→wire lowering, cross-model degradation |
@@ -167,8 +167,15 @@ Enumerated because the temptation to absorb each of these is strong:
 
 ## 4. The Kernel
 
-Target size: **under 1,500 lines** across the six kernel modules. If it grows
-past that, something in §3.3 has leaked in.
+Target size: **under 1,500 lines of code** across the six kernel modules. If it
+grows past that, something in §3.3 has leaked in.
+
+*Lines of code*, specifically — not lines of file. §10.2 makes docstrings the
+API documentation, written for an agent reading them cold, and they run about
+one line for every line of code they explain. Counting them against a budget
+whose purpose is to detect leaked policy would punish exactly the thing that
+section asks for. Measure by excluding docstrings, comments, and blanks; at the
+end of Phase 2 the six modules were 1,226 lines of code in 3,069 lines of file.
 
 ### 4.1 Public API
 
@@ -176,7 +183,7 @@ The entire kernel surface:
 
 ```elisp
 ;; Lifecycle
-(benedict-session-create &key system-prompt model provider tools store)
+(benedict-session-create &key system-prompt model provider tools store transcript)
 (benedict-session-submit session input)      ; user text/content -> starts a run
 (benedict-session-steer session content)     ; queue for injection mid-run
 (benedict-session-follow-up session content) ; queue for after the run would stop
@@ -188,10 +195,15 @@ The entire kernel surface:
 (benedict-session-entry session id)
 (benedict-session-children session id)
 (benedict-session-fork session id)           ; move head; next append branches
+(benedict-session-streaming-entry session)   ; the live partial entry (§4.3)
 
 ;; Scoped hooks (§4.4.1)
 (benedict-session-add-hook session hook fn &optional depth)
 (benedict-session-remove-hook session hook fn)
+
+;; Extension state
+(benedict-session-get session key &optional default)
+(benedict-session-put session key value)
 
 ;; Registries
 (benedict-tool-register tool)
@@ -200,10 +212,25 @@ The entire kernel surface:
 (benedict-provider-register provider)
 (benedict-api-register api)
 (benedict-model-resolve spec)                ; "vercel-ai-gateway/openai/gpt-5" -> model
+
+;; Provider dispatch (§7.2)
+(benedict-provider-stream model request handler)  ; -> cancel thunk
 ```
 
-Plus the hook variables in §4.4 and the dynamic variable
-`benedict-current-session`. That is the whole contract.
+Plus the hook variables in §4.4, the dynamic variable
+`benedict-current-session`, and `benedict-core-defer-function` (D13). That is
+the whole contract.
+
+`:transcript` adopts an existing tree rather than creating one, which is how a
+session is resumed from a log: `benedict-store-load` returns a transcript and
+the session takes it, keeping its session id so that entry ids continue the same
+sequence.
+
+`benedict-session-get`/`-put` are on the list because §4.4.1's own example calls
+them — a globally registered filter discriminating on
+`(benedict-session-get benedict-current-session :trusted)` needs somewhere for
+that property to live, and the alternative is every extension maintaining a
+weak hash table keyed by session.
 
 `:store` looks like it contradicts §3.3's "the kernel never touches the
 filesystem," and does not: it is an **opaque handle**. The kernel keeps it in a
@@ -248,6 +275,21 @@ any ──abort─────────────────────�
 `[continue?]` runs `benedict-continue-predicate-functions`, then drains the
 steering queue, then the follow-up queue. If a predicate vetoes and both queues
 are empty, the run ends.
+
+Spelled out, because the compression above hides two rules that matter:
+
+1. **The default depends on the incoming edge.** A turn that produced tool
+   results continues by default — the model has not seen them yet, and stopping
+   there would strand the work. A turn that produced only text stops by default.
+2. **Queued input overrides a veto.** A drained steering or follow-up message
+   continues the run whatever a predicate returned. A budget filter is a policy
+   about the agent's own momentum; a human's queued message is not the agent's
+   momentum. The veto is still recorded as the stop reason, so if the queues
+   empty and the predicate still objects, the run ends with the reason intact.
+
+Steering drains before follow-ups, and only when steering had nothing does a
+follow-up get taken: a steering message has already kept the run alive, so the
+follow-up can wait for the next boundary rather than piling in behind it.
 
 **Central function:**
 
@@ -305,6 +347,20 @@ The streaming entry is **not** appended to the transcript or written to the stor
 until the stream terminates. A failed or aborted stream still produces a terminal
 entry (with `stop-reason` of `error` or `aborted` and an `error-message`), so the
 transcript never contains a half-written entry and never silently loses a turn.
+
+**A streaming entry has no id.** Ids are minted at append time, so the entry
+carried by `benedict-entry-start-functions` for a stream is identified only by
+object identity until `benedict-entry-end-functions` fires with the same object,
+appended. Renderers must key their regions on the object, not on the id. This is
+not an accident of implementation: reserving an id up front would either mint ids
+that a failed stream never uses or need a second counter to reconcile, and the
+tree's id contract (§5.5) is worth more than saving renderers an `eq`.
+
+**A superseded stream's events are discarded.** The session carries a generation
+counter that an abort and each new request bump; the kernel drops any event, and
+any tool continuation, arriving under a stale one. Providers are asked to stop
+via a cancel thunk (§7.2) but are never trusted to stop promptly, which is what
+makes abort correct against an adapter that is mid-buffer when it is cancelled.
 
 ### 4.4 Hooks
 
@@ -778,6 +834,25 @@ JSON accumulators, block index mapping, reasoning-item ids). This is more
 idiomatic in elisp than threading an explicit state object and keeps the API
 module's internals genuinely private.
 
+**The kernel reaches all of this through exactly one function:**
+
+```elisp
+(benedict-provider-stream model request handler)  ; -> cancel thunk or nil
+```
+
+`request` is the canonical plist the kernel assembles and
+`benedict-request-filter-functions` transforms — `(:entries :system-prompt
+:tools :model :session)` — carrying canonical entries, never a wire payload.
+`handler` receives §7.3 events. The return value is a nullary thunk that asks
+the provider to stop.
+
+A provider may carry a `:stream` function of its own, which is how the fake
+provider (§7.7) supplies a transport with no HTTP; when it does not, dispatch
+falls through to the shared HTTP path over the provider's `:api`. The kernel
+cannot tell the two apart, which is the same property that lets a dispatch
+filter reroute a tool call to a sandbox without the kernel learning what a
+sandbox is.
+
 ### 7.3 Normalized event protocol
 
 Every API adapter emits the same event vocabulary. The kernel and every frontend
@@ -796,6 +871,21 @@ know only this:
 partial JSON argument text; the adapter is responsible for assembling and parsing
 complete arguments before emitting `:block-end`, so the kernel never sees invalid
 JSON.
+
+Two events carry more than the skeleton above, and both are consequences of that
+last rule:
+
+- `:block-start` for a `tool-call` carries `:id` and `:name`, which are known
+  when the item opens.
+- `:block-end` carries `:arguments` — the assembled, parsed plist — and
+  `:signature` for a block that has one. Arguments arrive here rather than
+  through deltas precisely because the deltas are partial text: an adapter that
+  emitted them as arguments would be handing the kernel invalid JSON, which is
+  the thing the kernel must never see.
+
+The kernel keeps a tool call's raw partial JSON on the block while it streams,
+so a frontend can render an argument list arriving, and strips it at
+`:block-end`. It is display state and never reaches the transcript or the log.
 
 **Stream contract.** An adapter must never signal an elisp error to its caller
 for a request, model, or network failure. Failures are encoded as a terminal
@@ -1626,8 +1716,12 @@ identical.
 
 **Phase 2 — Reducer**
 `benedict-session.el`, `benedict-core.el`, `benedict-tool.el`,
-`benedict-provider-fake.el`. Run state machine, hooks (global and session-local,
-§4.4.1), tool registry, dispatch chain, queue drain.
+`benedict-provider.el`, `benedict-provider-fake.el`. Run state machine, hooks
+(global and session-local, §4.4.1), tool registry, dispatch chain, queue drain.
+`benedict-provider.el` belongs here rather than in Phase 4 because the fake
+provider needs a registry to register into and a model record to be resolved
+through; only the registries and the §7.2 dispatch function land now, and the
+HTTP-backed path waits for the first real adapter.
 *Exit:* a multi-turn run with tool calls, driven entirely by the fake provider,
 with assertions on the state transition sequence. A dispatch filter that suspends
 and later resumes a run. An abort mid-stream that produces a well-formed terminal
@@ -1764,6 +1858,44 @@ session. Both: `benedict-message.el` owns a `benedict-transcript` with no
 knowledge of sessions, and `benedict-session.el` holds one in a slot and
 delegates. The tree is then testable, forkable, and serializable with no session
 at all — which is what let Phase 0 land before Phase 2 existed.
+
+**D12. One `tool-result` entry per tool call.** *(§4.5, §6.3)*
+A turn emitting three tool calls appends three `tool-result` entries as each
+completes, not one entry holding three blocks. Tools run sequentially, so a
+per-call entry is durable the moment its call returns rather than only once the
+slowest sibling has; a frontend subscribed to the entry hooks shows results
+appearing rather than a batch materializing; and an abort partway leaves a clean
+prefix instead of losing the results already computed. The tidier tree the
+alternative produces is not worth any of that.
+
+**D13. The reducer's deferral is a variable, not a convention.** *(§4.2)*
+`benedict-core-defer-function` is called with a thunk and must never run it
+synchronously; the default wraps `run-at-time 0 nil`. §4.2's "must never be
+called from within itself" is otherwise a rule enforced by review, and the
+failure it prevents — a stack overflow under a fast provider — appears only
+under load. Making it a variable also makes the machine steppable: a test binds
+it to a queue, runs one transition at a time, and asserts on the sequence,
+which is what turns "abort mid-stream" from a race into an assertion.
+The fake provider paces itself through the same variable for the same reason.
+
+**D14. The store is wired at Phase 2, not later.** *(§3.3, P3)*
+`benedict-store-install` subscribes `benedict-store-on-entry-end` and
+`benedict-store-on-head-change` to the kernel's hooks. Phase 2 is the first
+point at which P3 can be demonstrated rather than asserted — run a session, drop
+it, reload the log, compare the tree and the head — and the store's handlers
+already existed with the right arities, so leaving them unsubscribed would have
+meant shipping dead code past the phase that could prove it. The kernel gained
+nothing but an opaque `:store` slot.
+
+**D15. Hook variables live with the session, not the reducer.** *(§3.2, §4.4)*
+§3.2's module map assigns "hook definitions" to `benedict-core.el`; they are in
+`benedict-session.el` instead. Every hook is scoped by a session (§4.4.1) and
+the session owns that scoping mechanism, so a session cannot announce a fork
+without the hook — and the reducer already requires the session, so putting the
+variables with the reducer creates a cycle. Firing a hook is not owning it.
+Nothing is lost for a reader, because §10.2 makes `apropos` on
+`"benedict-.*-functions"` the way these are found and it does not care which
+file they are in.
 
 ---
 

@@ -39,6 +39,25 @@ from `support/`, `api/`, `providers/`, `ext/`, or `ui/`. This is enforced by
 `declare-function` and upward `autoload` cookies create no load-time dependency
 and are allowed.
 
+Within `core/`, the graph is `benedict.el` (a leaf) ← `benedict-message.el`,
+`benedict-schema.el` ← `benedict-tool.el`, `benedict-provider.el` ←
+`benedict-session.el` ← `benedict-core.el`. The hook variables live in
+`benedict-session.el` rather than with the reducer that fires them; SPEC-001
+§15 D15 says why.
+
+## Tests
+
+`test/test-helper.el` carries the shared fixtures. The reducer and the fake
+provider both defer through `benedict-core-defer-function`, so
+`benedict-test-with-manual-defer` takes both off the wall clock —
+`benedict-test-step` runs one transition, `benedict-test-drain` runs to
+quiescence and fails loudly on a runaway. Prefer that over timers and `sit-for`;
+a state machine test that depends on timing is not testing the state machine.
+
+Wrap anything that registers a tool, a provider, or a global hook in
+`benedict-test-with-clean-registries`. Those registries are global, so a test
+that leaves one dirty changes what the next test means.
+
 ## Coding style
 
 - Headers & lexical-binding
