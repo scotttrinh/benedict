@@ -675,11 +675,13 @@ itself."
   :parameters '((form :type string :required t
                       :description "A single Emacs Lisp form."))
   :handler (lambda (invocation done)
-             (funcall done
-                      (benedict-tool-result
-                       :content (benedict-eval--run
-                                 (benedict-tool-arg invocation :form))))))
+             (funcall done (benedict-eval--run
+                            (benedict-tool-arg invocation :form)))))
 ```
+
+`benedict-eval--run` returns a whole result rather than content, because it has
+to be able to set `error-p`: a form that signals is answered, not raised (§6.4),
+and only the handler knows the difference.
 
 `:parameters` is a small DSL compiled by `benedict-schema.el` into JSON Schema.
 Supported: `:type` (`string`/`integer`/`number`/`boolean`/`array`/`object`),
@@ -782,6 +784,22 @@ The distro ships five tools. Deliberately small.
 | `write-file` | Whole-file write. |
 | `edit-file` | Anchored string replacement, returns a structured diff. |
 | `describe` | `describe-function` / `describe-variable` / `apropos` as data. |
+
+`eval-elisp` takes **one** form. Several are the caller's `progn`, which also
+makes it explicit which value comes back, and trailing input is refused before
+anything is evaluated — a call that is going to be rejected must not have
+already had half its effect.
+
+Its result carries the printed value together with whatever the form wrote with
+`princ` or logged with `message`, including when the form fails partway: a form
+whose work is output returns nil, a result holding only that nil throws away
+what was asked for, and the output a half-finished loop produced is often the
+only diagnostic there is.
+
+There is no timeout, deliberately. `with-timeout` needs the form to yield and an
+elisp loop does not, so one here would look like a safety net without being one.
+§13.3 is where that risk is accepted and where the mitigations that do work are
+named.
 
 `read`/`write`/`edit` are technically redundant with `eval-elisp`, and are kept
 because they produce structured, reviewable, renderable results — a diff the UI
@@ -1443,6 +1461,13 @@ A user asks for a capability that does not exist. The agent:
 Step 4 is the payoff and the reason the medium was chosen. There is no reload
 subsystem to design, no restart, no lost session.
 
+One gap this loop has today: a tool registered by an evaluated form is callable
+immediately — an invocation resolves its tool through the registry — but a
+session's tool list is resolved once at creation, so no subsequent request tells
+the model that the tool it just wrote exists. Step 5 therefore works only
+because the agent remembers what it registered, which is not a property to build
+on. See §16.
+
 ### 10.2 Introspection over documentation
 
 A TypeScript runtime cannot answer "what does `registerTool` accept?" at runtime,
@@ -1471,7 +1496,8 @@ reverting is a normal debugging workflow here.
 
 The implication for the store: `role note` entries should record evaluated forms
 that modify the runtime, so a session transcript explains why the running image
-differs from what is on disk.
+differs from what is on disk. Nothing does this yet, because an extension has no
+sanctioned way to append an entry — §16 Q1.
 
 ### 10.4 System prompt
 
@@ -1780,8 +1806,12 @@ tested modules in the system.
 
 **Phase 3 — First tool**
 `benedict-eval.el`.
-*Exit:* the fake provider requests `eval-elisp`, the result is appended, the next
-turn sees it.
+*Exit:* the fake provider requests `eval-elisp`, the result is appended, and the
+next request carries it — asserted on the request rather than on the transcript,
+since "the next turn sees it" is a claim about what goes out on the wire and a
+context filter dropping tool results would satisfy the weaker reading.
+Separately: the agent defines a tool by evaluating a form and calls it on the
+following turn, which is §10.1 steps 4 and 5 with no file written and no reload.
 
 **Phase 4 — First real provider**
 `benedict-http.el`, `benedict-auth.el` (API key path only),
@@ -1959,5 +1989,30 @@ makes both rules order-independent.
 
 ## 16. Open Questions
 
-None currently blocking. New questions should be added here and promoted to §15
-when resolved, with the rationale preserved.
+New questions are added here and promoted to §15 when resolved, with the
+rationale preserved.
+
+**Q1. How does an extension append an entry?** *(§4.1, §9.3, §10.3)*
+§9.3 lists "append `role note` entries" as the way an extension persists state
+across restarts, and §10.3 asks `eval-elisp` to record runtime-modifying forms
+that way — but §4.1 publishes no function that appends an entry *and* announces
+it. `benedict-session-append` is a tree operation and fires nothing, so a note
+written through it reaches neither the store nor a renderer; the kernel's own
+path is private. Either the API grows a public entry-emitting function or the
+two sections above are promising something the kernel does not offer. This is
+what deferred §10.3 out of Phase 3.
+
+An answer also has to say where a note appended mid-turn lands. Head is the
+assistant entry that made the call, so the note falls between the call and its
+result — harmless on the wire, since lowering drops it (§7.8.9), but the
+renderer and the tree both see it.
+
+**Q2. How does a session learn about a tool registered mid-run?** *(§10.1, §4.1)*
+`benedict-session-create` resolves `:tools` once. A tool the agent defines by
+evaluating a form is callable but never advertised, so the self-extension loop
+completes only for an agent that remembers its own registration. The candidates
+are a session tool list that resolves lazily from the registry, an explicit
+refresh on the public API, or making the tool list a request filter's business.
+The choice matters more than it looks: it decides whether a session's offered
+tools are a snapshot or a view, and every frontend that renders a tool list
+depends on the answer.
