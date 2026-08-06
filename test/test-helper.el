@@ -43,12 +43,35 @@ Each may only require from itself and the layers before it; see
 (require 'benedict-provider)
 (require 'benedict-session)
 (require 'benedict-core)
+(require 'benedict-api-transform)
 (require 'benedict-provider-fake)
 (require 'benedict-store)
 
 (defun benedict-test-entry (role text &rest meta)
   "Return an unappended entry with ROLE, a single text block TEXT, and META."
   (benedict-entry-create :role role :content text :meta meta))
+
+;;;; Models without a session
+
+;; Lowering is pure data transformation, so its tests want a model record and
+;; never a transport.  The fake provider is still the way to get one: it is the
+;; only thing that can claim an arbitrary provider/api/model triple, which is
+;; what makes cross-model degradation testable in both directions.
+
+(defun benedict-test-model (&rest keys)
+  "Return a fake model with KEYS, replaying an empty script.
+KEYS are passed to `benedict-provider-fake-model'.  Use this when a test
+needs a model to lower for and will never open a stream through it."
+  (apply #'benedict-provider-fake-model
+         (benedict-provider-fake-script nil) keys))
+
+(defun benedict-test-origin-meta (model)
+  "Return the entry metadata that makes an entry same-origin with MODEL.
+The inverse of `benedict-entry-origin'; splice it into an entry's meta to
+mark the entry as produced by MODEL."
+  (list :provider (benedict-model-provider model)
+        :api (benedict-model-api model)
+        :model (benedict-model-id model)))
 
 (defmacro benedict-test-with-store-dir (var &rest body)
   "Bind VAR to a fresh temporary session directory and evaluate BODY.
