@@ -1,22 +1,23 @@
 (source "gnu")
+(source "nongnu")
 (source "melpa")
 
-(package "benedict" "0.1.0pre" "Emacs-first AI assistant")
-(package-file "benedict.el")
+(package "benedict" "0.1.0" "An agent runtime whose medium is Emacs Lisp")
+(package-file "core/benedict.el")
 (website-url "https://github.com/scotttrinh/benedict")
 (keywords "tools" "convenience" "ai")
-(files "benedict.el" "benedict-*.el" "components/*.el" "test/*.el")
 
-(depends-on "emacs" "27.1")
-(depends-on "dash")
-(depends-on "s")
-(depends-on "lgr")
-(depends-on "markdown-mode")
-(depends-on "svg-lib")
-(depends-on "vui")
+;; Layer directories per SPEC-001 12.1.  Prefixes stay globally unique, so the
+;; layout is organizational rather than semantic.  Tests are not part of the
+;; package and are deliberately absent here.
+(files "core/*.el" "support/*.el" "api/*.el" "providers/*.el" "ext/*.el" "ui/*.el")
 
+(load-paths "./core" "./support" "./api" "./providers" "./ext" "./ui")
+
+(depends-on "emacs" "29.1")
+
+;; No runtime dependencies.  The kernel and distro are pure Emacs 29.1 plus
+;; ERT.  Frontend dependencies arrive with ui/ when there is a frontend.
+;; `eask test ert-runner' installs ert-runner itself, so it is not listed.
 (development
- (depends-on "ert-async")
- (depends-on "package-lint")
- (depends-on "propcheck" :fetcher 'github :repo "Wilfred/propcheck" :files '("propcheck.el"))
- (depends-on "flywire" :fetcher 'github :repo "scotttrinh/flywire" :files '("*.el")))
+ (depends-on "package-lint"))

@@ -74,8 +74,13 @@
         apps.lint = {
           type = "app";
           program = toString (runWithEask "run-lint" ''
-            exec ${eask}/bin/eask lint checkdoc
-            exec ${eask}/bin/eask lint package
+            # Run both linters and report a combined status.  `set -e' would
+            # short-circuit on the first failure, and `exec' would replace the
+            # shell so the second never ran at all.
+            status=0
+            ${eask}/bin/eask lint checkdoc "$@" || status=1
+            ${eask}/bin/eask lint package  "$@" || status=1
+            exit $status
           '');
         };
 
