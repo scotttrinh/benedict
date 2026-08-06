@@ -205,6 +205,12 @@ The entire kernel surface:
 Plus the hook variables in §4.4 and the dynamic variable
 `benedict-current-session`. That is the whole contract.
 
+`:store` looks like it contradicts §3.3's "the kernel never touches the
+filesystem," and does not: it is an **opaque handle**. The kernel keeps it in a
+slot so that extensions can find a session's store without a registry, and never
+calls anything on it. Persistence happens entirely through the observation hooks,
+which is why the store lives in `ext/`.
+
 ### 4.2 Run state machine
 
 Emacs is single-threaded and has no `await`. The kernel is therefore a
@@ -316,9 +322,18 @@ kernel uses each idiomatically.
 | `benedict-entry-start-functions` | `(session entry)` |
 | `benedict-entry-update-functions` | `(session entry block-index delta)` |
 | `benedict-entry-end-functions` | `(session entry)` |
+| `benedict-head-change-functions` | `(session old-id new-id)` |
 | `benedict-tool-start-functions` | `(session invocation)` |
 | `benedict-tool-end-functions` | `(session invocation result)` |
 | `benedict-state-change-functions` | `(session old new)` |
+
+`benedict-head-change-functions` fires whenever the transcript head moves other
+than by an append — that is, on every fork. Two subscribers need it and neither
+can be served by the entry hooks: the store must write a head marker (§5.4) or a
+session that ends on a fork reloads on the wrong branch, and the renderer must
+re-draw the branch affordance (§11.3). An append moves head too, but
+`benedict-entry-end-functions` already covers that case, so this hook fires only
+for the moves nothing else reports.
 
 **Veto** — `run-hook-with-args-until-success`, first non-nil wins:
 
@@ -404,6 +419,12 @@ holds in both.
 ;;   (:type tool-result :id "..." :name eval-elisp :content (...) :error-p nil)
 ```
 
+**Roles are exactly those four.** There is deliberately no `system` role: the
+system prompt is a property of the session (§4.1 `:system-prompt`), not an entry
+in its transcript. It is not part of the branching history, it is not produced by
+a turn, and giving it an entry would mean every consumer of the transcript had to
+special-case the first one.
+
 **Origin tagging.** Every assistant entry records the `provider`, `api`, and
 `model` that produced it, in `meta`. This is not diagnostic metadata — it is
 load-bearing. A transcript may contain entries from several different models, and
@@ -480,26 +501,74 @@ every extension that walks the transcript. Building it in costs an `id` field, a
 
 One `read`-able s-expression per line:
 
+A log holds three kinds of record, told apart by a top-level `:type`. Entry
+records have no top-level `:type` — content blocks carry one, entries do not — so
+the discriminator needs no version-specific parsing.
+
 ```elisp
-(:id "e7a1" :parent "e79f" :role assistant :timestamp 1785...
+(:type header :format 1 :session-id "20260806T142530-a3f9" :created 1785...)
+
+(:id "20260806T142530-a3f9-e0002" :parent "20260806T142530-a3f9-e0001"
+ :role assistant :timestamp 1785...
  :content ((:type text :text "..."))
  :meta (:model "openai/gpt-5" :usage (:input 1204 :output 88)))
+
+(:type head :id "20260806T142530-a3f9-e0001" :timestamp 1785...)
 ```
 
 `prin1` out, `read` in. No schema translation, no JSON round-trip, no loss of
 elisp types. The store appends with a single `write-region` in append mode per
 entry.
 
-Session files live at `~/.local/share/benedict/sessions/<session-id>.eld`.
-Loading a session is: read every form, build a hash table keyed by id, take the
-last entry's id as `head` (or a `head` marker line if the session ended on a
-fork).
+**Replay is last-write-wins, with no special cases.** Process records in order:
+an entry record inserts the entry and moves `head` to it; a head record moves
+`head` to its `:id`; an unrecognized `:type` is ignored, so a record kind added
+by a newer writer does not break an older reader. That one rule covers the
+awkward case — a session that appends A and B, forks back to A, and quits logs
+`A, B, (head A)`, and replay walks head A, B, A and stops where the session
+actually left off. A head record is elided when it would only repeat where the
+log already is, so it costs a line per fork and nothing otherwise.
+
+**The print bindings are part of the format, not a style choice.** Left at their
+defaults each of these silently corrupts a log:
+
+| Binding | What it prevents |
+|---|---|
+| `print-length`, `print-level` nil | An Emacs configured for interactive printing truncates long content to `...`. The log then reads back wrong with no error anywhere. |
+| `print-circle t` | A cyclic structure in an extension-authored entry makes `prin1` loop forever and takes the image with it. The reader understands the labels it emits. |
+| `print-escape-newlines`, `print-escape-control-characters` | Assistant text is full of newlines, so without these "one s-expression per line" is simply false. |
+| `coding-system-for-write 'utf-8-emacs-unix` | Lossless for Emacs's internal representation, and LF everywhere so the per-line invariant survives Windows. Pair it with an explicit `coding-system-for-read`. |
+| `write-region-inhibit-fsync` nil | It defaults to **t in batch**, so every batch and `--script` run would be silently non-durable — exactly the case P3 exists for. |
+
+Session files live under `xdg-data-home` — normally
+`~/.local/share/benedict/sessions/<session-id>.eld`, resolved through `xdg.el`
+at call time rather than at load time, since `XDG_DATA_HOME` can change after
+Emacs starts. Mode `600`: a session log contains whatever the model echoed.
+
+**Malformed logs load anyway.** A crash can leave a partial final record.
+Recovering everything before it is worth far more than refusing the session, so
+the default is to warn and return what parsed; strictness is opt-in for callers
+that need to know a log was clean. The one exception is a `:format` this reader
+does not know — that always signals, because guessing at the shapes of a future
+format is worse than declining to read it.
 
 ### 5.5 Identity
 
 Entry ids must be stable across restarts and unique within a session. A counter
 plus the session id is sufficient and keeps logs readable; do not use random
 UUIDs, which make manual log inspection painful for no benefit at this scale.
+
+The format is `<session-id>-e<NNNN>`, as in `20260806T142530-a3f9-e0007`. It is
+filename-safe, sorts, greps, and — the load-bearing part — lets the counter be
+recovered from an id by regexp, so reloading a session restores it without a
+sidecar record. Session ids are a UTC timestamp plus four random characters,
+enough to separate two sessions started in the same second.
+
+Ids come from one transcript-wide counter, so after forking to an early entry the
+next id continues from the highest minted so far rather than from the fork point.
+That is what keeps them unique; it does mean ids are not contiguous along any one
+branch, which is worth knowing before reading a log and concluding something is
+missing.
 
 ### 5.6 Compaction as a fork
 
@@ -560,6 +629,27 @@ itself."
 Supported: `:type` (`string`/`integer`/`number`/`boolean`/`array`/`object`),
 `:required`, `:description`, `:enum`, `:items`, `:properties`. Anything more
 exotic is passed through as a literal schema fragment.
+
+`:type` is **mandatory** on every parameter (D8), and the six listed types are
+the whole set — no `int`/`float`/`bool` aliases, because `describe-function` is
+the DSL's documentation (§10.2) and it is worth more that the documented set is
+the real one than that a convenience alias happens to work. Pass-through is
+**per key** (D7): an unrecognized key is copied verbatim into that parameter's
+own fragment, so `:minimum 1` and `:minLength 3` work with no support from the
+compiler. Pass-through values are not validated or converted and must already be
+JSON-shaped.
+
+`:properties` nests the same DSL recursively, so a nested `:required t` collects
+into that object's own `required` array rather than escaping to the top level.
+
+The compiler emits a keyword plist for `json-serialize`, and four of its
+behaviors are sharp enough to be worth stating: object keys must be symbols,
+JSON arrays must be vectors, symbols are not values (so `:type` is the *string*
+`"string"`), and nil serializes to `{}`. That last one is why `required` is
+omitted entirely when nothing is required — an emitted `:required nil` becomes
+`"required":{}`, which no provider accepts. Each of these produces a schema that
+satisfies `equal` in a test and then fails at request time, so schema fixtures
+must be round-tripped through `json-serialize`, not merely compared as plists.
 
 ### 6.2 Async by contract
 
@@ -1399,6 +1489,16 @@ ERT throughout, run by `nix run .#test`. Requirements:
 - The reducer is tested by driving it with synthetic events and asserting state
   transitions directly, independent of any provider.
 
+The boundary test constrains `require` and nothing else. `declare-function` and
+an `autoload` cookie pointing at a higher layer create no load-time dependency
+and are the intended way for a lower layer to name something above it — the
+store does exactly that for the session accessor it consults. Say so in the test
+itself, or someone will eventually "fix" those by adding a `require`, which is
+the thing the test exists to prevent. The test should walk read forms rather than
+grep, so that a `require` inside `eval-when-compile`, `eval-and-compile`,
+`with-eval-after-load`, or a conditional is caught — those are where a violation
+would actually hide.
+
 ---
 
 ## 13. Comparison to Pi
@@ -1627,6 +1727,43 @@ Not either/or. `benedict-context-filter-functions` compacts in place at a soft
 threshold and the run continues; `benedict-continue-predicate-functions` stops
 the run cleanly at a hard limit or when compaction cannot free enough. The two
 serve different failure modes. Only the thresholds are tuning.
+
+**D7. Schema pass-through is per key, not per parameter.** *(§6.1)*
+"Anything more exotic is passed through as a literal schema fragment" reads two
+ways. It means an unrecognized *key* is copied into that parameter's own
+fragment, not that a parameter carrying one is emitted wholesale. Per key means
+`:minimum 1` composes with `:type` and `:description` instead of replacing them,
+and it keeps the compiler's behavior describable in one sentence.
+
+**D8. `:type` is mandatory, and the six types are the whole set.** *(§6.1)*
+A typeless property is unusable by a provider's strict-tool mode, so a missing
+`:type` is an error rather than an open schema. No `int`/`float`/`bool` aliases:
+`describe-function` is the DSL's documentation (§10.2), and a documented set that
+is also the real set is worth more than a convenience that only some authors find.
+
+**D9. Entry ids are `<session-id>-e<NNNN>`.** *(§5.5)*
+§5.5 fixes the ingredients but not the format. This one is filename-safe, sorts,
+greps, and lets the counter be recovered by regexp — so a reload restores it from
+the ids themselves rather than from a sidecar record that could disagree with
+them. Ids come from one transcript-wide counter, so they are unique but not
+contiguous along a branch.
+
+**D10. Malformed session logs load; unreadable formats do not.** *(§5.4, P3)*
+A crash can truncate the final record. Warning and returning everything that
+parsed is strictly better than refusing the session, since recoverability is the
+entire justification for write-through in the first place;
+`benedict-store-strict-load` exists for callers that need to know a log was
+clean. The exception is a `:format` the reader does not know, which always
+signals — mis-parsing a future format silently is worse than declining to read
+it. `write-region-inhibit-fsync` defaults to `t` in batch and must be bound back
+to nil, or P3 holds only in interactive sessions.
+
+**D11. The transcript tree is session-independent.** *(§3.2, §4.1)*
+§3.2 assigns tree accessors to `benedict-message.el` and §4.1 lists them on the
+session. Both: `benedict-message.el` owns a `benedict-transcript` with no
+knowledge of sessions, and `benedict-session.el` holds one in a slot and
+delegates. The tree is then testable, forkable, and serializable with no session
+at all — which is what let Phase 0 land before Phase 2 existed.
 
 ---
 
