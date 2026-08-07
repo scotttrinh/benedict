@@ -156,13 +156,35 @@
         (should (eq (funcall cancel) 'cancelled))))))
 
 (ert-deftest benedict-provider-stream-without-a-transport-says-so ()
-  "Until a wire adapter exists there is no HTTP path, and that is explicit."
+  "With no wire adapter loaded there is no HTTP path, and that is explicit.
+
+`benedict-api-stream' is unbound for the duration rather than assumed
+absent: the api layer is loaded in this suite, and the branch this test
+covers is the one reached when it is not.  A user who loads only `core/'
+and `support/' is in exactly that position."
   (benedict-provider-test--with-registrations
     (benedict-defprovider benedict-test-service :name "Service" :api 'benedict-test-wire)
     (let ((model (benedict-model-create :id "m" :provider 'benedict-test-service
                                         :api 'benedict-test-wire)))
-      (should-error (benedict-provider-stream model nil #'ignore)
-                    :type 'benedict-provider-no-transport))))
+      (cl-letf (((symbol-function 'benedict-api-stream) nil))
+        (should-error (benedict-provider-stream model nil #'ignore)
+                      :type 'benedict-provider-no-transport)))))
+
+(ert-deftest benedict-provider-stream-routes-to-the-shared-http-path ()
+  "A provider with no transport of its own reaches `benedict-api-stream'."
+  (benedict-provider-test--with-registrations
+    (benedict-defprovider benedict-test-service :name "Service" :api 'benedict-test-wire)
+    (let ((model (benedict-model-create :id "m" :provider 'benedict-test-service
+                                        :api 'benedict-test-wire))
+          (seen nil))
+      (cl-letf (((symbol-function 'benedict-api-stream)
+                 (lambda (model request handler)
+                   (setq seen (list model request handler))
+                   'cancel-thunk)))
+        (should (eq (benedict-provider-stream model '(:entries nil) #'ignore)
+                    'cancel-thunk))
+        (should (eq (nth 0 seen) model))
+        (should (equal (nth 1 seen) '(:entries nil)))))))
 
 (provide 'benedict-provider-test)
 

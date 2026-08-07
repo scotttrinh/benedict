@@ -43,14 +43,54 @@ Each may only require from itself and the layers before it; see
 (require 'benedict-provider)
 (require 'benedict-session)
 (require 'benedict-core)
+(require 'benedict-log)
+(require 'benedict-http)
+(require 'benedict-auth)
 (require 'benedict-api-transform)
+(require 'benedict-api-stream)
+(require 'benedict-api-openai-responses)
 (require 'benedict-provider-fake)
+(require 'benedict-provider-vercel)
 (require 'benedict-store)
 (require 'benedict-eval)
 
 (defun benedict-test-entry (role text &rest meta)
   "Return an unappended entry with ROLE, a single text block TEXT, and META."
   (benedict-entry-create :role role :content text :meta meta))
+
+(defmacro benedict-test-with-quiet-log (&rest body)
+  "Evaluate BODY with `benedict-log' recording nothing and echoing nothing.
+
+Wrap anything that logs at `error', which is echoed by default.  A suite
+whose expected failures print to the runner trains its reader to skim
+output that is sometimes real."
+  (declare (indent 0) (debug body))
+  `(let ((benedict-log-level nil)
+         (benedict-log-echo-level nil))
+     ,@body))
+
+;;;; Recorded wire fixtures
+
+;; Real captured bytes, per SPEC-001 12.5.  Read literally and decoded by hand
+;; rather than through `insert-file-contents', which would apply end-of-line
+;; conversion -- a fixture whose CRLFs became LFs on the way in is no longer
+;; the bytes the service sent, which is the whole claim these files make.
+
+(defconst benedict-test-fixture-directory
+  (expand-file-name "test/fixtures" benedict-test-root)
+  "Directory holding recorded wire fixtures.
+See its README for what produced each file and how to re-capture it.")
+
+(defun benedict-test-fixture (name)
+  "Return the absolute path of the recorded fixture NAME."
+  (expand-file-name name benedict-test-fixture-directory))
+
+(defun benedict-test-fixture-contents (name)
+  "Return the recorded fixture NAME as a string, byte for byte."
+  (with-temp-buffer
+    (set-buffer-multibyte nil)
+    (insert-file-contents-literally (benedict-test-fixture name))
+    (decode-coding-string (buffer-string) 'utf-8 t)))
 
 ;;;; Models without a session
 

@@ -873,6 +873,14 @@ cannot tell the two apart, which is the same property that lets a dispatch
 filter reroute a tool call to a sandbox without the kernel learning what a
 sandbox is.
 
+When neither path is available — a provider with no `:stream` function and no
+API adapter loaded — `benedict-provider-stream` signals
+`benedict-provider-no-transport`. In practice this means "the `api/` layer is
+not loaded," not "this model has no transport." A model whose API IS loaded but
+whose transport fails (missing credential, network error, non-2xx response)
+arrives as a terminal `:error` event through `benedict-api-stream`, which is
+what §7.3 requires.
+
 ### 7.3 Normalized event protocol
 
 Every API adapter emits the same event vocabulary. The kernel and every frontend
@@ -1300,10 +1308,13 @@ Storage is `~/.config/benedict/auth.json`, mode `600`:
 }
 ```
 
-Environment variables and `auth-source` are consulted only when nothing is
-stored. A stored credential owns its provider — no silent env fallback after a
-failed refresh, because that turns an auth error into a confusing
-wrong-account error.
+Environment variables are consulted only when nothing is stored. (`auth-source`
+is designed in but not implemented: `auth-source-search` can block on a GPG
+passphrase, and the resolve path is callback-driven inside a stream — not a
+place to discover a blocking prompt — and the descriptor has no host to search
+on yet. It arrives with Phase 7's OAuth work.) A stored credential owns its
+provider — no silent env fallback after a failed refresh, because that turns an
+auth error into a confusing wrong-account error.
 
 ### 8.3 The OAuth contract
 

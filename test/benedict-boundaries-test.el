@@ -52,14 +52,22 @@ has found a hole in the kernel API, and the API is what should grow.")
 Walks the whole tree rather than only top-level forms, so a `require'
 tucked inside `eval-when-compile', `eval-and-compile',
 `with-eval-after-load', or a conditional is found too.  Those are exactly
-the places a boundary violation hides."
+the places a boundary violation hides.
+
+The traversal walks cons cells by hand rather than with `dolist' because
+a source file is full of improper lists -- every alist literal ends in a
+dotted pair -- and `dolist' signals on one.  A file containing an alist
+would otherwise fail this test with a `wrong-type-argument' rather than
+being checked."
   (when (consp form)
     (when (and (eq (car form) 'require)
                (consp (cadr form))
                (eq (car (cadr form)) 'quote))
       (funcall collect (cadr (cadr form))))
-    (dolist (element form)
-      (benedict-boundaries--walk element collect))))
+    (let ((rest form))
+      (while (consp rest)
+        (benedict-boundaries--walk (car rest) collect)
+        (setq rest (cdr rest))))))
 
 (defun benedict-boundaries--required-features (file)
   "Return the features FILE requires, in order."
