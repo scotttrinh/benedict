@@ -1604,6 +1604,17 @@ The corollary is that a second frontend must be cheap. A batch/non-interactive
 mode — submit a prompt, print the result, exit — is worth building early
 specifically as a boundary check, not because anyone will use it much.
 
+Both landed in Phase 5 and the boundary held: the chat buffer and the headless
+frontend are written against §4.1 and §4.4 only, and no kernel file gained an
+accessor for either. The one change to `core/` was a package manifest header
+(§12.2), which is a packaging fact rather than an API one. Two details are worth
+carrying forward, because each was a place the boundary could have leaked and did
+not. A streamed entry has no id until it is appended, so the renderer keys on
+object identity and redraws the header once the id exists — the kernel did not
+need to mint ids early. And the branch affordance needed nothing beyond
+`benedict-session-siblings`, which already returns the entry among its siblings
+in append order, so "2 of 3" is a position in a list the API already hands over.
+
 ### 11.2 Rendering model
 
 The chat buffer renders **a path**, not the whole tree. It subscribes to:
@@ -1618,6 +1629,39 @@ The chat buffer renders **a path**, not the whole tree. It subscribes to:
 Because the kernel owns the accumulator, the update handler re-renders one block
 rather than reconstructing the message. Keeping re-render scoped to a block is
 what makes streaming feel responsive in a buffer.
+
+#### 11.2.1 How the scoping is actually enforced
+
+"Re-render one block" is advice until something makes the wide path impossible,
+and Phase 5 found that the wide path is the *default* in a declarative renderer:
+vui commits by erasing the buffer and re-emitting the tree, so a delta costs
+O(transcript) — measured at 0.6 ms for ten entries and 32 ms for two hundred.
+That is the mechanism behind the pre-reset frontend, which the repository
+recorded as broken in interactive use while its test suite stayed green.
+
+The frontend therefore renders the transcript through vui's **stream** API rather
+than as tree children. Each content block owns a stream node; a delta is an
+append to that node, which inserts only the new characters and marks only those
+dirty. Measured per delta: 0.010 ms at ten entries and 0.010 ms at five hundred —
+flat, because cost depends on the one node rather than on the buffer.
+
+Three consequences worth stating, because each is a way to lose the property:
+
+1. **A node per block, not per entry.** Block indexes interleave (§7.4.1), so
+   keying on the index is what makes an out-of-order block a lookup rather than a
+   special case.
+2. **Nodes are finalized when their entry ends.** A live node holds buffer
+   markers and every later append pays for every live marker, so finalizing is
+   what bounds the live set by concurrency instead of by transcript length.
+3. **Nothing re-renders the root after mount.** A root re-render re-emits content
+   items *and silently drops component rows* — so a redraw would faithfully
+   restore the prose and lose every tool card, a failure no assertion about
+   buffer text can see. Anything that changes every turn (run state, model,
+   usage) belongs in the header line, which Emacs redraws on its own.
+
+The regression test for all of this is a **marker** placed in an already-rendered
+region: an erase-and-rebuild commit strands it. That assertion is structural and
+machine-independent, where a millisecond threshold would be neither.
 
 ### 11.3 Branch affordances
 
@@ -1681,6 +1725,15 @@ Until the split is worth the friction, a single package with these boundaries
 enforced by discipline and dependency tests is acceptable. The boundaries must be
 real in the dependency graph even when they are not yet real in the package
 manifest.
+
+Phase 5 put a price on that "until". The frontend needs `vui` and
+`markdown-mode`, and one package has one manifest, so those two now sit in
+`core/benedict.el`'s `Package-Requires` — where they are false as a description
+of that file and of every layer below `ui/`. `package.el` has no vocabulary for a
+per-directory dependency, so a kernel-only install now pulls a render library it
+will never load. Nothing is broken and the dependency graph is still honest (the
+boundaries test sees to that), but the manifest is not, and that is the first
+concrete cost the split would remove rather than a hypothetical one.
 
 ### 12.3 Distribution
 
@@ -2130,6 +2183,31 @@ The cost is that the script is not maintained by the test runner and can rot,
 which is accepted because its job is to demonstrate a phase exit once, not to
 guard against regression — the recorded fixtures do that.
 
+**D22. The frontend renders through `vui`, and through its stream API.**
+*(§11.2.1, §12.2)*
+`vui` is a declarative, component-based render library, pinned to **v1.3.0** by
+git tag rather than tracked on MELPA. It is a dependency of the frontend only;
+no layer below `ui/` may require it.
+
+Two halves, and the second is the load-bearing one. Choosing vui is an
+ergonomics decision — components compose, state is local, and the alternative is
+hand-rolled marker arithmetic. Choosing its **stream** API over its tree is a
+correctness decision: the tree path erases and rebuilds the buffer on every
+render, which is O(transcript) per token and is what made the pre-reset frontend
+unusable. §11.2.1 has the measurements and the three rules that keep the property.
+
+Pinned because the pre-reset bridge accumulated `fboundp` cascades against a
+moving API, and 1.3.0 itself moved button activation from `widget.el` to
+`button.el` underneath the old test helpers. A render layer that shifts beneath
+the bridge is how that code rotted; bump deliberately.
+
+The experimental `vui-incremental-render` flag stays **off**. It patches changed
+segments of a flat content container, which is the same problem the stream API
+solves outright and with no restriction on nesting.
+*Revisit when:* vui's commit phase diffs rather than rebuilds, at which point the
+tree path becomes viable and the stream becomes an optimization rather than a
+requirement.
+
 ---
 
 ## 16. Open Questions
@@ -2161,3 +2239,23 @@ refresh on the public API, or making the tool list a request filter's business.
 The choice matters more than it looks: it decides whether a session's offered
 tools are a snapshot or a view, and every frontend that renders a tool list
 depends on the answer.
+
+Phase 5 did not force this, and it is worth recording why rather than leaving the
+silence ambiguous: the chat frontend renders the *transcript*, so it reads tool
+calls and results off entries and never asks a session what it offers. The
+question binds at the first UI that lists available tools — a tool picker, a
+palette, an approval prompt naming what could run — and Phase 6's approvals are
+the likely trigger. Until then the choice is still open, but note that a frontend
+would want the *view*: a tool list rendered from a snapshot goes stale silently,
+and staleness in a permissions-adjacent surface is the expensive kind.
+
+**Q3. What should a frontend do about a run it did not start?** *(§4.4.1, §11.1)*
+Phase 5's renderer keys buffers on sessions through a weak table and no-ops for
+sessions it has not been attached to, so two coexisting sessions cannot write
+into each other's buffers. That covers the case the hooks were scoped for. It
+does not answer what should happen when a session with an attached buffer is
+driven from somewhere else entirely — a scheduled job, an RPC frontend, another
+Emacs frame — and the buffer's user is mid-scroll when entries begin arriving.
+Appending is right; moving point is not obviously right. No mechanism is missing,
+so this is a policy question, and it is the kind that is cheaper to answer before
+a second frontend is driving shared sessions than after.

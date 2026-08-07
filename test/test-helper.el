@@ -53,6 +53,11 @@ Each may only require from itself and the layers before it; see
 (require 'benedict-provider-vercel)
 (require 'benedict-store)
 (require 'benedict-eval)
+(require 'benedict-chat-widgets)
+(require 'benedict-chat-blocks)
+(require 'benedict-chat-render)
+(require 'benedict-chat)
+(require 'benedict-headless)
 
 (defun benedict-test-entry (role text &rest meta)
   "Return an unappended entry with ROLE, a single text block TEXT, and META."

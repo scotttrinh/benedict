@@ -16,8 +16,20 @@
 
 (depends-on "emacs" "29.1")
 
-;; No runtime dependencies.  The kernel and distro are pure Emacs 29.1 plus
-;; ERT.  Frontend dependencies arrive with ui/ when there is a frontend.
+;; Frontend dependencies, per SPEC-001 12.2's note that they arrive with ui/.
+;; core/, support/, api/, providers/, and ext/ still require nothing beyond
+;; Emacs 29.1 and curl; the boundaries test is what keeps that true, since
+;; package.el has no vocabulary for a per-directory dependency.
+;;
+;; vui is pinned to a tag rather than tracked on MELPA.  The pre-reset frontend
+;; carried `fboundp' cascades against a moving vui API, and 1.3.0 itself renamed
+;; button activation out from under the old test helpers; a render layer that
+;; shifts underneath the bridge is how that code rotted.  `:vc' hands its tail
+;; to `package-vc-install', whose second argument is the revision.  Bump
+;; deliberately.
+(depends-on "markdown-mode")
+(depends-on "vui" :vc '(vui :url "https://github.com/d12frosted/vui.el") "v1.3.0")
+
 ;; `eask test ert-runner' installs ert-runner itself, so it is not listed.
 (development
  (depends-on "package-lint"))
