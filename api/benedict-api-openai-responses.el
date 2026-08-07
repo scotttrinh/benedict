@@ -482,7 +482,13 @@ arguments) rather than signalled."
 
 ;;;; Registration
 
-;;;###autoload
+;; Deliberately NOT autoloaded, matching the provider and tool registrations in
+;; providers/ and ext/.  An autoload cookie on a `benedict-defapi' call does not
+;; produce an autoload stub -- the generator does not know the macro, so it
+;; copies the whole form into benedict-autoloads.el, where `benedict-defapi' is
+;; still void because core/benedict-provider.el has not loaded.  That breaks the
+;; autoloads file, and with it the entire package, at startup.  Registration is
+;; a load-time effect of requiring this file, which is how the other three do it.
 (benedict-defapi openai-responses
   :name "OpenAI Responses API"
   :endpoint #'benedict-api-openai-responses--endpoint

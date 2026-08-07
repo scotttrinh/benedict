@@ -18,7 +18,10 @@
 ;;   Its stream node then takes `vui-stream-append-to', which inserts only the
 ;;   new characters and marks only those dirty, so a delta costs O(delta) no
 ;;   matter how long the message or the transcript has become.  `text' is the
-;;   case that matters.
+;;   case that matters, and it has TWO vnodes for that reason: deltas arrive
+;;   through `benedict-chat-streaming-text-vnode', which is untagged and so
+;;   invisible to markdown fontification, and the block is re-rendered once
+;;   through `benedict-chat-text-vnode' when it closes.
 ;;
 ;; - A block that is INTERACTIVE or changes wholesale renders as a COMPONENT,
 ;;   which becomes a stream row owning its own region and its own state.  Its
@@ -57,14 +60,34 @@
 ;;;; Text
 
 (defun benedict-chat-text-vnode (block)
-  "Return a content vnode for a `text' BLOCK.
+  "Return a content vnode for a finished `text' BLOCK.
 
 Plain content rather than a component, deliberately: this is the block
 that streams, and only a content node gets `vui-stream-append-to''s
-O(delta) append."
+O(delta) append.
+
+Tagged as markdown body, so it is for a block whose text is COMPLETE --
+either it never streamed or it has closed.  While it is still arriving,
+`benedict-chat-streaming-text-vnode' is the one to use."
   (benedict-chat-body-text
    (benedict-chat-truncate (or (benedict-block-get block :text) "")
                            benedict-chat-max-block-length)))
+
+(defun benedict-chat-streaming-text-vnode (block)
+  "Return a content vnode for a `text' BLOCK that has not closed yet.
+
+UNTAGGED, unlike `benedict-chat-text-vnode', and that is the point: half
+a construct is not markdown.  An unclosed fence would style the rest of
+the message as code until its partner arrived, and every delta would pay
+to re-scan the whole message to find that out.  The block is re-rendered
+tagged when it closes, which is the one moment its markdown is whole."
+  (vui-text (benedict-chat-truncate (or (benedict-block-get block :text) "")
+                                    benedict-chat-max-block-length)))
+
+(defun benedict-chat-streaming-delta-vnode (delta)
+  "Return an untagged content vnode carrying DELTA, freshly arrived text.
+The append-shaped counterpart of `benedict-chat-streaming-text-vnode'."
+  (vui-text delta))
 
 ;;;; Image
 

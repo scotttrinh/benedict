@@ -58,6 +58,27 @@
                (benedict-tool-result
                 :content (benedict-tool-arg invocation :text))))))
 
+(defun benedict-chat-test--fontify (buffer)
+  "Fontify BUFFER the way redisplay would.  Return BUFFER.
+
+`font-lock-mode' turns itself straight back off when `noninteractive',
+which is every run of this suite, so it is forced on here.  Nothing else
+is batch-specific: `jit-lock-fontify-now' is exactly what redisplay calls
+on meeting text whose `fontified' property is nil, and calling it over
+the whole buffer is the same one-chunk request a first display makes."
+  (with-current-buffer buffer
+    (let ((noninteractive nil)) (font-lock-mode 1))
+    (jit-lock-fontify-now (point-min) (point-max)))
+  buffer)
+
+(defun benedict-chat-test--faces-on (buffer string)
+  "Return the `face' property where STRING first occurs in BUFFER, or nil."
+  (with-current-buffer buffer
+    (save-excursion
+      (goto-char (point-min))
+      (when (search-forward string nil t)
+        (get-text-property (match-beginning 0) 'face)))))
+
 ;;;; Exit criterion: streaming renders incrementally
 
 (ert-deftest benedict-chat-streams-a-partial-message-before-it-completes ()
@@ -256,6 +277,96 @@ this asserts on a row's content specifically."
           (let ((text (benedict-chat-test--text buffer)))
             (should (string-match-p "benedict-chat-test-echo" text))
             (should (string-match-p "Done." text))))))))
+
+;;;; Markdown fontification
+
+(ert-deftest benedict-chat-fontifies-markdown-and-leaves-the-chrome-alone ()
+  "Markdown reaches the prose and stops at the role header.
+
+Both halves are the regression.  A transcript BEGINS with chrome, so a
+gate that can only keep the one run containing the start of font-lock's
+region throws the whole chunk away and the buffer comes out entirely
+unstyled -- which is what a `font-lock-extend-region-functions' member
+can express and why the gate is a region function instead."
+  (benedict-test-with-clean-registries
+    (benedict-chat-test--installed
+      (benedict-test-with-manual-defer
+        (benedict-chat-test--with-buffer
+            (benedict-test-session '(((:text "a **bold** word"))))
+          (benedict-session-submit session "Hi")
+          (benedict-test-drain)
+          (benedict-chat-test--fontify buffer)
+          (should (equal '(markdown-bold-face)
+                         (benedict-chat-test--faces-on buffer "bold")))
+          (should (eq 'benedict-chat-assistant
+                      (benedict-chat-test--faces-on buffer "assistant"))))))))
+
+(ert-deftest benedict-chat-defers-markdown-until-the-block-closes ()
+  "Half a construct is left unstyled; the whole one is styled when it lands.
+
+The negative half is what pins the design down: fontifying as text
+arrives would style a lone \"**\" as markup, and an unclosed fence would
+style the rest of the message as code until its partner turned up."
+  (benedict-test-with-clean-registries
+    (benedict-chat-test--installed
+      (benedict-test-with-manual-defer
+        (benedict-chat-test--with-buffer
+            (benedict-test-session
+             '(((:type :start)
+                (:type :block-start :index 0 :block-type text)
+                (:type :block-delta :index 0 :delta "a **bo")
+                (:type :block-delta :index 0 :delta "ld** word")
+                (:type :block-end :index 0)
+                (:type :done :reason stop))))
+          (benedict-session-submit session "Hi")
+          ;; Catch the moment the opening delimiter has landed unpaired.
+          (should (benedict-test-run-until
+                   (lambda ()
+                     (let ((text (benedict-chat-test--text buffer)))
+                       (and (string-match-p "\\*\\*bo" text)
+                            (not (string-match-p "bold" text)))))))
+          (benedict-chat-test--fontify buffer)
+          (should-not (benedict-chat-test--faces-on buffer "**bo"))
+          (benedict-test-drain)
+          (benedict-chat-test--fontify buffer)
+          (should (equal '(markdown-bold-face)
+                         (benedict-chat-test--faces-on buffer "bold"))))))))
+
+(ert-deftest benedict-chat-fontifies-a-fence-reassembled-from-deltas ()
+  "A fenced block whose delimiters arrived in pieces is still code.
+
+`vui' writes with `inhibit-modification-hooks' bound, so nothing tells
+`syntax-propertize' that the text is new and its high-water mark can
+already sit past it.  Without the flush in
+`benedict-chat--fontify-region' the closed block keeps the syntax
+properties of the half-written text it replaced, and the fence is never
+recognized."
+  (benedict-test-with-clean-registries
+    (benedict-chat-test--installed
+      (benedict-test-with-manual-defer
+        (benedict-chat-test--with-buffer
+            (benedict-test-session
+             '(((:type :start)
+                (:type :block-start :index 0 :block-type text)
+                (:type :block-delta :index 0 :delta "```eli")
+                (:type :block-delta :index 0 :delta "sp\n(+ 1 2)\n``")
+                (:type :block-delta :index 0 :delta "`\n")
+                (:type :block-end :index 0)
+                (:type :done :reason stop))))
+          (benedict-session-submit session "Hi")
+          ;; Fontify as the deltas land, so the pass at the end is working
+          ;; against stale syntax properties rather than a clean buffer.
+          (should (benedict-test-run-until
+                   (lambda ()
+                     (benedict-chat-test--fontify buffer)
+                     (string-match-p "(\\+ 1 2)"
+                                     (benedict-chat-test--text buffer)))))
+          (benedict-test-drain)
+          (benedict-chat-test--fontify buffer)
+          (should (memq 'markdown-code-face
+                        (benedict-chat-test--faces-on buffer "(+ 1 2)")))
+          (should (memq 'markdown-language-keyword-face
+                        (benedict-chat-test--faces-on buffer "elisp"))))))))
 
 ;;;; Installation is idempotent
 

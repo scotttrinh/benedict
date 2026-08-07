@@ -20,7 +20,9 @@
 ;;   entry-start   the streaming entry -> append its header, open no blocks yet
 ;;   entry-update  block INDEX -> `vui-stream-append-to' (O(delta)) for text,
 ;;                 `vui-stream-update' (O(block)) for a component row
-;;   entry-end     finalize every node of that entry, releasing its markers
+;;   entry-end     retag the text blocks as markdown body -- they are whole
+;;                 now, and only now -- then finalize every node of that
+;;                 entry, releasing its markers
 ;;   head-change   a fork moved head -> rebuild the transcript wholesale
 ;;
 ;; A node per BLOCK, not per entry, because block indexes interleave: SPEC-001
@@ -224,18 +226,45 @@ exactly the text to append and appending it costs O(DELTA)."
          ;; First sight of this block: open a node holding what it has so far.
          ((null node)
           (puthash index
-                   (vui-stream-open benedict-chat--handle
-                                    (benedict-chat--block-vnode session block))
+                   (vui-stream-open
+                    benedict-chat--handle
+                    (if (benedict-chat-block-streams-p block)
+                        (benedict-chat-streaming-text-vnode block)
+                      (benedict-chat--block-vnode session block)))
                    table))
          ;; Growing text: append only the new characters.  This is the case
          ;; SPEC-001 4.3 is written for and the reason cost stays flat.
          ((and (benedict-chat-block-streams-p block)
                delta (not (string-empty-p delta)))
-          (vui-stream-append-to node (benedict-chat-body-text delta)))
-         ;; A component row, or a text block closing: refresh the whole block.
+          (vui-stream-append-to node
+                                (benedict-chat-streaming-delta-vnode delta)))
+         ;; A component row: refresh the whole block.  A text block is not
+         ;; refreshed here -- it is rewritten once at entry end, by
+         ;; `benedict-chat--settle-text-blocks'.
          ((not (benedict-chat-block-streams-p block))
           (vui-stream-update node (benedict-chat--block-vnode session block)))))))
   nil)
+
+(defun benedict-chat--settle-text-blocks (entry table)
+  "Rewrite ENTRY's streamed text nodes in TABLE as finished markdown body.
+
+MUTATES the buffer.  Text arrives untagged so that markdown fontification
+never sees half a construct; this is the pass that tags each closed block
+and hands it to font-lock, and there is exactly one of them per block.
+
+Rewriting through `vui-stream-update' rather than retagging the text in
+place keeps this on `vui-stream''s published API -- a node's bounds are
+its own business -- and gets the invalidation for free: freshly inserted
+text carries no `fontified' property, which is precisely the state that
+asks jit-lock for a pass."
+  (let ((blocks (benedict-entry-content entry)))
+    (maphash
+     (lambda (index node)
+       (when (>= index 0)
+         (when-let* ((block (nth index blocks)))
+           (when (benedict-chat-block-streams-p block)
+             (vui-stream-update node (benedict-chat-text-vnode block))))))
+     table)))
 
 (defun benedict-chat-on-entry-end (session entry)
   "Finish ENTRY in SESSION's chat buffer.  Return nil.
@@ -254,6 +283,9 @@ point at which it exists in the transcript."
           (when-let* ((header (gethash benedict-chat--header-index table)))
             (vui-stream-update header
                                (benedict-chat-entry-header-vnode session entry)))
+          ;; Before finalizing, while the nodes can still be written: the
+          ;; text blocks are whole now, so this is when their markdown is.
+          (benedict-chat--settle-text-blocks entry table)
           (maphash (lambda (_index node) (vui-stream-finalize node)) table)
           (remhash entry benedict-chat--nodes))
       (benedict-chat--append-entry session entry))
