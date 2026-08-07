@@ -132,7 +132,9 @@ a complete, testable agent runtime with zero tools and no UI.
 | `benedict-core.el` | kernel | Reducer, run state machine |
 | `benedict-schema.el` | kernel | Parameter DSL → JSON Schema |
 | `benedict-http.el` | support | SSE reader, retry, error-body extraction |
+| `benedict-log.el` | support | Level-gated logging and a debug ring |
 | `benedict-api-transform.el` | provider | Canonical→wire lowering, cross-model degradation |
+| `benedict-api-stream.el` | provider | The shared auth→build→HTTP→parse path (D19) |
 | `benedict-api-*.el` | provider | Wire protocol adapters |
 | `benedict-provider-*.el` | provider | Service catalog entries |
 | `benedict-auth.el` | provider | Credential store, OAuth refresh serialization |
@@ -915,9 +917,9 @@ entry identically in both cases.
 
 Vercel AI Gateway is the initial target and is addressed through the OpenAI
 Responses API across its whole catalog — including non-OpenAI models. This is
-confirmed from production use, not inferred, and it means **v1 needs exactly one
-wire API.** A second API is a later expansion for a second provider, not a
-Phase 4 risk.
+confirmed against the live service (§7.4.1), not inferred, and it means **v1
+needs exactly one wire API.** A second API is a later expansion for a second
+provider, not a Phase 4 risk.
 
 Implementation notes for the adapter:
 
@@ -931,10 +933,13 @@ matters:
 | Upstream event | Maps to |
 |---|---|
 | `response.created` | `:start`, capture `response.id` |
+| `response.in_progress` | ignored |
 | `response.output_item.added` | `:block-start` — inspect `item.type` |
+| `response.content_part.added` / `.done` | ignored; the item events bracket the block |
 | `response.output_text.delta` | `:block-delta` (text) |
-| `response.reasoning_text.delta` | `:block-delta` (thinking) |
+| `response.reasoning.delta` | `:block-delta` (thinking) |
 | `response.reasoning_summary_text.delta` | `:block-delta` (thinking) |
+| `response.reasoning_summary_part.added` / `.done` | ignored |
 | `response.function_call_arguments.delta` | `:block-delta` (tool-call) |
 | `response.function_call_arguments.done` | assemble + parse arguments |
 | `response.output_item.done` | `:block-end`; capture reasoning item id |
@@ -944,13 +949,56 @@ matters:
 **Reasoning continuity.** Reasoning items must be echoed back on the next request
 for multi-turn continuity. Store the item id (and `encrypted_content`, when the
 provider returns it) in the thinking block's `:signature`, and re-emit those items
-in `input` when building the next request. Getting this wrong degrades quality
+in `input` when building the next request. This is not an optimization: the
+gateway returns `store: false` and `previous_response_id: null`, so there is no
+server-side conversation state to fall back on. Getting it wrong degrades quality
 silently rather than erroring, so it warrants a dedicated test with a scripted
 two-turn stream.
 
 **Usage.** `usage.input_tokens` includes cached tokens; subtract
 `input_tokens_details.cached_tokens` to get the uncached input count, or
-accounting will overstate cost.
+accounting will overstate cost. `input_tokens_details.cache_write_tokens` is
+present for some models and absent for others, and
+`output_tokens_details.reasoning_tokens` is reported as 0 by some models that
+demonstrably reasoned — treat both as optional and never infer behavior from
+them.
+
+#### 7.4.1 What the gateway normalizes, and what it does not
+
+Measured across five models with one identical request. The distinction matters
+because it is the difference between what an adapter may assume and what it must
+detect.
+
+**Normalized — safe to rely on.** Item `type` values (`reasoning`, `message`,
+`function_call`), item id prefixes (`rs_`, `msg_`, `fc_`), the presence of both
+`id` and `call_id` on a function call, and `arguments` as a JSON string.
+
+**Not normalized — the adapter must handle every variant:**
+
+| Variation | Observed |
+|---|---|
+| Reasoning event family | `response.reasoning.delta` (DeepSeek, Qwen) vs. `response.reasoning_summary_text.delta` (Grok). Both must be handled; neither is the "real" one. |
+| Reasoning at all | A model tagged `reasoning` in the catalog may emit no reasoning items. The tag is a catalog claim, not a guarantee. |
+| Item interleaving | Two of five models open a `function_call` item while a `message` item is still streaming. See below. |
+| Argument delta count | One delta carrying the whole argument string, or a dozen carrying a character each. |
+| `call_id` shape | `call_9b5b…` (underscore, hex), `call_69904KpBB7…` (mixed case), `call-49b6…-0` (**hyphens**, UUID-shaped, 44 chars). |
+| Text alongside a tool call | Usually absent; one model emitted a text block containing only `"\n\n"`. |
+| `content_part` / `output_text` events | Emitted only when a text block exists. |
+
+**Output items interleave, and this is the sharp one.** An adapter must key block
+state on `output_index`, never on arrival order or a single "current block"
+pointer:
+
+```
+seq 15  response.output_text.delta              output_index 1
+seq 16  response.output_item.added              output_index 2   <- opens while 1 is open
+seq 17  response.function_call_arguments.delta  output_index 2
+seq 26  response.output_text.done               output_index 1   <- 1 closes only now
+```
+
+The table above reads as a linear sequence and, taken that way, implies exactly
+the parser that breaks here. Recorded fixtures for each of these variants live in
+`test/fixtures/`; see its README for provenance and the re-capture command.
 
 ### 7.5 Capability flags, not branches
 
@@ -987,6 +1035,21 @@ the system remains usable offline.
 Model records carry: `id`, `name`, `context-window`, `max-tokens`, `reasoning-p`,
 `input-modalities`, `cost` (per-million rates for input/output/cache-read/
 cache-write), and the `:compat` plist from §7.5.
+
+Two things the Vercel catalog made concrete, both likely to recur:
+
+**Catalog rates are per token, model records are per million.** The gateway
+reports `"0.00000013"` — a *string*, at that. Convert on the way in, so that
+nothing downstream has to know which unit it is holding.
+
+**A catalog flag describes intent, not behavior.** A model tagged `reasoning`
+may emit no reasoning items at all (§7.4.1). `reasoning-p` is therefore a hint
+for a frontend and a budget filter, and never a premise an adapter branches on.
+
+Catalog resolution is the one place a **blocking** request is acceptable:
+`benedict-model-resolve` is synchronous and the transport is not. Keep it
+cache-first so the blocking path is reached only on a cold cache, and never call
+it from inside a stream callback.
 
 ### 7.7 The fake provider
 
@@ -1322,7 +1385,11 @@ Everything needed is native to Emacs 29:
 | Token exchange | `benedict-http` POST |
 | JSON | `json-parse-string` / `json-serialize` |
 
-No shelling out to `openssl` or `curl` for any part of it. The loopback flow —
+No shelling out to `openssl` for any part of the cryptography — PKCE verifier,
+challenge, and base64url are all native, and a subprocess for them would be
+embarrassing rather than pragmatic. The *transport* is a separate question and
+is answered by `benedict-http` (D18), which does use `curl`; token exchange
+goes through it like every other request. The loopback flow —
 which OpenAI Codex, Google Antigravity, and similar subscription providers use —
 is: start the server on a fixed or ephemeral port, `browse-url` the authorize URL
 with `redirect_uri=http://localhost:<port>/callback`, parse the code from the
@@ -1584,7 +1651,7 @@ Ship as separate packages once the shape settles:
 
 | Package | Contains | Depends on |
 |---|---|---|
-| `benedict` | `core/`, `support/` | Emacs 29.1 |
+| `benedict` | `core/`, `support/` | Emacs 29.1, `curl` (D18) |
 | `benedict-distro` | `ext/`, `ui/`, `skills/` | `benedict` |
 | `benedict-vercel` | `api/openai-responses`, `providers/vercel` | `benedict` |
 | `benedict-anthropic` | `api/anthropic-messages`, `providers/anthropic` | `benedict` |
@@ -1592,6 +1659,12 @@ Ship as separate packages once the shape settles:
 A user who wants the kernel and nothing else installs `benedict`. The default
 experience is `benedict-distro`. Provider packages are independent, which is the
 whole point of §7.1 — a fifth provider never touches the core.
+
+`curl` is a *system* dependency, not a `Package-Requires` entry — package.el has
+no vocabulary for one. `benedict-http` must therefore fail with a message naming
+`curl` and `benedict-http-curl-program` when it is absent, rather than with
+whatever `make-process` signals; a missing binary is the one dependency failure
+a user can act on immediately.
 
 Until the split is worth the friction, a single package with these boundaries
 enforced by discipline and dependency tests is acceptable. The boundaries must be
@@ -1632,7 +1705,18 @@ ERT throughout, run by `nix run .#test`. Requirements:
   `benedict-provider-fake` with no network and no credentials.
 - Provider adapters are tested against **recorded** SSE streams checked into the
   repo — real captured bytes, replayed through the parser. This catches wire
-  format drift without spending tokens.
+  format drift without spending tokens. Fixtures live in `test/fixtures/` with a
+  README recording, per fixture, which model produced it and the command that
+  re-captures it; recorded bytes with no provenance rot silently.
+- **`nix run .#test` never touches the network and never reads a credential.**
+  Every ERT suite runs unconditionally — no skips, no tags, no environment
+  probes. A suite that would need a key belongs outside `test/`.
+- Exercising a real service is a **script**, not a test: `nix run .#live` runs
+  `scripts/live-smoke.el` against whatever is in `auth.json`. It is how a phase
+  demonstrates its exit criterion once, not something CI runs. The separation is
+  deliberate — a credentialed test in the suite makes the suite's guarantees
+  conditional on the runner's environment, and the whole value of the fake
+  provider is that they are not.
 - A dependency test asserts the §12.2 boundaries: no kernel file may `require` a
   file from `ext/`, `ui/`, `api/`, or `providers/`.
 - The reducer is tested by driving it with synthetic events and asserting state
@@ -1854,10 +1938,20 @@ provider (§7.7) is built in Phase 2 rather than retrofitted.
 Recorded so the reasoning survives, and so a future revisit is a deliberate
 reversal rather than a rediscovery.
 
-**D1. One wire API for v1.** *(§7.4)*
+**D1. One wire API for v1.** *(§7.4, §7.4.1)*
 Vercel AI Gateway serves its entire catalog, including non-OpenAI models, through
-the OpenAI Responses API. Confirmed from production use. `openai-responses` is
-the only adapter v1 requires; a second exists only when a second provider does.
+the OpenAI Responses API. `openai-responses` is the only adapter v1 requires; a
+second exists only when a second provider does.
+
+Verified in Phase 4 against the live service across five models from four
+vendors — DeepSeek, OpenAI, xAI, and Alibaba — including a full two-turn
+tool-use round trip. Worth recording that pi routes this same provider through
+`anthropic-messages` instead: the gateway serves several protocol front doors
+and either choice works, so this is a decision rather than a discovery. It was
+kept because §7.4's grammar is the richer one and therefore the better test of
+the §7.1 boundary. What the verification did change is §7.4's event table, which
+was written from OpenAI's documentation and did not survive contact — see
+§7.4.1 for what the gateway normalizes and what it leaves to vary.
 
 **D2. Fixed degradation rules, no override hook.** *(§7.8.4)*
 The cross-model degradation table is not configurable. A hook here is easy to add
@@ -1984,6 +2078,46 @@ fragile otherwise, and a transcript is exactly the thing this pass exists
 because it cannot assume about. Collecting the id map, and separately the set of
 surviving call ids, before either is applied costs a few lines in elisp and
 makes both rules order-independent.
+
+**D18. `benedict-http` shells out to `curl`.** *(§8.6, §12.2)*
+Emacs has no usable native SSE story. `url.el` can be made to stream by
+attaching a filter to its internal process, but the internals are undocumented
+and the attachment is delicate; raw `make-network-process` means owning chunked
+transfer-encoding, redirects, and proxies. `curl` is what gptel and plz both do,
+and it is what this project's own pre-reset transport did successfully across
+four providers. It costs a **system** dependency — not a `Package-Requires`
+entry, since it is not an Emacs package — which is the price of not
+reimplementing HTTP. §8.6's prohibition is narrowed to the cryptography, which
+is where it was actually load-bearing.
+*Revisit when:* a supported platform lacks `curl`, or Emacs grows a real
+streaming HTTP primitive.
+
+**D19. The shared HTTP path is `benedict-api-stream.el`, in `api/`.** *(§3.2, §7.2)*
+`benedict-provider.el` reaches it by `fboundp` precisely so the kernel does not
+depend on it. It needs the core registries *and* `support/`, which puts it in
+`api/` — it is the composition of auth, an adapter's `endpoint`/`headers`/
+`build`, the transport, and the adapter's parser, and it is where §7.3's "an
+adapter must never signal" is actually enforced, by wrapping the parser in
+`condition-case`. That wrapper is not defensive tidiness: an error signalled
+inside a process filter propagates nowhere useful, so without it a parser bug
+leaves the session wedged in `provider-wait` rather than failing visibly.
+
+**D20. Retry happens only before the first emitted event.** *(§3.2)*
+Retrying a stream that has already delivered deltas would append the retried
+content on top of what the kernel accumulated. The transport therefore retries
+on connection failures and on a non-2xx status — both of which are known before
+any event is emitted — and never once the stream has produced one. A mid-stream
+failure is a terminal `:error`, which the reducer already handles.
+
+**D21. Live service exercise is a script, not a test.** *(§12.5)*
+`nix run .#live` over `scripts/live-smoke.el`, outside `test/`. The alternative
+— an ERT test gated on an environment variable — would have made `test/` gain
+its first conditional suite and made the suite's guarantees depend on the
+runner's environment. The fake provider exists so those guarantees are
+unconditional; a credentialed test in the same directory quietly undoes that.
+The cost is that the script is not maintained by the test runner and can rot,
+which is accepted because its job is to demonstrate a phase exit once, not to
+guard against regression — the recorded fixtures do that.
 
 ---
 

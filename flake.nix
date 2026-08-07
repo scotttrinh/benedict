@@ -71,6 +71,17 @@
           '');
         };
 
+        # Exercises a REAL provider, with real credentials, and spends real
+        # money.  Deliberately not a test: `nix run .#test' is offline and
+        # credential-free and stays that way (SPEC-001 12.5, D21).
+        apps.live = {
+          type = "app";
+          program = toString (runWithEask "run-live" ''
+            exec ${eask}/bin/eask exec ${emacs}/bin/emacs --batch \
+              -l scripts/live-smoke.el -f benedict-live-smoke "$@"
+          '');
+        };
+
         apps.lint = {
           type = "app";
           program = toString (runWithEask "run-lint" ''

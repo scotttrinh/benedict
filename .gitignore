@@ -6,3 +6,4 @@ result-*
 .dirlocals
 /.elsa/
 /example-repos/
+/.probe-cache/

@@ -4,6 +4,12 @@
 - Run one test file: `nix run .#test -- test/path-to-some-file.el`
 - Run multiple test files: `nix run .#test -- test/path-one.el test/path-two.el`
 - Run lints: `nix run .#lint`
+- Exercise a real provider: `nix run .#live`
+
+`nix run .#test` is offline and credential-free, and every suite in it runs
+unconditionally — no skips, no tags, no environment probes. Anything needing a
+key is a script under `scripts/`, run by `nix run .#live`. SPEC-001 §12.5 and
+D21 say why.
 
 ## Source of truth
 

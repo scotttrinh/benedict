@@ -1,0 +1,452 @@
+{
+ "object": "list",
+ "data": [
+  {
+   "id": "deepseek/deepseek-v4-flash-0731",
+   "object": "model",
+   "created": 1755815280,
+   "released": 1776902400,
+   "owned_by": "deepseek",
+   "name": "DeepSeek V4 Flash 0731",
+   "description": "",
+   "context_window": 1000000,
+   "max_tokens": 384000,
+   "type": "language",
+   "tags": [
+    "reasoning",
+    "tool-use",
+    "implicit-caching"
+   ],
+   "supported_specifications": [
+    "v2",
+    "v3",
+    "v4"
+   ],
+   "modalities": {
+    "input": [
+     "text"
+    ],
+    "output": [
+     "text"
+    ]
+   },
+   "supported_parameters": [
+    "max_tokens",
+    "temperature",
+    "stop",
+    "tools",
+    "tool_choice",
+    "reasoning",
+    "include_reasoning"
+   ],
+   "temperature": true,
+   "pricing": {
+    "input": "0.00000013",
+    "output": "0.00000026",
+    "input_cache_read": "0.000000028"
+   }
+  },
+  {
+   "id": "openai/gpt-5",
+   "object": "model",
+   "created": 1755815280,
+   "released": 1754524800,
+   "owned_by": "openai",
+   "name": "GPT-5",
+   "description": "GPT-5 is OpenAI's flagship language model that excels at complex reasoning, broad real-world knowledge, code-intensive, and multi-step agentic tasks.",
+   "context_window": 400000,
+   "max_tokens": 128000,
+   "type": "language",
+   "tags": [
+    "file-input",
+    "implicit-caching",
+    "reasoning",
+    "tool-use",
+    "vision",
+    "web-search"
+   ],
+   "supported_specifications": [
+    "v2",
+    "v3",
+    "v4"
+   ],
+   "modalities": {
+    "input": [
+     "text",
+     "image",
+     "pdf"
+    ],
+    "output": [
+     "text"
+    ]
+   },
+   "supported_parameters": [
+    "max_tokens",
+    "stop",
+    "tools",
+    "tool_choice",
+    "reasoning",
+    "include_reasoning"
+   ],
+   "temperature": false,
+   "reasoning_options": [
+    {
+     "type": "effort",
+     "values": [
+      "minimal",
+      "low",
+      "medium",
+      "high"
+     ]
+    }
+   ],
+   "knowledge": "2024-09-30",
+   "pricing": {
+    "input": "0.00000125",
+    "output": "0.00001",
+    "input_cache_read": "0.000000125",
+    "web_search": "10",
+    "service_tiers": {
+     "priority": {
+      "input": "0.0000025",
+      "output": "0.00002",
+      "input_cache_read": "0.00000025"
+     },
+     "flex": {
+      "input": "0.000000625",
+      "output": "0.000005",
+      "input_cache_read": "0.0000000625"
+     }
+    }
+   }
+  },
+  {
+   "id": "anthropic/claude-sonnet-4.5",
+   "object": "model",
+   "created": 1755815280,
+   "released": 1759104000,
+   "owned_by": "anthropic",
+   "name": "Claude Sonnet 4.5",
+   "description": "Claude Sonnet 4.5 is the newest model in the Sonnet series, offering improvements and updates over Sonnet 4.",
+   "context_window": 1000000,
+   "max_tokens": 64000,
+   "type": "language",
+   "tags": [
+    "explicit-caching",
+    "file-input",
+    "reasoning",
+    "tool-use",
+    "vision",
+    "web-search"
+   ],
+   "regions": [
+    "eu",
+    "us"
+   ],
+   "supported_specifications": [
+    "v2",
+    "v3",
+    "v4"
+   ],
+   "modalities": {
+    "input": [
+     "text",
+     "image",
+     "pdf"
+    ],
+    "output": [
+     "text"
+    ]
+   },
+   "supported_parameters": [
+    "max_tokens",
+    "temperature",
+    "stop",
+    "tools",
+    "tool_choice",
+    "reasoning",
+    "include_reasoning"
+   ],
+   "temperature": true,
+   "reasoning_options": [
+    {
+     "type": "budget_tokens",
+     "min": 1024
+    }
+   ],
+   "knowledge": "2025-07-31",
+   "pricing": {
+    "input": "0.000003",
+    "input_tiers": [
+     {
+      "cost": "0.000003",
+      "min": 0,
+      "max": 200001
+     },
+     {
+      "cost": "0.000006",
+      "min": 200001
+     }
+    ],
+    "output": "0.000015",
+    "output_tiers": [
+     {
+      "cost": "0.000015",
+      "min": 0,
+      "max": 200001
+     },
+     {
+      "cost": "0.0000225",
+      "min": 200001
+     }
+    ],
+    "input_cache_read": "0.0000003",
+    "input_cache_read_tiers": [
+     {
+      "cost": "0.0000003",
+      "min": 0,
+      "max": 200001
+     },
+     {
+      "cost": "0.0000006",
+      "min": 200001
+     }
+    ],
+    "input_cache_write": "0.00000375",
+    "input_cache_write_tiers": [
+     {
+      "cost": "0.00000375",
+      "min": 0,
+      "max": 200001
+     },
+     {
+      "cost": "0.0000075",
+      "min": 200001
+     }
+    ],
+    "web_search": "10",
+    "regional": {
+     "eu": {
+      "input": "0.0000033",
+      "input_tiers": [
+       {
+        "cost": "0.0000033",
+        "min": 0,
+        "max": 200001
+       },
+       {
+        "cost": "0.0000066",
+        "min": 200001
+       }
+      ],
+      "output": "0.0000165",
+      "output_tiers": [
+       {
+        "cost": "0.0000165",
+        "min": 0,
+        "max": 200001
+       },
+       {
+        "cost": "0.00002475",
+        "min": 200001
+       }
+      ],
+      "input_cache_read": "0.00000033",
+      "input_cache_read_tiers": [
+       {
+        "cost": "0.00000033",
+        "min": 0,
+        "max": 200001
+       },
+       {
+        "cost": "0.00000066",
+        "min": 200001
+       }
+      ],
+      "input_cache_write": "0.000004125",
+      "input_cache_write_tiers": [
+       {
+        "cost": "0.000004125",
+        "min": 0,
+        "max": 200001
+       },
+       {
+        "cost": "0.00000825",
+        "min": 200001
+       }
+      ]
+     },
+     "us": {
+      "input": "0.0000033",
+      "input_tiers": [
+       {
+        "cost": "0.0000033",
+        "min": 0,
+        "max": 200001
+       },
+       {
+        "cost": "0.0000066",
+        "min": 200001
+       }
+      ],
+      "output": "0.0000165",
+      "output_tiers": [
+       {
+        "cost": "0.0000165",
+        "min": 0,
+        "max": 200001
+       },
+       {
+        "cost": "0.00002475",
+        "min": 200001
+       }
+      ],
+      "input_cache_read": "0.00000033",
+      "input_cache_read_tiers": [
+       {
+        "cost": "0.00000033",
+        "min": 0,
+        "max": 200001
+       },
+       {
+        "cost": "0.00000066",
+        "min": 200001
+       }
+      ],
+      "input_cache_write": "0.000004125",
+      "input_cache_write_tiers": [
+       {
+        "cost": "0.000004125",
+        "min": 0,
+        "max": 200001
+       },
+       {
+        "cost": "0.00000825",
+        "min": 200001
+       }
+      ]
+     }
+    }
+   }
+  },
+  {
+   "id": "alibaba/qwen3-embedding-0.6b",
+   "object": "model",
+   "created": 1755815280,
+   "released": 1763078400,
+   "owned_by": "alibaba",
+   "name": "Qwen3 Embedding 0.6B",
+   "description": "The Qwen3 Embedding model series is the latest proprietary model of the Qwen family, specifically designed for text embedding and ranking tasks. Building upon the dense foundational models of the Qwen3 series, it provides a comprehensive range of text embeddings and reranking models in various sizes (0.6B, 4B, and 8B).",
+   "context_window": 32768,
+   "max_tokens": 32768,
+   "type": "embedding",
+   "supported_specifications": [
+    "v2",
+    "v3",
+    "v4"
+   ],
+   "modalities": {
+    "input": [
+     "text"
+    ],
+    "output": [
+     "text"
+    ]
+   },
+   "pricing": {
+    "input": "0.00000001"
+   }
+  },
+  {
+   "id": "alibaba/qwen3-coder",
+   "object": "model",
+   "created": 1755815280,
+   "released": 1753142400,
+   "owned_by": "alibaba",
+   "name": "Qwen3 Coder 480B A35B Instruct",
+   "description": "Qwen3-Coder-480B-A35B-Instruct is a cutting-edge open coding model from Qwen, matching Claude Sonnet\u2019s performance in agentic programming, browser automation, and core development tasks.",
+   "context_window": 262144,
+   "max_tokens": 65536,
+   "type": "language",
+   "tags": [
+    "tool-use",
+    "implicit-caching"
+   ],
+   "supported_specifications": [
+    "v2",
+    "v3",
+    "v4"
+   ],
+   "modalities": {
+    "input": [
+     "text"
+    ],
+    "output": [
+     "text"
+    ]
+   },
+   "supported_parameters": [
+    "max_tokens",
+    "temperature",
+    "stop",
+    "tools",
+    "tool_choice"
+   ],
+   "temperature": true,
+   "knowledge": "2025-04",
+   "pricing": {
+    "input": "0.0000015",
+    "input_tiers": [
+     {
+      "cost": "0.0000015",
+      "min": 0,
+      "max": 32001
+     },
+     {
+      "cost": "0.0000027",
+      "min": 32001,
+      "max": 128001
+     },
+     {
+      "cost": "0.0000045",
+      "min": 128001
+     }
+    ],
+    "output": "0.0000075",
+    "output_tiers": [
+     {
+      "cost": "0.0000075",
+      "min": 0,
+      "max": 32001
+     },
+     {
+      "cost": "0.0000135",
+      "min": 32001,
+      "max": 128001
+     },
+     {
+      "cost": "0.0000225",
+      "min": 128001
+     }
+    ],
+    "input_cache_read": "0.0000003",
+    "input_cache_read_tiers": [
+     {
+      "cost": "0.0000003",
+      "min": 0,
+      "max": 32001
+     },
+     {
+      "cost": "0.00000054",
+      "min": 32001,
+      "max": 128001
+     },
+     {
+      "cost": "0.0000009",
+      "min": 128001
+     }
+    ]
+   }
+  }
+ ]
+}

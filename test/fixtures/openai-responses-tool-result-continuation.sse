@@ -1,0 +1,42 @@
+event: response.created
+data: {"type":"response.created","sequence_number":0,"response":{"id":"gen_01KZCV6SH5DBGKR1SQE6AJJTHP","object":"response","created_at":1786063842,"status":"in_progress","completed_at":null,"incomplete_details":null,"error":null,"output":[],"usage":{"input_tokens":0,"output_tokens":0,"total_tokens":0,"input_tokens_details":{"cached_tokens":0},"output_tokens_details":{"reasoning_tokens":0}},"model":"deepseek/deepseek-v4-flash-0731","instructions":null,"previous_response_id":null,"temperature":1,"top_p":1,"max_output_tokens":null,"presence_penalty":0,"frequency_penalty":0,"top_logprobs":0,"tools":[{"type":"function","name":"eval_elisp","description":"Evaluate an Emacs Lisp form and return the result.","parameters":{"type":"object","properties":{"form":{"type":"string","description":"A single Emacs Lisp form."}},"required":["form"]},"strict":null}],"tool_choice":"auto","parallel_tool_calls":true,"max_tool_calls":null,"text":{"format":{"type":"text"}},"truncation":"disabled","reasoning":null,"store":false,"background":false,"service_tier":"auto","metadata":{},"safety_identifier":null,"prompt_cache_key":null,"prompt_cache_retention":null}}
+
+event: response.in_progress
+data: {"type":"response.in_progress","sequence_number":1,"response":{"id":"gen_01KZCV6SH5DBGKR1SQE6AJJTHP","object":"response","created_at":1786063842,"status":"in_progress","completed_at":null,"incomplete_details":null,"error":null,"output":[],"usage":{"input_tokens":0,"output_tokens":0,"total_tokens":0,"input_tokens_details":{"cached_tokens":0},"output_tokens_details":{"reasoning_tokens":0}},"model":"deepseek/deepseek-v4-flash-0731","instructions":null,"previous_response_id":null,"temperature":1,"top_p":1,"max_output_tokens":null,"presence_penalty":0,"frequency_penalty":0,"top_logprobs":0,"tools":[{"type":"function","name":"eval_elisp","description":"Evaluate an Emacs Lisp form and return the result.","parameters":{"type":"object","properties":{"form":{"type":"string","description":"A single Emacs Lisp form."}},"required":["form"]},"strict":null}],"tool_choice":"auto","parallel_tool_calls":true,"max_tool_calls":null,"text":{"format":{"type":"text"}},"truncation":"disabled","reasoning":null,"store":false,"background":false,"service_tier":"auto","metadata":{},"safety_identifier":null,"prompt_cache_key":null,"prompt_cache_retention":null}}
+
+event: response.output_item.added
+data: {"type":"response.output_item.added","sequence_number":2,"output_index":0,"item":{"type":"message","id":"msg_1786063843348_di8c0i0fxng","status":"in_progress","role":"assistant","content":[{"type":"output_text","text":"","annotations":[],"logprobs":[]}]}}
+
+event: response.content_part.added
+data: {"type":"response.content_part.added","sequence_number":3,"item_id":"msg_1786063843348_di8c0i0fxng","output_index":0,"content_index":0,"part":{"type":"output_text","text":"","annotations":[],"logprobs":[]}}
+
+event: response.output_text.delta
+data: {"type":"response.output_text.delta","sequence_number":4,"item_id":"msg_1786063843348_di8c0i0fxng","output_index":0,"content_index":0,"delta":"The","logprobs":[]}
+
+event: response.output_text.delta
+data: {"type":"response.output_text.delta","sequence_number":5,"item_id":"msg_1786063843348_di8c0i0fxng","output_index":0,"content_index":0,"delta":" answer","logprobs":[]}
+
+event: response.output_text.delta
+data: {"type":"response.output_text.delta","sequence_number":6,"item_id":"msg_1786063843348_di8c0i0fxng","output_index":0,"content_index":0,"delta":" is","logprobs":[]}
+
+event: response.output_text.delta
+data: {"type":"response.output_text.delta","sequence_number":7,"item_id":"msg_1786063843348_di8c0i0fxng","output_index":0,"content_index":0,"delta":" **","logprobs":[]}
+
+event: response.output_text.delta
+data: {"type":"response.output_text.delta","sequence_number":8,"item_id":"msg_1786063843348_di8c0i0fxng","output_index":0,"content_index":0,"delta":"3","logprobs":[]}
+
+event: response.output_text.delta
+data: {"type":"response.output_text.delta","sequence_number":9,"item_id":"msg_1786063843348_di8c0i0fxng","output_index":0,"content_index":0,"delta":"**.","logprobs":[]}
+
+event: response.output_text.done
+data: {"type":"response.output_text.done","sequence_number":10,"item_id":"msg_1786063843348_di8c0i0fxng","output_index":0,"content_index":0,"text":"The answer is **3**.","logprobs":[]}
+
+event: response.content_part.done
+data: {"type":"response.content_part.done","sequence_number":11,"item_id":"msg_1786063843348_di8c0i0fxng","output_index":0,"content_index":0,"part":{"type":"output_text","text":"The answer is **3**.","annotations":[],"logprobs":[]}}
+
+event: response.output_item.done
+data: {"type":"response.output_item.done","sequence_number":12,"output_index":0,"item":{"type":"message","id":"msg_1786063843348_di8c0i0fxng","status":"completed","role":"assistant","content":[{"type":"output_text","text":"The answer is **3**.","annotations":[],"logprobs":[]}]}}
+
+event: response.completed
+data: {"type":"response.completed","sequence_number":13,"response":{"id":"gen_01KZCV6SH5DBGKR1SQE6AJJTHP","object":"response","created_at":1786063842,"status":"completed","completed_at":1786063843,"incomplete_details":null,"error":null,"output":[{"type":"message","id":"msg_1786063843348_di8c0i0fxng","status":"completed","role":"assistant","content":[{"type":"output_text","text":"The answer is **3**.","annotations":[],"logprobs":[]}]}],"usage":{"input_tokens":468,"output_tokens":7,"total_tokens":475,"input_tokens_details":{"cached_tokens":256},"output_tokens_details":{"reasoning_tokens":0}},"model":"deepseek-v4-flash-202605","instructions":null,"previous_response_id":null,"temperature":1,"top_p":1,"max_output_tokens":null,"presence_penalty":0,"frequency_penalty":0,"top_logprobs":0,"tools":[{"type":"function","name":"eval_elisp","description":"Evaluate an Emacs Lisp form and return the result.","parameters":{"type":"object","properties":{"form":{"type":"string","description":"A single Emacs Lisp form."}},"required":["form"]},"strict":null}],"tool_choice":"auto","parallel_tool_calls":true,"max_tool_calls":null,"text":{"format":{"type":"text"}},"truncation":"disabled","reasoning":null,"store":false,"background":false,"service_tier":"auto","metadata":{},"safety_identifier":null,"prompt_cache_key":null,"prompt_cache_retention":null,"provider_metadata":{"gmicloud":{},"gateway":{"routing":{"originalModelId":"deepseek/deepseek-v4-flash-0731","resolvedProvider":"baseten","fallbacksAvailable":["fireworks","gmicloud","alibaba","novita","deepinfra","deepseek"],"planningReasoning":"Weighted tie pick: fireworks won tier 0 over baseten. System credentials planned for: baseten, fireworks, gmicloud, alibaba, novita, deepinfra, deepseek. Total execution order: baseten(system) → fireworks(system) → gmicloud(system) → alibaba(system) → novita(system) → deepinfra(system) → deepseek(system)","canonicalSlug":"deepseek/deepseek-v4-flash-0731","finalProvider":"gmicloud","modelAttemptCount":1,"modelAttempts":[{"canonicalSlug":"deepseek/deepseek-v4-flash-0731","success":true,"providerAttemptCount":3,"providerAttempts":[{"provider":"fireworks","credentialType":"system","success":false,"error":"Service temporarily unavailable","startTime":1786063840858,"endTime":1786063841010,"statusCode":503},{"provider":"baseten","credentialType":"system","success":false,"error":"Service temporarily unavailable","startTime":1786063841011,"endTime":1786063841077,"statusCode":503},{"provider":"gmicloud","credentialType":"system","success":true,"startTime":1786063841077,"endTime":1786063843792,"statusCode":200,"providerResponseId":"2dd98ed8-0c90-462e-81c5-7d5c5fb4fbc6"}]}],"totalProviderAttemptCount":3},"cost":"0.000034876","marketCost":"0.000034876","surchargeCost":"0","gatewayCost":"0.000034876","inferenceCost":"0.000034876","inputInferenceCost":"0.000033112","outputInferenceCost":"0.000001764","generationId":"gen_01KZCV6SH5DBGKR1SQE6AJJTHP"}}}}
+
