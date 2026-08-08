@@ -1,0 +1,158 @@
+#+title: Extending Benedict
+
+* Why extend Benedict
+
+Benedict is deliberately tiny.  Its core runs conversations, tools, providers,
+and hooks.  The user builds the behavior they want from that core with ordinary
+Emacs Lisp.  Personal extension is how Benedict becomes the user's Benedict.
+
+Explore the live Emacs environment when the user needs behavior Benedict does
+not provide.  Inspect existing functions and variables, try small changes, and
+refine them from the user's feedback.  The user may keep the resulting
+functionality for themselves or share it with others.  Both are complete
+outcomes.
+
+* You are inside Emacs
+
+Benedict runs in a live Emacs image.  =eval-elisp= reads and evaluates one
+Emacs Lisp form in that image.  A definition or setting takes effect
+immediately.  You do not need to rebuild or restart Benedict.
+
+Use this loop:
+
+1. Choose how long the change should live.
+2. Inspect the live API.
+3. Evaluate the smallest useful change.
+4. Exercise the changed behavior.
+5. Refine the change from the user's feedback.
+6. Persist the change only when it should survive an Emacs restart.
+
+* Choose the lifetime first
+
+Every change has one of three lifetimes:
+
+| Lifetime | Use it for | Mechanism |
+|----------+------------+-----------|
+| Session | One conversation | Session tools, session hooks, or session state |
+| Image | Until Emacs exits | Definitions, global hooks, advice, or settings |
+| Disk | Across restarts | The same Elisp in a file loaded by the user's Emacs configuration |
+
+Do not write a file when a session-local or image-local change is enough.  Do
+not make an image-wide change when only one session should observe it.
+
+* Inspect before changing
+
+Treat the running image as the source of truth for API details.  Use
+=eval-elisp= to query it.
+
+Read a function's documentation:
+
+#+begin_src emacs-lisp
+(documentation #'benedict-deftool)
+#+end_src
+
+Inspect its argument list:
+
+#+begin_src emacs-lisp
+(help-function-arglist #'benedict-deftool t)
+#+end_src
+
+Read a variable or hook contract:
+
+#+begin_src emacs-lisp
+(documentation-property
+ 'benedict-tool-dispatch-functions
+ 'variable-documentation)
+#+end_src
+
+Find matching functions:
+
+#+begin_src emacs-lisp
+(apropos-internal "^benedict-tool-" #'fboundp)
+#+end_src
+
+Find Benedict hook variables:
+
+#+begin_src emacs-lisp
+(apropos-internal "^benedict-.*-functions$")
+#+end_src
+
+Read docstrings instead of guessing signatures, argument meanings, callback
+contracts, or return values.
+
+* Prototype in the live image
+
+=eval-elisp= accepts one form.  Use =progn= when the operation needs several
+forms.
+
+#+begin_src emacs-lisp
+(progn
+  (defun my-benedict-helper (value)
+    (* value 2))
+  (my-benedict-helper 21))
+#+end_src
+
+Evaluate the change, then trigger the behavior it affects.  Redefine the
+function and test again when necessary.  Writing a file does not make a change
+more real; it only makes the change durable.
+
+* Use the narrowest mechanism
+
+Use ordinary Emacs Lisp mechanisms:
+
+- Use a session property for session-local state.
+- Use a session hook for behavior that applies to one session.
+- Use a global hook for behavior that applies to the whole Emacs image.
+- Define a tool when the model should invoke a named capability deliberately.
+- Use a filter or dispatch hook to transform, block, approve, or reroute work.
+- Use =setopt= for a published user option.
+- Use advice or function redefinition only when no published hook expresses the
+  change.
+
+A tool is a promoted capability, not the only way to run Elisp.  Give it a
+clear model-facing description and a narrow, inspectable argument schema.
+
+Hook contracts differ.  Some observe, some transform a value, and some receive
+a continuation.  Inspect each hook's variable documentation before using it.
+
+* Make the change durable
+
+Persist a proven change as an ordinary Emacs Lisp file.  Require the libraries
+whose public interfaces it uses, give public and internal definitions distinct
+names, and provide a feature.
+
+Make the user's Emacs configuration load the file with =require= or =load=.
+Benedict does not own extension discovery or load order.  The user's Emacs
+configuration is the root of durable loading.
+
+Prefer a separate extension file over placing substantial code directly in the
+user's init file.  A broken extension can be disabled while Emacs still starts.
+Keep configuration under version control so a bad persistent change is easy to
+recover.
+
+* Keep reloading idempotent
+
+Assume the extension file will be loaded more than once.
+
+- Define hook functions by name.  Never add an anonymous lambda to a hook.
+- Register tools and providers by stable identifiers.
+- Replace definitions and registrations instead of accumulating copies.
+- Avoid irreversible load-time side effects.
+
+=defun= replaces a function definition.  Benedict's keyed registrations
+replace the prior value.  =add-hook= with the same named function does not add a
+duplicate.  These properties are the reload mechanism.
+
+* Verify the result
+
+Do not stop after evaluation or file creation.
+
+1. Confirm that the definition, hook, tool, or setting exists in the image.
+2. Trigger the behavior through the same path that will use it.
+3. Inspect the result and any changed session state.
+4. Reload a durable extension and verify that it does not duplicate effects.
+5. Report the lifetime and loading arrangement to the user.
+
+An extension in the user's configuration is a complete result.  Sharing it as a
+package or contributing it to Benedict is also valid.  Let the user choose the
+scope.
