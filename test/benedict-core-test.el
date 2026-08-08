@@ -295,6 +295,55 @@ runs the machine the way it actually runs, on `run-at-time'."
         (benedict-test-drain)
         (should (equal (reverse events) '(run-start turn-start run-end)))))))
 
+;;;; Notes
+
+(ert-deftest benedict-session-note-appends-and-announces ()
+  "A note reaches the transcript AND both entry hooks.
+
+The second half is the whole point of the function: `benedict-session-append'
+moves the tree and fires nothing, so an entry written through it is
+invisible to the store and to every renderer."
+  (benedict-test-with-clean-registries
+    (let ((session (benedict-session-create))
+          (started nil)
+          (ended nil))
+      (benedict-session-add-hook session 'benedict-entry-start-functions
+                                 (lambda (_session entry) (push entry started)))
+      (benedict-session-add-hook session 'benedict-entry-end-functions
+                                 (lambda (_session entry) (push entry ended)))
+      (let ((entry (benedict-session-note session "the image was extended")))
+        (should (eq (benedict-entry-role entry) 'note))
+        (should (equal started (list entry)))
+        (should (equal ended (list entry)))
+        (should (eq (benedict-session-entry session (benedict-entry-id entry)) entry))
+        (should (equal (benedict-session-head session) (benedict-entry-id entry)))))))
+
+(ert-deftest benedict-session-note-written-from-a-tool-lands-before-the-result ()
+  "A note written mid-call sits between the call and the result answering it.
+
+This is the placement a renderer has to cope with, and it is deliberate:
+recording when the image changed beats waiting for a tidy turn boundary.
+It is also the shape of the intended use -- a tool that modified the
+running image saying so, from inside the call that did it."
+  (benedict-test-with-clean-registries
+    (benedict-deftool benedict-test-noting
+      :description "Write a note, then answer."
+      :parameters nil
+      :sync t
+      :handler (lambda (_invocation)
+                 (benedict-session-note benedict-current-session "(setq x 1)")
+                 (benedict-tool-result :content "done")))
+    (benedict-test-with-manual-defer
+      (let ((session (benedict-test-session
+                      '(((:tool-call benedict-test-noting nil))
+                        ((:text "ok")))
+                      :tools '(benedict-test-noting))))
+        (benedict-session-submit session "go")
+        (benedict-test-drain)
+        (should (eq (benedict-session-state session) 'idle))
+        (should (equal (benedict-test-entry-roles session)
+                       '(user assistant note tool-result assistant)))))))
+
 ;;;; Context and request filters
 
 (ert-deftest benedict-core-notes-are-out-of-context-unless-flagged ()
@@ -302,11 +351,8 @@ runs the machine the way it actually runs, on `run-at-time'."
   (benedict-test-with-clean-registries
     (benedict-test-with-manual-defer
       (let ((session (benedict-test-session '(((:text "ok"))))))
-        (benedict-core--emit-entry
-         session (benedict-entry-create :role 'note :content "internal only"))
-        (benedict-core--emit-entry
-         session (benedict-entry-create :role 'note :content "remember ISO dates"
-                                        :meta '(:context t)))
+        (benedict-session-note session "internal only")
+        (benedict-session-note session "remember ISO dates" '(:context t))
         (benedict-session-submit session "hi")
         (benedict-test-drain)
         (let* ((script (benedict-provider-fake-script-of

@@ -218,7 +218,8 @@ mechanism.  A member may
   allow             (funcall next invocation)
   modify and allow  (funcall next (benedict-invocation-with invocation ...))
   deny              (funcall next (benedict-tool-blocked invocation \"reason\"))
-  reroute           (funcall next (benedict-tool-retarget invocation \\='sandbox))
+  reroute           (funcall next (benedict-invocation-with invocation
+                                    :tool a-tool-that-runs-it-elsewhere))
   suspend           hold NEXT and call it later, from a callback
 
 A suspended run is simply one whose continuation has not been called yet.
@@ -276,8 +277,17 @@ giving it an entry would make every consumer special-case the first one.")
 Changing it mid-conversation is a first-class operation -- it is how
 \"retry with a stronger model\" works -- and the transcript survives it,
 because each entry records its own origin and is lowered accordingly.")
-  (tools nil
-         :documentation "List of `benedict-tool' objects offered to the model.")
+  (tool-selection nil
+                  :documentation "What this session offers, before resolution.
+Either a list of tool ids and `benedict-tool' objects, or a function of
+the session returning such a list.  A function is called on every
+resolution, so (lambda (_session) (benedict-tool-list)) is the live view
+of every registered tool, and the selection that lets a session see a
+tool registered after it was created.
+
+Read through `benedict-session-tool-list', which resolves this.  Nothing
+should read this slot: resolution is what makes the answer current, and a
+list taken from here is unresolved rather than merely stale.")
   (store nil
          :documentation "Opaque handle on this session's persistence, or nil.
 
@@ -317,10 +327,16 @@ through `benedict-model-resolve'.  PROVIDER, when given, is the provider
 id used as the prefix for a MODEL string that has none, so a caller
 holding the two separately need not concatenate them.
 
-TOOLS is a list of tool ids and `benedict-tool' objects, resolved through
-`benedict-tool-resolve'.  SYSTEM-PROMPT is the instruction text sent with
-every request.  STORE is an opaque persistence handle the kernel never
-calls into.
+TOOLS is this session's tool selection: either a list of tool ids and
+`benedict-tool' objects, or a function of the session returning such a
+list.  Pass (lambda (_session) (benedict-tool-list)) for the live view of
+every registered tool, which is what lets a session offer a tool that was
+registered after it was created.  A list is validated here, so a
+misspelled id signals now rather than at request time, but it is resolved
+again on every request -- see `benedict-session-tool-list'.
+
+SYSTEM-PROMPT is the instruction text sent with every request.  STORE is
+an opaque persistence handle the kernel never calls into.
 
 TRANSCRIPT adopts an existing `benedict-transcript' -- this is how a
 session is resumed from a log -- and its session id then wins over ID, so
@@ -340,8 +356,23 @@ id."
      :state 'idle
      :system-prompt system-prompt
      :model (benedict-session--resolve-model model provider)
-     :tools (benedict-tool-resolve tools)
+     :tool-selection (benedict-session--check-tools tools)
      :store store)))
+
+(defun benedict-session--check-tools (tools)
+  "Return the tool selection TOOLS, having validated a list one.
+
+A list is resolved and the result discarded: the point is to signal
+`benedict-tool-unknown' for a misspelled id while the caller is still
+holding the stack that named it, rather than on the first request.  The
+resolution is thrown away because the selection is resolved again per
+request, which is what keeps a long-lived session current.
+
+A function cannot be checked without calling it, and calling it here
+would run it against a session that does not exist yet."
+  (unless (functionp tools)
+    (benedict-tool-resolve tools))
+  tools)
 
 (defun benedict-session--resolve-model (model provider)
   "Return the `benedict-model' MODEL names, prefixing with PROVIDER if needed.
@@ -352,6 +383,27 @@ is chosen."
    ((and provider (stringp model) (not (string-search "/" model)))
     (benedict-model-resolve (format "%s/%s" provider model)))
    (t (benedict-model-resolve model))))
+
+(defun benedict-session-tool-list (session)
+  "Resolve and return the `benedict-tool' objects SESSION currently offers.
+
+This is the only supported reader for what a session can call, and every
+request is built from it.  A frontend that lists available tools must
+call it rather than keeping its own copy, because the answer changes: a
+selection is resolved on each call, so a tool registered since the last
+one appears without anybody refreshing anything.
+
+Ids resolve through the registry at this moment rather than when the
+session was created, so reloading the file that defines a tool also
+updates the schema a long-lived session sends -- a list selection fixes
+which tools are offered, not what they are.
+
+Signal `benedict-tool-unknown' when the selection names an id with no
+registered tool.  Dropping it silently would hand the model a tool list
+quietly missing an entry, and the model has no way to notice."
+  (let ((selection (benedict-session-tool-selection session)))
+    (benedict-tool-resolve
+     (if (functionp selection) (funcall selection session) selection))))
 
 (defun benedict-session-provider (session)
   "Return the id of the provider SESSION's model belongs to, or nil.
@@ -583,7 +635,7 @@ the running invocation and a continuation, and the chain advances only
 when that continuation is called -- so a member may hold it and resume
 the run later, which is what an approval prompt does.  DONE receives the
 invocation as the chain left it: possibly rewritten, blocked, or
-retargeted.
+pointed at a different tool.
 
 `benedict-current-session' is rebound at each step rather than once
 around the whole chain, because a suspended step resumes long after the

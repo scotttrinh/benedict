@@ -166,30 +166,35 @@
           (should (plist-get block :error-p)))))))
 
 (ert-deftest benedict-core-dispatch-filter-can-reroute ()
-  "A retargeted call runs on the registered executor instead of locally."
+  "A filter substitutes the tool, and the work runs somewhere the kernel cannot see.
+
+This is what a sandbox package does, minus the subordinate Emacs: the
+stand-in receives the invocation the model produced, answers with a
+result, and the reducer appends a tool-result entry indistinguishable
+from a local one.  Nothing in the kernel is told that execution moved,
+which is the property the design is after."
   (benedict-test-with-clean-registries
     (benedict-core-dispatch-test--tool)
     (benedict-test-with-manual-defer
-      (let ((session (benedict-core-dispatch-test--session))
-            (routed nil))
-        (unwind-protect
-            (progn
-              (benedict-tool-register-executor
-               'benedict-test-elsewhere
-               (lambda (invocation done)
-                 (push (benedict-invocation-name invocation) routed)
-                 (funcall done (benedict-tool-result :content "ran elsewhere"))))
-              (benedict-session-add-hook
-               session 'benedict-tool-dispatch-functions
-               (lambda (invocation next)
-                 (funcall next (benedict-tool-retarget
-                                invocation 'benedict-test-elsewhere))))
-              (benedict-session-submit session "go")
-              (benedict-test-drain)
-              (should (equal routed '(benedict-test-say)))
-              (should (equal (benedict-core-dispatch-test--result-contents session)
-                             '("ran elsewhere"))))
-          (benedict-tool-unregister-executor 'benedict-test-elsewhere))))))
+      (let* ((routed nil)
+             (session (benedict-core-dispatch-test--session))
+             (elsewhere (benedict-tool-create
+                         :id 'benedict-test-elsewhere :parameters nil :sync t
+                         :handler (lambda (invocation)
+                                    (push (benedict-invocation-name invocation) routed)
+                                    (benedict-tool-result :content "ran elsewhere")))))
+        (benedict-session-add-hook
+         session 'benedict-tool-dispatch-functions
+         (lambda (invocation next)
+           (funcall next (benedict-invocation-with invocation :tool elsewhere))))
+        (benedict-session-submit session "go")
+        (benedict-test-drain)
+        (should (equal routed '(benedict-test-say)))
+        (should (equal (benedict-core-dispatch-test--result-contents session)
+                       '("ran elsewhere")))
+        ;; The stand-in was never registered, so it was reachable only through
+        ;; the filter that installed it.
+        (should-not (benedict-tool-get 'benedict-test-elsewhere))))))
 
 ;;;; Ordering and observation
 

@@ -172,7 +172,7 @@
                                              :tools '(benedict-test-noop))))
       (should (eq (benedict-session-model session) model))
       (should (eq (benedict-session-provider session) 'fake))
-      (should (equal (mapcar #'benedict-tool-id (benedict-session-tools session))
+      (should (equal (mapcar #'benedict-tool-id (benedict-session-tool-list session))
                      '(benedict-test-noop)))
       (should (eq (benedict-session-state session) 'idle)))))
 
@@ -202,6 +202,90 @@
   (benedict-test-with-clean-registries
     (should-error (benedict-session-create :tools '(benedict-test-absent))
                   :type 'benedict-tool-unknown)))
+
+;;;; The tool selection
+
+(defun benedict-session-test--deftool (id)
+  "Register and return a do-nothing tool named ID."
+  (benedict-tool-register
+   (benedict-tool-create :id id :parameters nil :sync t
+                         :handler (lambda (_invocation)
+                                    (benedict-tool-result :content "")))))
+
+(ert-deftest benedict-session-tool-list-resolves-a-list-per-call ()
+  "A list selection is fixed, but its ids resolve fresh on every call.
+
+The distinction is what makes reloading an extension file take effect in
+a session created before the reload: the selection names which tools are
+offered, not which structs."
+  (benedict-test-with-clean-registries
+    (benedict-session-test--deftool 'benedict-test-a)
+    (let* ((session (benedict-session-create :tools '(benedict-test-a)))
+           (first (car (benedict-session-tool-list session))))
+      (should (eq first (benedict-tool-get 'benedict-test-a)))
+      (let ((replacement (benedict-session-test--deftool 'benedict-test-a)))
+        (should-not (eq first replacement))
+        (should (eq (car (benedict-session-tool-list session)) replacement))))))
+
+(ert-deftest benedict-session-tool-list-follows-a-function-selection ()
+  "A function selection is called per resolution, so later registrations appear.
+
+Asserted as a delta rather than against the whole registry, which also
+holds whatever tools the image loaded -- `eval-elisp' among them."
+  (benedict-test-with-clean-registries
+    (benedict-session-test--deftool 'benedict-test-a)
+    (let* ((session (benedict-session-create
+                     :tools (lambda (_session) (benedict-tool-list))))
+           (before (mapcar #'benedict-tool-id (benedict-session-tool-list session))))
+      (should (memq 'benedict-test-a before))
+      (should-not (memq 'benedict-test-b before))
+      (benedict-session-test--deftool 'benedict-test-b)
+      (let ((after (mapcar #'benedict-tool-id (benedict-session-tool-list session))))
+        (should (memq 'benedict-test-b after))
+        (should (equal (seq-difference after before) '(benedict-test-b)))))))
+
+(ert-deftest benedict-session-tool-list-passes-the-session-to-a-selection ()
+  "A selection function receives its session, so it can read session state."
+  (benedict-test-with-clean-registries
+    (benedict-session-test--deftool 'benedict-test-a)
+    (let ((session (benedict-session-create
+                    :tools (lambda (session)
+                             (and (benedict-session-get session :allowed)
+                                  '(benedict-test-a))))))
+      (should-not (benedict-session-tool-list session))
+      (benedict-session-put session :allowed t)
+      (should (equal (mapcar #'benedict-tool-id (benedict-session-tool-list session))
+                     '(benedict-test-a))))))
+
+(ert-deftest benedict-session-tool-list-offers-an-unregistered-tool ()
+  "A selection may carry a tool struct that was never registered.
+
+This is the whole of session scoping: the registry is image-wide, so a
+tool that must reach one session only stays out of it."
+  (benedict-test-with-clean-registries
+    (let* ((scoped (benedict-tool-create
+                    :id 'benedict-test-scoped :parameters nil :sync t
+                    :handler (lambda (_invocation) (benedict-tool-result :content ""))))
+           (session (benedict-session-create :tools (list scoped))))
+      (should (equal (benedict-session-tool-list session) (list scoped)))
+      (should-not (benedict-tool-get 'benedict-test-scoped)))))
+
+(ert-deftest benedict-session-tool-list-signals-for-an-id-that-went-away ()
+  "Unregistering a selected tool signals rather than silently shortening the list."
+  (benedict-test-with-clean-registries
+    (benedict-session-test--deftool 'benedict-test-a)
+    (let ((session (benedict-session-create :tools '(benedict-test-a))))
+      (should (benedict-session-tool-list session))
+      (benedict-tool-unregister 'benedict-test-a)
+      (should-error (benedict-session-tool-list session)
+                    :type 'benedict-tool-unknown))))
+
+(ert-deftest benedict-session-create-does-not-call-a-selection-function ()
+  "A function selection is not validated at creation; there is no session yet."
+  (benedict-test-with-clean-registries
+    (let ((called nil))
+      (benedict-session-create :tools (lambda (_session) (setq called t) nil))
+      (should-not called))))
 
 ;;;; Transcript delegation and forking
 

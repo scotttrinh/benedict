@@ -115,7 +115,6 @@
       (should (eq (benedict-invocation-name invocation) 'benedict-test-a))
       (should (eq (benedict-invocation-tool invocation)
                   (benedict-tool-get 'benedict-test-a)))
-      (should (eq (benedict-invocation-target invocation) 'local))
       (should (equal (benedict-tool-arg invocation :text) "hi"))
       (should (eq (benedict-tool-arg invocation :missing 'fallback) 'fallback)))))
 
@@ -131,16 +130,13 @@
     (should-error (benedict-invocation-with original :id)
                   :type 'benedict-tool-error)))
 
-(ert-deftest benedict-tool-blocked-and-retarget-return-copies ()
+(ert-deftest benedict-tool-blocked-returns-a-copy ()
   (let ((original (benedict-invocation-create :id "a" :name 'x)))
     (should-not (benedict-invocation-blocked-p original))
     (let ((blocked (benedict-tool-blocked original "because")))
       (should (benedict-invocation-blocked-p blocked))
       (should (equal (benedict-invocation-blocked-reason blocked) "because"))
-      (should-not (benedict-invocation-blocked-p original)))
-    (let ((rerouted (benedict-tool-retarget original 'sandbox)))
-      (should (eq (benedict-invocation-target rerouted) 'sandbox))
-      (should (eq (benedict-invocation-target original) 'local)))))
+      (should-not (benedict-invocation-blocked-p original)))))
 
 ;;;; Execution
 
@@ -178,7 +174,7 @@
         (should (equal (benedict-tool-result-value-content result) "eventually"))))))
 
 (ert-deftest benedict-tool-execute-answers-rather-than-signals ()
-  "Blocked, unknown, and unroutable calls all become results the model sees."
+  "Blocked and unknown calls both become results the model sees."
   (benedict-tool-test--with-tools
     (benedict-deftool benedict-test-a
       :description "a" :parameters nil :sync t
@@ -186,35 +182,64 @@
     (let ((invocation (benedict-invocation-create :id "1" :name 'benedict-test-a)))
       (dolist (case (list (cons (benedict-tool-blocked invocation "denied") "denied")
                           (cons (benedict-invocation-create :id "2" :name 'benedict-test-gone)
-                                "No such tool: benedict-test-gone")
-                          (cons (benedict-tool-retarget invocation 'nowhere)
-                                "No executor for target nowhere")))
+                                "No such tool: benedict-test-gone")))
         (let ((result nil))
           (benedict-tool-execute (car case) (lambda (value) (setq result value)))
           (should (benedict-tool-result-value-error-p result))
           (should (equal (benedict-tool-result-value-content result) (cdr case))))))))
 
-(ert-deftest benedict-tool-executors-are-replaceable ()
+(ert-deftest benedict-tool-substituting-the-tool-reroutes-the-call ()
+  "Execution funcalls whatever tool the invocation carries.
+
+This is the whole of rerouting: a filter hands on an invocation whose
+`tool\=' is a stand-in that sends the work elsewhere, and the substitute
+still sees the name and arguments the model asked for.  There is no
+execution-target registry to consult, and nothing here can tell that the
+work did not run where it would have."
+  (benedict-tool-test--with-tools
+    (benedict-deftool benedict-test-a
+      :description "a"
+      :parameters '((n :type integer :required t :description "A number."))
+      :sync t
+      :handler (lambda (_invocation) (benedict-tool-result :content "ran locally")))
+    (let ((elsewhere (benedict-tool-create
+                      :id 'benedict-test-elsewhere :parameters nil :sync t
+                      :handler (lambda (invocation)
+                                 (benedict-tool-result
+                                  :content (format "ran %s(%s) elsewhere"
+                                                   (benedict-invocation-name invocation)
+                                                   (benedict-tool-arg invocation :n))))))
+          (result nil))
+      (benedict-tool-execute
+       (benedict-invocation-with
+        (benedict-invocation-create :id "1" :name 'benedict-test-a :arguments '(:n 7))
+        :tool elsewhere)
+       (lambda (value) (setq result value)))
+      (should (equal (benedict-tool-result-value-content result)
+                     "ran benedict-test-a(7) elsewhere"))
+      (should-not (benedict-tool-get 'benedict-test-elsewhere)))))
+
+(ert-deftest benedict-tool-a-substituted-handler-that-signals-is-still-answered ()
+  "The `condition-case\=' protects every handler, substituted ones included.
+
+The executor registry this replaced ran custom executors outside it, so a
+routing failure wedged the run instead of reaching the model."
   (benedict-tool-test--with-tools
     (benedict-deftool benedict-test-a
       :description "a" :parameters nil :sync t
-      :handler (lambda (_invocation) (benedict-tool-result :content "local")))
-    (unwind-protect
-        (progn
-          (benedict-tool-register-executor
-           'benedict-test-target
-           (lambda (_invocation done) (funcall done (benedict-tool-result :content "one"))))
-          (benedict-tool-register-executor
-           'benedict-test-target
-           (lambda (_invocation done) (funcall done (benedict-tool-result :content "two"))))
-          (let ((result nil))
-            (benedict-tool-execute
-             (benedict-tool-retarget
-              (benedict-invocation-create :id "1" :name 'benedict-test-a)
-              'benedict-test-target)
-             (lambda (value) (setq result value)))
-            (should (equal (benedict-tool-result-value-content result) "two"))))
-      (benedict-tool-unregister-executor 'benedict-test-target))))
+      :handler (lambda (_invocation) (benedict-tool-result :content "ok")))
+    (let ((broken (benedict-tool-create
+                   :id 'benedict-test-broken-route :parameters nil :sync t
+                   :handler (lambda (_invocation) (error "Transport is down"))))
+          (result nil))
+      (benedict-tool-execute
+       (benedict-invocation-with
+        (benedict-invocation-create :id "1" :name 'benedict-test-a)
+        :tool broken)
+       (lambda (value) (setq result value)))
+      (should (benedict-tool-result-value-error-p result))
+      (should (string-match-p "Transport is down"
+                              (benedict-tool-result-value-content result))))))
 
 (ert-deftest benedict-tool-result-block-pairs-with-its-call ()
   "The result block carries the call's id, which is what pairs them on the wire."

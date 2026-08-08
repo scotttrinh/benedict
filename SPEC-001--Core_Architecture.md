@@ -198,6 +198,10 @@ The entire kernel surface:
 (benedict-session-children session id)
 (benedict-session-fork session id)           ; move head; next append branches
 (benedict-session-streaming-entry session)   ; the live partial entry (§4.3)
+(benedict-session-note session content &optional meta)   ; append + announce
+
+;; Tool availability (§6.6)
+(benedict-session-tool-list session)         ; the tools offered, resolved now
 
 ;; Scoped hooks (§4.4.1)
 (benedict-session-add-hook session hook fn &optional depth)
@@ -209,6 +213,7 @@ The entire kernel surface:
 
 ;; Registries
 (benedict-tool-register tool)
+(benedict-tool-unregister id)
 (benedict-tool-get id)
 (benedict-tool-list)
 (benedict-provider-register provider)
@@ -227,6 +232,38 @@ the whole contract.
 session is resumed from a log: `benedict-store-load` returns a transcript and
 the session takes it, keeping its session id so that entry ids continue the same
 sequence.
+
+`benedict-session-note` is the only public function that appends an entry **and**
+announces it (D24). `benedict-session-append` is a tree operation and fires
+nothing, so an entry written through it reaches neither the store nor a
+renderer; that is correct for the tree and useless for an extension. Notes are
+the one entry role an extension has business creating — §9.3 offers them as the
+way to persist state across restarts and §10.3 asks `eval-elisp` to record
+runtime-modifying forms as notes — so exactly that case is published and nothing
+else is. An extension cannot mint a `user` or `assistant` entry, because a
+transcript in which those can appear from anywhere is not a record of a
+conversation.
+
+`benedict-tool-unregister` is published because the registry is published. An
+interface over shared state that offers registration and lookup but no removal
+does not prevent removal — it leaves `remhash` on the private hash table as the
+only way, which is the shared-mutable-state access the interface exists to
+avoid. §9.2's "no unregister protocol" is a different claim and still holds: it
+says extensions need no teardown *lifecycle*, not that a tool cannot be
+withdrawn.
+
+This became consequential rather than merely tidy when tool lists went live
+(D23). Under snapshot semantics, unregistering could not affect a session that
+already existed; now it changes what every session selecting the registry offers
+on its next request, and is the only image-wide way to withdraw a capability.
+Withdrawing from one session remains a selection that excludes it.
+
+`benedict-session-tool-list` is the single reader for what a session offers, and
+the reason it is a function rather than a slot is D23: the answer is computed on
+demand, so a tool registered mid-run is advertised on the next request without
+anyone refreshing anything. Frontends must call it rather than reading the slot
+— a tool list rendered from a snapshot goes stale silently, and the surfaces
+that render one are permissions-adjacent.
 
 `benedict-session-get`/`-put` are on the list because §4.4.1's own example calls
 them — a globally registered filter discriminating on
@@ -666,6 +703,80 @@ Only the thresholds are tuning; the two-path structure is the design.
 
 ## 6. Tools
 
+### 6.0 Why tools exist at all
+
+The question is sharper in this medium than in any other harness, and it should
+be answered before the mechanics. Every tool is an elisp function, `eval-elisp`
+can call any function, and tools load the way all elisp loads. So the registry
+looks like a second namespace beside `obarray`, and the schema DSL looks like
+paperwork over `funcall`. If a tool were only a way to *execute* something, it
+would be redundant and this section would be an argument for deleting §6.
+
+Two things survive that argument. One is social, one is formal.
+
+**A tool is a promotion.** `benedict-deftool` designates: *this function is meant
+to be reached for by a model, in a session, on purpose.* The registry is a
+curated set rather than a namespace, and the `description` is prompt text rather
+than a docstring — written for a different reader than `describe-function`
+serves, which is why it cannot be derived from one. Promotion is an authoring
+gesture and it is most of what the concept is worth today.
+
+**A tool call is a form whose meaning is settled before it runs.** This is the
+formal half, and it is not the usual "structured versus opaque" claim, which
+would be false here. An s-expression is data: `read` yields the list without
+evaluating it, and walking that list is trivial. Inspection is not the problem.
+
+*Decision* is the problem, and it is undecidable:
+
+```elisp
+(delete-file (compute-target))                      ; the argument is not in the form
+(my-macro x)                                        ; the surface is not the expansion
+(funcall (intern (concat "delete-" "file")) target) ; the head is not in the form either
+```
+
+`macroexpand-all` runs arbitrary code to expand. The values that determine what
+happens are not in the tree. This is Rice's theorem rather than an engineering
+gap, so no analysis closes it, and a policy over arbitrary forms therefore has
+two options: judge heuristically, which is not a boundary, or restrict itself to
+a sublanguage it can decide about.
+
+**That sublanguage is exactly a tool.** A tool call is a form in normal form —
+the head is a name, every argument is a literal value, and nothing remains to be
+evaluated before its meaning is known. Sit down to define which forms an
+approval policy may reason about and you will write that constraint down, and
+you will have re-derived tools in s-expression syntax. The concept is *derived*
+rather than invented, which is the strongest thing that can be said for it.
+
+Two corollaries follow, and both matter more than they look.
+
+The wire format is incidental. JSON is inert, but so is a quoted list; inertness
+was never the property. *Fully evaluated* is the property, and a hypothetical
+provider that emitted tool calls as s-expressions would change nothing here.
+
+The gradient is continuous, not binary. `eval-elisp` is maximum capability with
+no decidable surface; a tool gives up arbitrary capability to gain one. Between
+them sits a dispatch filter that accepts `eval-elisp` forms which are a literal
+application of a whitelisted function to literal arguments and denies everything
+else — approving `(project-find-files "src")` while refusing
+`(project-find-files (compute-path))`. That is a real, decidable policy over
+elisp, and it is an ordinary §9.7 package rather than anything the kernel needs
+to know about.
+
+**What this concept has not yet earned.** Everything above about decidability is
+load-bearing for approvals, sandbox routing, and worker delegation, none of
+which exist before Phase 6. Today the honest accounting is that tools earn their
+keep on promotion alone, and the reification is an investment. That is worth
+recording rather than defending the concept with capabilities it has not been
+asked for yet — and it has a consequence: while promotion is the main value,
+promotion should be nearly free. A form that lifts an existing function,
+deriving the schema from its arglist and asking the author only for the sentence
+the model reads, is the ergonomic shape to aim for. §6.1's DSL is the general
+case, not the common one.
+
+That models are trained on tool-calling is true, and is the weakest of these
+reasons rather than the strongest. It argues for the wire format. The normal-form
+argument would hold against a model that called functions by writing elisp.
+
 ### 6.1 Definition
 
 ```elisp
@@ -747,12 +858,29 @@ member receives the invocation and a `next` continuation, and may:
 | Modify then allow | `(funcall next (modified invocation))` |
 | Deny | `(funcall next (benedict-tool-blocked invocation "reason"))` |
 | Suspend | Hold `next`; call it later from a callback |
-| Reroute | `(funcall next (benedict-tool-retarget invocation 'sandbox))` |
+| Reroute | `(funcall next (benedict-invocation-with invocation :tool stand-in))` |
 
 This single mechanism implements approval, permission policy, path protection,
 sandbox delegation, and worker routing. There is no separate yield concept, no
 approval state in the kernel, and no resume entry point — a suspended run is
 simply one where a continuation has not yet been called.
+
+Reroute deserves a note, because it is the row that looks like it should need
+machinery and does not. Execution funcalls the handler of whatever tool the
+invocation carries, so a filter that substitutes a stand-in whose handler ships
+the call to a subordinate Emacs has moved the work, and nothing in the kernel
+can tell. `name` and `arguments` are untouched, so the stand-in still knows what
+was asked for; the stand-in need not be registered, so it is reachable only
+through the filter that installed it; and holding `done` until the subprocess
+answers is the same suspension an approval uses.
+
+An earlier design gave the invocation a `target` slot and kept a registry of
+executors keyed by it. That was deleted: it was a second spelling of tool
+substitution, and the worse one, since a registered executor ran outside the
+`condition-case` that turns a broken handler into a failed result — so a routing
+failure wedged the run instead of reaching the model. It was also, on its own
+terms, backwards. A table of execution targets is the kernel holding a model of
+"somewhere else," when the property wanted is that the kernel has no such model.
 
 Example — an approval policy as an extension:
 
@@ -806,9 +934,79 @@ named.
 `read`/`write`/`edit` are technically redundant with `eval-elisp`, and are kept
 because they produce structured, reviewable, renderable results — a diff the UI
 can display and an approval policy can reason about — where an arbitrary elisp
-form produces an opaque string.
+form produces an opaque string. That is the §6.0 argument applied to results
+rather than to calls, and note that "opaque" is fair here in a way it is not
+there: a printed value really has lost its structure, whereas a form never lacked
+any.
 
 `describe` is the replacement for shipping a documentation directory. See §10.
+
+### 6.6 Session tool availability
+
+The registry (§6.1) is one per image. What a *session* offers is a separate
+question, because sessions coexist and are not alike: two conversations in one
+image can want different tools for reasons the registry has no way to express.
+
+`:tools` therefore accepts two things — a **selection**:
+
+| `:tools` | Semantics |
+|---|---|
+| a list of ids and tool structs | Exactly these. Resolved per request, not frozen at creation. |
+| a function of `(session)` | Whatever it returns, called per request. |
+
+The live view of the whole registry — how a session sees tools registered after
+it was created — is `(lambda (_session) (benedict-tool-list))`. It needs no
+keyword of its own: an earlier draft of this section had a third row, the symbol
+`all`, which turned out to be that lambda with vocabulary wrapped around it.
+
+The wrapper is not decoration. A selection is called with its session, which is
+what lets one answer from session state rather than only from the registry:
+
+```elisp
+(lambda (session)
+  (if (benedict-session-get session :reviewing) my/read-only-tools (benedict-tool-list)))
+```
+
+`benedict-tool-list` takes no arguments and should not learn to — it answers a
+question about the registry, and the registry has never heard of sessions.
+
+Ids in a list resolve through the registry at request time rather than being
+frozen, so reloading an extension file updates the schema a long-lived session
+sends. A list is a fixed selection, not a fixed set of definitions.
+
+A **session-scoped tool** falls out of this with no further mechanism: a
+selection may contain a `benedict-tool` that was never registered, so an
+extension can offer a tool to one session without putting it where every session
+sees it.
+
+```elisp
+;; image scope: in the registry, offered to every session selecting the whole of it
+(benedict-deftool project-lint ...)
+
+;; session scope: never registered, offered here only
+(lambda (_session)
+  (cons (benedict-tool-create :id 'project-lint ...) (benedict-tool-list)))
+```
+
+There is deliberately no `add-tool` or `remove-tool`. A drafted version of this
+section carried both, recording additions and removals alongside the selection —
+but a function selection already expresses union and difference, so the pair was
+redundant API, and it brought composition rules that had to be invented rather
+than derived: whether an addition overrides a selection entry of the same id,
+whether it keeps its position or moves, what removing an absent tool means. The
+selection is the whole mechanism, and adding is `cons`.
+
+`benedict-session-tool-list` is what `benedict-core--build-request` and every
+frontend read. Nothing reads the slot.
+
+**The kernel picks no default.** There is no "interactive session" here to
+default for — which selection suits a session is a product decision belonging to
+whoever constructs one, and §9.6 is where that kind of decision is framed. Note
+one consequence here because it is invisible from the call site: a selection that
+changes mid-conversation invalidates the provider's cached prefix from the tools
+block onward, so a live view trades cache warmth for self-extension. That is
+also why `benedict-tool-list` sorts by id (§6.1) — a stable order keeps the
+cache across everything that is *not* a registration.
 
 ---
 
@@ -1475,6 +1673,7 @@ An extension can:
 | Capability | Mechanism |
 |---|---|
 | Add a tool | `benedict-deftool` |
+| Offer a tool to one session only | an unregistered tool in that session's selection (§6.6) |
 | Intercept, block, or reroute a tool call | `benedict-tool-dispatch-functions` |
 | Rewrite a tool result | `benedict-tool-result-filter-functions` |
 | Transform context before a request | `benedict-context-filter-functions` |
@@ -1484,7 +1683,7 @@ An extension can:
 | Add a slash command | `benedict-defcommand` (distro) |
 | Add an interactive command | Ordinary `defun` + `interactive` |
 | Change rendering | Frontend-provided renderer hooks |
-| Persist state across restarts | Append `role note` entries |
+| Persist state across restarts | `benedict-session-note` (§4.1) |
 
 Because everything is elisp, the honest answer to "can an extension do X" is
 "yes, including things this table does not anticipate." `advice-add` on kernel
@@ -1493,21 +1692,38 @@ common cases do not require advice, not to prevent it.
 
 ### 9.4 Discovery
 
-| Location | Scope | Trust |
-|---|---|---|
-| `~/.config/benedict/extensions/*.el` | Global | Trusted |
-| `~/.config/benedict/extensions/*/init.el` | Global, multi-file | Trusted |
-| `<project>/.benedict/extensions/*.el` | Project | Gated |
-| Anything on `load-path` | Package-installed | Trusted |
-| `benedict-extension-files` | Explicit | Trusted |
+**Benedict has no discovery mechanism, and loads nothing on its own.** Emacs
+already has one: `load-path`, `require`, and the user's init. `package.el`,
+`straight`, `elpaca`, and Doom handle installation, versioning, and load order,
+and an extension is an ordinary elisp file, so there is nothing left for
+Benedict to invent. This is a significant simplification over harnesses that
+must ship an npm-alike; §12 covers what it saves.
 
-Project-local extensions load only after the project is marked trusted, recorded
-in `~/.config/benedict/trust.eld`. The prompt is one-time per project root.
+An earlier draft of this section specified a discovery table — a scanned global
+directory, a project-local directory, a trust file, an explicit file list. Every
+row of it was a package loader with implicit ordering and an implicit trust
+boundary, which is three mechanisms Emacs already has and one policy the kernel
+has no business holding. The affordances the table was reaching for are real;
+they are just not the kernel's, and §9.7 shows them written as ordinary
+extensions instead.
 
-Package-installed extensions need no discovery mechanism at all — they are Emacs
-packages, so `package.el`, `straight`, `elpaca`, and Doom already handle
-installation, versioning, and load order. This is a significant simplification
-over harnesses that must invent an npm-alike; §12 covers it.
+What replaces it: **the root of all loading is the user's init.** An agent that
+has written an extension makes it durable by saying which `require` or `load`
+line activates it.
+
+Preferring that to editing init directly is a convention, not a boundary, and
+the spec should not pretend otherwise: `eval-elisp` can write any file this
+Emacs can write, and no rule stated here changes that. The convention is worth
+following because the failure is asymmetric. Bad elisp in an extension file
+means a tool does not work and Benedict says so. Bad elisp in init means Emacs
+does not start, and the user cannot launch Benedict to repair what Benedict
+broke — the one failure this medium cannot talk its way out of.
+
+The mitigation is the one that actually works: **keep init under version
+control.** That is a property of the user's setup rather than of Benedict, which
+is exactly the shape of every other mitigation in §13.3 — the risks this medium
+takes on are answered structurally, by things being recoverable, not by the
+runtime forbidding what it cannot forbid.
 
 ### 9.5 Ordering
 
@@ -1515,6 +1731,85 @@ Hook order matters for dispatch filters — a sandbox router should run after an
 approval gate, not before. `add-hook`'s `DEPTH` argument covers this. Document
 the convention: approval-type filters at depth 0, routing filters at depth 90,
 observation-only wrappers at depth -90.
+
+### 9.6 Scope: how long a change lives
+
+Every extension mechanism answers to one question, and it is the only question
+an author — human or agent — has to get right: **how long should this live?**
+The three answers are the same for all of them, which is what makes four
+mechanisms one idea:
+
+| I want to… | **session** (dies with the conversation) | **image** (until Emacs restarts) | **disk** (survives restart) |
+|---|---|---|---|
+| Add a tool | a `benedict-tool-create` struct in the session's selection | `benedict-deftool` | either, in a file the init loads |
+| Change behavior at a hook | `benedict-session-add-hook` | `add-hook` | `add-hook`, in a file the init loads |
+| Patch a kernel function | — | `advice-add` | `advice-add`, in a file the init loads |
+| Change a setting | `benedict-session-put`, `setf` on a slot | `setopt` | the file, or `custom-file` |
+
+Two things in that table are worth stating out loud.
+
+Advice has no session column, and that is honest rather than a gap: advice
+patches a function, functions are image-wide, and a mechanism that pretended
+otherwise would be lying about what it does. An author who needs session-scoped
+interception wants a dispatch filter (§6.4), which is what the filter chains are
+for.
+
+The disk column is not a fourth mechanism. It is the *same* elisp in a file,
+plus a line in the user's init that loads it (§9.4). "Make this durable" is
+never a new API; it is the question of who writes that line, and the answer is
+the user.
+
+An agent that has just written itself a tool is making a scope decision whether
+or not it knows it, so the extension skill (§10.1) leads with this table.
+
+### 9.7 The affordances are extensions, not core
+
+The behaviors a harness usually hard-codes are, here, ordinary packages a user
+opts into by name. Three worked examples, because the point is not the packages
+but that none of them needs anything the kernel does not already publish:
+
+| Package | What it does | What it uses |
+|---|---|---|
+| directory loader | loads `*.el` from a configured directory, isolating errors | `load`. Nothing from Benedict. |
+| project extensions | loads `<project>/.benedict/extensions` for a session, gated on a trust file it owns | the session's tool selection, `benedict-session-add-hook`, `benedict-current-session` |
+| skills | puts skill descriptions in the system prompt, or ships a finder tool for progressive disclosure | `benedict-request-filter-functions`, or `benedict-deftool` |
+
+The skills row is the one that settles the question. **Core never learns what a
+skill is.** `system-prompt` is a session slot, but it reaches the wire through
+`benedict-request-filter-functions` as part of the request plist, so a package
+rewrites it per request without owning it. Whether descriptions are eager or
+discovered through a finder tool, whether they come from `~/.agents/skills` or
+`.claude/skills` or somewhere else entirely, is settled by which package the
+user loads — not by this document, and not now.
+
+The project-extensions row is the one that tests the API hardest, because it has
+real requirements: per-session scoping, persistent trust, and a gate somebody
+will treat as a boundary. It scopes hooks by binding `benedict-current-session`
+around each `load`, so a project file's idiom is `(benedict-session-add-hook
+benedict-current-session ...)`, and it scopes tools by composing the session's
+selection when it attaches. Its trust file is its own; the kernel neither reads
+it nor knows it exists. Trust and loading shipping in the same package is a
+stronger arrangement than a core loader with a defcustom to disable the gate,
+because there is no configuration in which project code runs without it.
+
+**There is deliberately no session-creation hook.** Two of these three packages
+want a moment when a session is born, and the moment already exists: the
+function that constructs the session, which lives in the user's own config.
+
+```elisp
+(defun my/benedict-session (model)
+  (let ((session (benedict-session-create :model model :tools my/benedict-tools)))
+    (my/project-extensions-attach session)
+    (my/skills-attach session)
+    session))
+```
+
+A hook would be strictly worse here — unordered, invisible at the call site, and
+it would give the kernel a session lifecycle it otherwise does not have. The
+cost is that a session created by one of the distro's own commands does not go
+through that function, and the answer is that those commands belong to the
+distro rather than the kernel and should be thin enough to replace. §12.2's
+package split is the same principle one level up.
 
 ---
 
@@ -1539,12 +1834,18 @@ A user asks for a capability that does not exist. The agent:
 Step 4 is the payoff and the reason the medium was chosen. There is no reload
 subsystem to design, no restart, no lost session.
 
-One gap this loop has today: a tool registered by an evaluated form is callable
-immediately — an invocation resolves its tool through the registry — but a
-session's tool list is resolved once at creation, so no subsequent request tells
-the model that the tool it just wrote exists. Step 5 therefore works only
-because the agent remembers what it registered, which is not a property to build
-on. See §16.
+Step 3 is optional, and saying so is not a detail. A session whose selection is
+the live view (§6.6) advertises a tool the moment it is registered, so the loop
+can complete without a file existing at all — §10.3 is that case. The file is
+what makes a change outlive the image, not what makes it real.
+
+**A tool that lives in one person's config forever is the loop succeeding.** The
+temptation is to read a useful user-authored tool as a draft of an upstream
+contribution; it is not. The measure of this design is how many people extend
+their own Benedict for their own use, not how much of that extension flows back
+here. The extension skill should say so, because an agent asked to write a tool
+will otherwise reach for the shape it has seen most — a contribution to a
+project — when what was wanted was a tool for the person it is talking to.
 
 ### 10.2 Introspection over documentation
 
@@ -1574,20 +1875,33 @@ reverting is a normal debugging workflow here.
 
 The implication for the store: `role note` entries should record evaluated forms
 that modify the runtime, so a session transcript explains why the running image
-differs from what is on disk. Nothing does this yet, because an extension has no
-sanctioned way to append an entry — §16 Q1.
+differs from what is on disk. `benedict-session-note` (§4.1, D24) is the
+function that makes this writable — an entry appended through it is announced,
+so it reaches the store and the renderer rather than only the tree.
+
+This is also the honest half of §13.3's accepted risk. An image that has been
+extended mid-session is an image that no longer matches its sources, and a
+transcript that records the forms is the difference between a divergence you can
+read back and one you can only discover.
 
 ### 10.4 System prompt
 
 Kept small. It states: you are running inside a live Emacs image; `eval-elisp`
-evaluates in that image; introspection tools are the way to learn the API;
-extensions live at these paths and are loaded with `load-file`; here are the
-available skills (name, description, path only).
+evaluates in that image; introspection tools are the way to learn the API; a
+change you make lives for the session, the image, or on disk, and choosing is
+part of the task (§9.6).
 
-Skill contents are **not** included — only descriptions. The agent reads the full
-skill with `read-file` when a task matches. This is the Agent Skills
-progressive-disclosure model and Benedict should implement the standard as
-published, so skills are shared with other harnesses (§12.4).
+It does **not** state where extensions live or how they are loaded, because the
+kernel does not know (§9.4) — whichever package the user opted into does, and it
+is that package's business to say so. A system prompt that hard-codes a path is
+the discovery table coming back in through the prompt.
+
+Skills are the same shape one level out. Whether the prompt carries skill
+descriptions at all, and from where, is a package's decision (§9.7); the
+progressive-disclosure model — descriptions in the prompt, full text read on
+demand — is the one this project recommends and the Agent Skills standard should
+be implemented as published so skills are shared with other harnesses (§12.4).
+Recommending is not the same as the kernel doing it.
 
 ---
 
@@ -1746,15 +2060,25 @@ needs `(package-install 'benedict-ext-foo)`.
 
 ### 12.4 User-facing paths
 
+Paths something in this repository actually reads:
+
+| Path | Contents | Read by |
+|---|---|---|
+| `~/.config/benedict/auth.json` | Credentials, mode 600 | `benedict-auth` |
+| `~/.config/benedict/settings.eld` | Settings | distro |
+| `~/.config/benedict/prompts/*.md` | Prompt templates → slash commands | distro |
+| `~/.local/share/benedict/sessions/` | Session logs | `benedict-store` |
+| `~/.cache/benedict/models/` | Model catalog cache | `benedict-provider` |
+
+Paths nothing reads by default. They are conventions, listed so that independent
+packages agree with each other rather than each inventing a location, and read
+only by a package the user opted into (§9.4, §9.7):
+
 | Path | Contents |
 |---|---|
-| `~/.config/benedict/auth.json` | Credentials, mode 600 |
-| `~/.config/benedict/settings.eld` | Settings |
-| `~/.config/benedict/extensions/` | User extensions |
-| `~/.config/benedict/prompts/*.md` | Prompt templates → slash commands |
-| `~/.config/benedict/trust.eld` | Trusted project roots |
-| `~/.local/share/benedict/sessions/` | Session logs |
-| `~/.cache/benedict/models/` | Model catalog cache |
+| `~/.config/benedict/extensions/` | User extensions, for a directory-loading package |
+| `<project>/.benedict/extensions/` | Project extensions, for a project package |
+| `~/.config/benedict/trust.eld` | Trusted project roots, owned by that same package |
 | `~/.agents/skills/`, `<project>/.agents/skills/` | Skills, shared across harnesses |
 
 Reading the standard `~/.agents/skills/` location means skills written for Claude
@@ -1980,11 +2304,23 @@ navigable; **no kernel file was modified to add a private accessor.** If one was
 that is the finding, and the API grows.
 
 **Phase 6 — Distro**
-`benedict-files`, `benedict-introspect`, `benedict-approvals`, `benedict-skills`,
-`benedict-prompts`, `benedict-compact`.
+Kernel first, because everything below depends on it: `benedict-session-tool-list`
+with its additions and removals (D23) and `benedict-session-note` (D24). That is
+the whole kernel debt for self-extension, and it is small.
+
+Then the packages — `benedict-files`, `benedict-introspect`, `benedict-approvals`,
+`benedict-skills`, `benedict-prompts`, `benedict-compact` — and the extension
+skill itself, which §10.1 step 1 has assumed since Phase 3 and which nothing has
+yet written. It leads with §9.6's scope table, states the never-`add-hook`-a-
+lambda rule in bold (§9.2), gives §9.5's depth convention, and then hands off to
+`describe-function` and `apropos` (§10.2).
+
 *Exit:* the self-extension loop of §10.1 completes end to end — ask the agent for
-a capability, and it reads the skill, introspects the API, writes an extension,
-loads it, and uses it, without human intervention.
+a capability, and it reads the skill, introspects the API, writes the tool,
+scopes it deliberately, and uses it, without human intervention. Writing a file
+is not part of the criterion: a session on the live view (§6.6) completes the
+loop in the image alone, and whether the change is made durable is a separate
+decision the agent should be able to name.
 
 **Phase 7 — OAuth**
 Refresh serialization, loopback flow helper, first subscription provider.
@@ -2208,6 +2544,102 @@ solves outright and with no restriction on nesting.
 tree path becomes viable and the stream becomes an optimization rather than a
 requirement.
 
+**D23. A session's tools are a selection, resolved per request.** *(§6.6, §4.1)*
+*Resolves Q2.* `:tools` takes a list or a function of the session, and
+`benedict-session-tool-list` resolves it at request time. That is the entire
+mechanism. A selection function is called with its session, and the live view is
+`(lambda (_session) (benedict-tool-list))` rather than a keyword of its own.
+
+Snapshot semantics lost because a tool the agent writes mid-run was callable but
+never advertised, so §10.1 completed only for an agent that remembered its own
+registration — a property nothing should be built on.
+
+Two drafted additions lost, and both for the same reason: they were vocabulary
+over something the two accepted forms already said. The symbol `all` was
+the live-view lambda with a keyword around it. `benedict-session-add-tool` and
+`-remove-tool` were union and difference, which a function selection expresses
+directly — and they carried composition rules that would have had to be invented
+rather than derived, since nothing decides on its own whether an addition
+overrides a selection entry of the same id or where it sits in the order. A
+session-scoped tool needs neither: a selection may contain a `benedict-tool`
+that was never registered.
+
+Note for anyone revisiting this: an earlier draft argued for the pair on the
+grounds that a constrained session should not be able to widen itself. That
+argument does not belong here. The kernel has no notion of a constrained
+session, and capability containment is an extension's concern (§9.7) — the
+redundancy is the whole reason.
+
+The kernel picks no default selection: which one suits a session is the
+constructor's decision, and the kernel has no notion of an interactive session
+to default for. The cost of a live view is a provider cache invalidated from the
+tools block onward whenever the selection changes, which is why the alternative
+was worth writing down rather than dismissing.
+
+**D24. `benedict-session-note` is the public entry-emitting function.** *(§4.1,
+§10.3)* *Resolves Q1.* It appends and announces, so an entry written through it
+reaches the store and the renderer; `benedict-session-append` is a tree
+operation and fires nothing.
+
+Notes only. An extension has business creating a note — §9.3 offers them for
+state that outlives a restart, §10.3 for recording forms that changed the
+running image — and no business minting a `user` or `assistant` entry. A
+transcript in which those can appear from anywhere is not a record of a
+conversation, and the generalized "emit any entry" function was rejected for
+that reason rather than for being harder to write.
+
+A note appended mid-turn lands where head is, which is the assistant entry that
+made the call — so it falls between a tool call and its result. Harmless on the
+wire, since lowering drops it (§7.8.9), but the tree and the renderer both see
+it, and a renderer that assumes a call is followed by its result is wrong. That
+is a rendering constraint, not a reason to buffer the note to a turn boundary:
+the timestamp of "when the image changed" is worth more than tidiness.
+
+**D25. Extension discovery and loading are not the kernel's.** *(§9.4, §9.7)*
+Benedict loads nothing on its own and has no discovery mechanism. `load-path`,
+`require`, and the user's init are the mechanism; a scanned directory, a trust
+file, and an explicit file list are a package loader, and Emacs already has one.
+
+The directory loader, project-scoped extensions, and skills are ordinary
+packages the user opts into by name (§9.7), and the audit that decided this
+found the kernel already sufficient for all three once D23 and D24 landed. The
+skills case is the load-bearing one: `system-prompt` reaches the wire through
+`benedict-request-filter-functions`, so a package rewrites it per request and
+the kernel never learns what a skill is — leaving eager-vs-discovered and
+`.agents/` vs `.claude/` to the package rather than to this document.
+
+No session-creation hook accompanies this, deliberately. Two of those three
+packages want a moment when a session is born, and it already exists in the
+function that constructs one, which lives in the user's config. A hook would be
+unordered, invisible at the call site, and would hand the kernel a session
+lifecycle it does not otherwise have.
+*Revisit when:* a package demonstrably cannot be written against the published
+surface — that is the signal the surface is short something, and it should be
+answered by publishing that thing, not by moving the package into core.
+
+**D26. The tool concept survives, on normal form rather than on structure.**
+*(§6.0, §6.4)*
+Tools are kept in a medium where every tool is a function and `eval-elisp` can
+call any function. The usual justification — structured and inspectable versus
+opaque — is false in Lisp, where an s-expression is data and inspection is
+trivial. The one that holds is that deciding what an arbitrary form does is
+undecidable, so a policy must restrict itself to forms already in normal form:
+named head, literal arguments, nothing left to evaluate. That restriction is
+what a tool is, which makes the concept derived rather than invented.
+
+Recorded because the question recurs and the wrong answer is available and
+plausible. Two things follow that are easy to get backwards: the wire format is
+incidental, so nothing here changes if tool calls are ever expressed as
+s-expressions; and the tool/`eval-elisp` split is a gradient with writable
+middle ground (§6.0), not a binary.
+
+Also recorded honestly: before Phase 6 there is no approval policy, so the
+decidability argument buys nothing yet and tools earn their keep on promotion —
+the designation that a function is meant to be reached for agentically — alone.
+*Revisit when:* Phase 6 ships and the middle-ground filter is writable. If it
+turns out nobody wants it, the gradient claim was wrong even though the
+normal-form argument was right.
+
 ---
 
 ## 16. Open Questions
@@ -2215,41 +2647,7 @@ requirement.
 New questions are added here and promoted to §15 when resolved, with the
 rationale preserved.
 
-**Q1. How does an extension append an entry?** *(§4.1, §9.3, §10.3)*
-§9.3 lists "append `role note` entries" as the way an extension persists state
-across restarts, and §10.3 asks `eval-elisp` to record runtime-modifying forms
-that way — but §4.1 publishes no function that appends an entry *and* announces
-it. `benedict-session-append` is a tree operation and fires nothing, so a note
-written through it reaches neither the store nor a renderer; the kernel's own
-path is private. Either the API grows a public entry-emitting function or the
-two sections above are promising something the kernel does not offer. This is
-what deferred §10.3 out of Phase 3.
-
-An answer also has to say where a note appended mid-turn lands. Head is the
-assistant entry that made the call, so the note falls between the call and its
-result — harmless on the wire, since lowering drops it (§7.8.9), but the
-renderer and the tree both see it.
-
-**Q2. How does a session learn about a tool registered mid-run?** *(§10.1, §4.1)*
-`benedict-session-create` resolves `:tools` once. A tool the agent defines by
-evaluating a form is callable but never advertised, so the self-extension loop
-completes only for an agent that remembers its own registration. The candidates
-are a session tool list that resolves lazily from the registry, an explicit
-refresh on the public API, or making the tool list a request filter's business.
-The choice matters more than it looks: it decides whether a session's offered
-tools are a snapshot or a view, and every frontend that renders a tool list
-depends on the answer.
-
-Phase 5 did not force this, and it is worth recording why rather than leaving the
-silence ambiguous: the chat frontend renders the *transcript*, so it reads tool
-calls and results off entries and never asks a session what it offers. The
-question binds at the first UI that lists available tools — a tool picker, a
-palette, an approval prompt naming what could run — and Phase 6's approvals are
-the likely trigger. Until then the choice is still open, but note that a frontend
-would want the *view*: a tool list rendered from a snapshot goes stale silently,
-and staleness in a permissions-adjacent surface is the expensive kind.
-
-**Q3. What should a frontend do about a run it did not start?** *(§4.4.1, §11.1)*
+**Q1. What should a frontend do about a run it did not start?** *(§4.4.1, §11.1)*
 Phase 5's renderer keys buffers on sessions through a weak table and no-ops for
 sessions it has not been attached to, so two coexisting sessions cannot write
 into each other's buffers. That covers the case the hooks were scoped for. It

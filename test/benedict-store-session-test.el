@@ -74,6 +74,40 @@
                 (should (eq (benedict-entry-meta-get assistant :stop-reason)
                             'tool-use))))))))))
 
+(ert-deftest benedict-store-session-a-note-survives-a-restart ()
+  "A note written with `benedict-session-note' is on disk after the image is gone.
+
+This is the claim that makes notes worth having -- §9.3 offers them as
+how an extension keeps state across restarts, and §10.3 as how a session
+explains why the running image no longer matches its sources.  Both
+depend on the note reaching the store, which it does only because
+`benedict-session-note' announces rather than merely appending."
+  (benedict-test-with-clean-registries
+    (benedict-test-with-store-dir directory
+      (benedict-store-session-test--installed
+        (benedict-test-with-manual-defer
+          (let* ((store (benedict-store-open "benedict-test-note"
+                                             :directory directory))
+                 (session (benedict-test-session '(((:text "noted")))
+                                                 :id "benedict-test-note"
+                                                 :store store)))
+            (benedict-session-note session "(defun my/thing () t)" '(:context t))
+            (benedict-session-submit session "go")
+            (benedict-test-drain)
+            (benedict-store-close store (benedict-session-head session))
+
+            (let* ((reloaded (benedict-store-load "benedict-test-note"
+                                                  :directory directory))
+                   (note (car (benedict-transcript-path reloaded))))
+              (should (equal (mapcar #'benedict-entry-role
+                                     (benedict-transcript-path reloaded))
+                             '(note user assistant)))
+              (should (eq (benedict-entry-role note) 'note))
+              (should (equal (benedict-entry-text note) "(defun my/thing () t)"))
+              ;; The flag has to survive too, or the note comes back as
+              ;; something only a human ever sees again.
+              (should (benedict-entry-meta-get note :context)))))))))
+
 (ert-deftest benedict-store-session-fork-reloads-on-the-right-branch ()
   "A session that ends on a fork comes back where it left off, not at its tip."
   (benedict-test-with-clean-registries

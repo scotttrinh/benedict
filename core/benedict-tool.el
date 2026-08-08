@@ -25,11 +25,12 @@
 ;; the kernel, and no resume entry point.
 ;;
 ;; Second, an invocation is a value that filters rewrite rather than a command
-;; they intercept.  `benedict-tool-blocked' and `benedict-tool-retarget' return
-;; a modified invocation, so denying a call and rerouting it to a sandbox are
-;; the same operation as allowing one: hand `next' an invocation.  See SPEC-001
-;; 6.4 for the filter chain that consumes them; the chain itself lives in
-;; `benedict-core'.
+;; they intercept.  `benedict-tool-blocked' returns a modified invocation, so
+;; denying a call is the same operation as allowing one: hand `next' an
+;; invocation.  Rerouting is that operation too -- substitute a `tool' whose
+;; handler runs the call in a subordinate Emacs and execution here cannot tell,
+;; which is what keeps sandboxing entirely an extension's business.  The filter
+;; chain that consumes these lives in `benedict-core'.
 ;;
 ;; See SPEC-001 6.
 
@@ -147,8 +148,16 @@ Signal `benedict-tool-unknown' when no tool is registered under ID."
 
 (defun benedict-tool-unregister (id)
   "Remove the tool named ID from the registry.
-Return non-nil when a tool was removed.  Extensions do not need this --
-reloading replaces by id -- but tests and a tool-toggling UI do."
+Return non-nil when a tool was removed.
+
+Reloading an extension does not need this, since registration replaces by
+id, but withdrawing a tool does, and this is the only image-wide way:
+withdrawing from one session is a tool selection that excludes it.  A
+session selecting the whole registry stops offering ID on its next
+request, while one naming ID in a list selection signals
+`benedict-tool-unknown' the next time it resolves -- the selection
+promised a tool that is gone, and a list quietly one entry short is not
+something the model can notice."
   (let ((present (and (gethash id benedict-tool--registry) t)))
     (remhash id benedict-tool--registry)
     present))
@@ -213,8 +222,8 @@ makes reloading an extension a plain `load-file'.  Returns the tool."
 
 Passed through `benedict-tool-dispatch-functions', where a filter may
 allow it, rewrite it, block it with `benedict-tool-blocked', reroute it
-with `benedict-tool-retarget', or suspend the run by holding its
-continuation.  See SPEC-001 6.4."
+by substituting a `tool' that runs the call elsewhere, or suspend the run
+by holding its continuation."
   (id nil
       :documentation "The provider's identifier for this call.
 Matches the id of the `tool-result' block that answers it.")
@@ -228,30 +237,31 @@ argument with `benedict-tool-arg'.")
   (tool nil
         :documentation "The resolved `benedict-tool', or nil when the model named
 a tool that is not registered.  A nil tool becomes an error result
-rather than a signal: the model must be told what happened.")
-  (target 'local
-          :documentation "Symbol naming where this call executes.
-`local' runs the tool's own handler in this image.  A dispatch filter can
-change it with `benedict-tool-retarget' to route the call elsewhere; see
-`benedict-tool-register-executor'.")
+rather than a signal: the model must be told what happened.
+
+This is also where a call is rerouted.  Execution funcalls whatever
+handler this slot holds, so a dispatch filter that substitutes a tool
+whose handler ships the invocation elsewhere -- a subordinate Emacs, a
+worker -- has moved the work without anything here being aware that it
+moved.  `name' and `arguments' are untouched by the substitution, so the
+substituted handler still knows what was asked for.")
   (blocked-reason nil
                   :documentation "Non-nil when a filter denied this call, and the
 prose explaining why.  A blocked invocation never reaches a handler; it
 becomes an error result carrying this string."))
 
-(cl-defun benedict-invocation-create (&key id name arguments tool target)
+(cl-defun benedict-invocation-create (&key id name arguments tool)
   "Return a new invocation of the tool NAME with ARGUMENTS.
 
 ID is the provider's call identifier.  TOOL is the resolved
 `benedict-tool'; when omitted it is looked up in the registry and left
 nil if there is none, since an unknown tool has to reach the model as an
-error result rather than as a signal.  TARGET defaults to `local'."
+error result rather than as a signal."
   (benedict-invocation--create
    :id id
    :name name
    :arguments arguments
-   :tool (or tool (benedict-tool-get name))
-   :target (or target 'local)))
+   :tool (or tool (benedict-tool-get name))))
 
 (defun benedict-invocation-from-block (block)
   "Return an invocation for BLOCK, a `tool-call' content block."
@@ -275,14 +285,13 @@ only documented way to derive one; this is its implementation."
    :name (benedict-invocation-name invocation)
    :arguments (benedict-invocation-arguments invocation)
    :tool (benedict-invocation-tool invocation)
-   :target (benedict-invocation-target invocation)
    :blocked-reason (benedict-invocation-blocked-reason invocation)))
 
 (defun benedict-invocation-with (invocation &rest keys-and-values)
   "Return a copy of INVOCATION with KEYS-AND-VALUES replacing its slots.
 
 Does not modify INVOCATION.  KEYS-AND-VALUES is a plist whose keys are
-`:id', `:name', `:arguments', `:tool', `:target', or `:blocked-reason'.
+`:id', `:name', `:arguments', `:tool', or `:blocked-reason'.
 This is how a dispatch filter rewrites a call -- mutating the invocation
 in place would be visible to filters that already ran.
 
@@ -300,7 +309,6 @@ Signal `benedict-tool-error' on an odd argument count or an unknown key."
           (:name (setf (benedict-invocation-name copy) value))
           (:arguments (setf (benedict-invocation-arguments copy) value))
           (:tool (setf (benedict-invocation-tool copy) value))
-          (:target (setf (benedict-invocation-target copy) value))
           (:blocked-reason (setf (benedict-invocation-blocked-reason copy) value))
           (_ (signal 'benedict-tool-error (list "Unknown invocation key" key))))))
     copy))
@@ -317,15 +325,6 @@ that asked for a tool must always be told what happened to it."
 (defun benedict-invocation-blocked-p (invocation)
   "Return non-nil when INVOCATION was denied by a dispatch filter."
   (and (benedict-invocation-blocked-reason invocation) t))
-
-(defun benedict-tool-retarget (invocation target)
-  "Return a copy of INVOCATION routed to TARGET instead of running locally.
-
-TARGET is a symbol registered with `benedict-tool-register-executor' --
-`sandbox' for a subordinate Emacs, a worker id for delegation.  The
-kernel cannot tell a rerouted call from a local one, which is the point:
-sandboxing is an extension and the kernel never learns it exists."
-  (benedict-invocation-with invocation :target target))
 
 ;;;; Results
 
@@ -372,64 +371,29 @@ its call when the transcript is lowered to the wire."
 
 ;;;; Execution
 
-;; Execution is separated from dispatch so that rerouting a call is a data
-;; change rather than a branch.  The dispatch chain decides WHETHER and WHERE a
-;; call runs; this decides HOW, by looking the target up in a small registry.
-;; `local' is the only target the kernel ships; a sandbox extension registers
-;; another and nothing here changes.
-
-(defvar benedict-tool--executors (make-hash-table :test #'eq)
-  "Hash table mapping a target symbol to its executor function.
-An executor has the same shape as a tool handler: (INVOCATION DONE).")
-
-(defun benedict-tool-register-executor (target function)
-  "Register FUNCTION as the executor for TARGET.  Return FUNCTION.
-
-FUNCTION takes (INVOCATION DONE) and calls DONE with a
-`benedict-tool-result-value', exactly like a tool handler.  Registering
-an existing target replaces it, so an extension file stays reloadable."
-  (puthash target function benedict-tool--executors))
-
-(defun benedict-tool-unregister-executor (target)
-  "Remove TARGET's executor.  Return non-nil when one was removed.
-Calls already retargeted to TARGET then fail with an error result rather
-than silently running locally."
-  (let ((present (and (gethash target benedict-tool--executors) t)))
-    (remhash target benedict-tool--executors)
-    present))
-
-(defun benedict-tool-executor (target)
-  "Return the executor function registered for TARGET, or nil."
-  (gethash target benedict-tool--executors))
-
-(defun benedict-tool--execute-local (invocation done)
-  "Run INVOCATION's own handler in this image and call DONE with the result.
-
-An error signalled by the handler becomes a failed result rather than
-propagating: a tool that breaks must not take the run with it, and the
-model needs to see what went wrong in order to try something else."
-  (let ((tool (benedict-invocation-tool invocation)))
-    (condition-case error
-        (funcall (benedict-tool-handler tool) invocation done)
-      (error
-       (funcall done
-                (benedict-tool-result-error
-                 (format "Tool %s signalled: %s"
-                         (benedict-invocation-name invocation)
-                         (error-message-string error))))))))
-
-(benedict-tool-register-executor 'local #'benedict-tool--execute-local)
+;; Execution funcalls the handler of whatever tool the invocation carries, and
+;; that is the whole of it.  There is no table of execution targets, because
+;; there is nothing for one to decide: a dispatch filter that wants a call to
+;; run somewhere else substitutes a tool whose handler sends it there, and this
+;; function cannot tell the difference.  An earlier design had a `target' slot
+;; and a registry of executors keyed by it; the registry turned out to be a
+;; second way to spell tool substitution, and the worse one, since a custom
+;; executor ran outside the `condition-case' below.
 
 (defun benedict-tool-execute (invocation done)
   "Execute INVOCATION and call DONE with a `benedict-tool-result-value'.
 
-Three conditions short-circuit to a failed result rather than signalling,
+Two conditions short-circuit to a failed result rather than signalling,
 because each is something the model has to learn about in order to
-recover: INVOCATION was blocked by a dispatch filter, it names a tool
-that is not registered, or it names an execution target that is not.
+recover: INVOCATION was blocked by a dispatch filter, or it names a tool
+that is not registered.  An error signalled by the handler is a third:
+a tool that breaks must not take the run with it, and the model needs to
+see what went wrong in order to try something else.
 
 DONE may be called on a later turn of the event loop.  A handler that
-never calls it leaves the run suspended, which is how approval works."
+never calls it leaves the run suspended, which is how approval works --
+and is also how a handler that sends the call to another process waits
+for the answer."
   (cond
    ((benedict-invocation-blocked-p invocation)
     (funcall done (benedict-tool-result-error
@@ -438,12 +402,15 @@ never calls it leaves the run suspended, which is how approval works."
     (funcall done (benedict-tool-result-error
                    (format "No such tool: %s" (benedict-invocation-name invocation)))))
    (t
-    (let ((executor (benedict-tool-executor (benedict-invocation-target invocation))))
-      (if executor
-          (funcall executor invocation done)
-        (funcall done (benedict-tool-result-error
-                       (format "No executor for target %s"
-                               (benedict-invocation-target invocation)))))))))
+    (condition-case error
+        (funcall (benedict-tool-handler (benedict-invocation-tool invocation))
+                 invocation done)
+      (error
+       (funcall done
+                (benedict-tool-result-error
+                 (format "Tool %s signalled: %s"
+                         (benedict-invocation-name invocation)
+                         (error-message-string error)))))))))
 
 (provide 'benedict-tool)
 

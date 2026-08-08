@@ -239,11 +239,32 @@ so that concurrent sessions in one test do not pollute each other."
   "Return the roles of the entries on SESSION's current path, in order."
   (mapcar #'benedict-entry-role (benedict-session-path session)))
 
+(defvar benedict-test--tool-baseline nil
+  "Tool ids present before any test ran, or nil before the first reset.
+
+Captured rather than assumed empty: a tool registered as a load-time side
+effect -- `eval-elisp' is the one that matters -- is part of the image
+every test expects, while a tool a test registers is not.")
+
+(defun benedict-test--reset-tools ()
+  "Unregister tools that a test registered, keeping the load-time set.
+
+The baseline is captured on the first call, which happens once every test
+file has been loaded and before any test body has run, so it is exactly
+the set of tools the suite starts with."
+  (if (null benedict-test--tool-baseline)
+      (setq benedict-test--tool-baseline
+            (mapcar #'benedict-tool-id (benedict-tool-list)))
+    (dolist (tool (benedict-tool-list))
+      (unless (memq (benedict-tool-id tool) benedict-test--tool-baseline)
+        (benedict-tool-unregister (benedict-tool-id tool))))))
+
 (defun benedict-test-reset ()
   "Clear global registries and hooks between tests.
 
 Tools, fake models, and every kernel hook are global, so a test that
 registers one has to be prevented from changing the next test's meaning."
+  (benedict-test--reset-tools)
   (benedict-provider-fake-reset)
   (dolist (hook '(benedict-run-start-functions
                   benedict-run-end-functions

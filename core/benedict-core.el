@@ -185,6 +185,39 @@ Return ENTRY."
   (benedict-core--emit-entry session (benedict-entry-create :role 'user
                                                             :content content)))
 
+(defun benedict-session-note (session content &optional meta)
+  "Append a note carrying CONTENT to SESSION, announce it, and return the entry.
+
+The only public way to put an entry in a transcript.  Appending and
+announcing are one operation here because separating them is how an entry
+gets lost: `benedict-session-append' moves the tree and fires nothing, so
+an entry written through it reaches neither the store nor a renderer.
+CONTENT is anything `benedict-entry-create' accepts, including a bare
+string.
+
+Notes only, and that is a boundary rather than a first version.  A note is
+the one role that is nobody's turn -- §9.3 offers notes for state that
+must outlive a restart, and an evaluated form that changed the running
+image is recorded as one -- while a `user' or `assistant' entry is a
+claim about who said something.  A transcript in which those can be
+minted from anywhere is not a record of a conversation.
+
+META is the entry's metadata plist.  A note stays out of provider context
+unless its META carries a non-nil `:context', which is what makes a
+durable instruction -- \"remember X for the rest of this session\" --
+survive as something the model keeps seeing rather than a comment only a
+human reads.
+
+Safe during a run, with one consequence worth knowing: the note lands
+where head is.  Written from a tool handler that means between the
+assistant entry that made the call and the tool-result answering it, so a
+renderer that assumes a call is immediately followed by its result is
+wrong.  Recording when the image changed is worth more than that
+tidiness, so this does not wait for a turn boundary."
+  (benedict-core--emit-entry
+   session
+   (benedict-entry-create :role 'note :content content :meta meta)))
+
 ;;;; Lifecycle
 
 ;; These four are named for the session rather than for this file because
@@ -292,7 +325,7 @@ modified."
      session 'benedict-request-filter-functions
      (list :entries (benedict-core--context-entries session)
            :system-prompt (benedict-session-system-prompt session)
-           :tools (benedict-session-tools session)
+           :tools (benedict-session-tool-list session)
            :model model
            :session session)
      model session)))

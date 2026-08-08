@@ -15,6 +15,15 @@
 ;; the first moment the thesis of SPEC-001 1 is testable at all: the agent
 ;; defines a tool by evaluating a form, and calls it on its next turn, with no
 ;; file written and no reload.
+;;
+;; That test asserted a gap for two phases: the tool was callable, because an
+;; invocation resolves through the registry, but never advertised, because the
+;; session's tool list was resolved once at creation.  It now asserts the
+;; opposite, and does it on the request rather than on the session -- a session
+;; that holds the tool proves nothing if the tool list on the wire does not
+;; carry it.  `benedict-eval-session-a-list-selection-does-not-see-later-tools'
+;; is its foil: the same run, a selection that cannot grow, and the old
+;; behaviour preserved deliberately rather than by accident.
 
 ;;; Code:
 
@@ -144,7 +153,10 @@
   "The agent defines a tool by evaluating a form and calls it on the next turn.
 
 SPEC-001 10.1 steps 4 and 5, minus the file: there is no reload subsystem
-to go through, so the new tool is callable as soon as the form returns."
+to go through, so the new tool is callable as soon as the form returns.
+
+The session selects `benedict-tool-list', the live view, so the tool the
+agent wrote is also ADVERTISED on the turn after it was written."
   (benedict-test-with-clean-registries
     (unwind-protect
         (benedict-test-with-manual-defer
@@ -154,7 +166,7 @@ to go through, so the new tool is callable as soon as the form returns."
                             ((:tool-call benedict-eval-session-test--minted nil
                                          :id "call_minted"))
                             ((:text "It works.")))
-                          :tools '(eval-elisp))))
+                          :tools (lambda (_session) (benedict-tool-list)))))
             (should-not (benedict-tool-get 'benedict-eval-session-test--minted))
             (benedict-session-submit session "write yourself a tool")
             (benedict-test-drain)
@@ -167,12 +179,44 @@ to go through, so the new tool is callable as soon as the form returns."
                            '(user assistant tool-result assistant tool-result
                                   assistant)))
 
-            ;; The finding.  Resolution goes through the global registry, so
-            ;; the call works -- but the session's tool list was resolved once
-            ;; at creation, so no request ever tells the model the tool it just
-            ;; wrote exists.  A tool the agent cannot be told about is a tool
-            ;; it can only call by remembering it.
-            (should (equal (mapcar #'benedict-tool-id (benedict-session-tools session))
+            ;; The thesis, asserted where it counts.  The first request cannot
+            ;; carry the tool -- it did not exist when the request was built --
+            ;; and every request after the form was evaluated must, or the
+            ;; agent is calling a tool it was never told about.
+            (let ((requests (benedict-eval-session-test--requests session)))
+              (should (equal (length requests) 3))
+              (should (equal (mapcar #'benedict-tool-id (plist-get (nth 0 requests) :tools))
+                             '(eval-elisp)))
+              (dolist (request (cdr requests))
+                (should (memq 'benedict-eval-session-test--minted
+                              (mapcar #'benedict-tool-id (plist-get request :tools))))))))
+      (benedict-tool-unregister 'benedict-eval-session-test--minted))))
+
+(ert-deftest benedict-eval-session-a-list-selection-does-not-see-later-tools ()
+  "A list selection is fixed, so a tool minted mid-run is callable but unadvertised.
+
+The foil to the test above, and the reason the selection is a choice
+rather than a default: the same run against `\\='(eval-elisp)' still calls
+the minted tool -- an invocation resolves through the registry -- but no
+request ever names it.  Both behaviours are wanted; which one a session
+gets is settled by whoever constructed it."
+  (benedict-test-with-clean-registries
+    (unwind-protect
+        (benedict-test-with-manual-defer
+          (let ((session (benedict-test-session
+                          `(((:tool-call eval-elisp
+                                         (:form ,benedict-eval-session-test--deftool-form)))
+                            ((:tool-call benedict-eval-session-test--minted nil
+                                         :id "call_minted"))
+                            ((:text "It works.")))
+                          :tools '(eval-elisp))))
+            (benedict-session-submit session "write yourself a tool")
+            (benedict-test-drain)
+
+            (should (equal (nth 1 (benedict-eval-session-test--result-contents session))
+                           "from the tool I wrote"))
+            (should (equal (mapcar #'benedict-tool-id
+                                   (benedict-session-tool-list session))
                            '(eval-elisp)))
             (dolist (request (benedict-eval-session-test--requests session))
               (should (equal (mapcar #'benedict-tool-id (plist-get request :tools))
