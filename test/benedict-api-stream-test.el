@@ -95,6 +95,12 @@ skim output that is sometimes real."
   "Deliver RESULT to the current request as the transport's outcome."
   (funcall (plist-get (benedict-api-stream-test--call) :on-end) result))
 
+(ert-deftest benedict-api-stream-disables-invisible-http-retries ()
+  "A model attempt reaches the transport with retry disabled."
+  (benedict-api-stream-test--with-registrations
+    (benedict-api-stream-test--open (lambda (_event) nil))
+    (should (equal (plist-get (benedict-api-stream-test--call) :retry) 0))))
+
 ;;;; Opening a stream
 
 (cl-defun benedict-api-stream-test--open (handler &key endpoint headers build
@@ -440,6 +446,20 @@ stopped, and asking would log a cancellation that never happened."
       (let ((event (benedict-api-stream-test--terminal
                     (benedict-api-stream-test-events cell))))
         (should (equal (plist-get event :message) "Could not resolve host"))))))
+
+(ert-deftest benedict-api-stream-propagates-safe-transport-error-data ()
+  "Opaque classifier metadata reaches the normalized terminal event unchanged."
+  (benedict-api-stream-test--with-registrations
+    (benedict-api-stream-test--collecting cell
+      (benedict-api-stream-test--open (benedict-api-stream-test-handler cell))
+      (benedict-api-stream-test--finish
+       '(:status 429 :headers (("authorization" . "secret")) :body "private"
+         :error-data (:benedict-retry-http (:transient t :retry-after 3))))
+      (benedict-test-drain)
+      (let ((event (benedict-api-stream-test--terminal
+                    (benedict-api-stream-test-events cell))))
+        (should (equal (plist-get event :error-data)
+                       '(:benedict-retry-http (:transient t :retry-after 3))))))))
 
 (ert-deftest benedict-api-stream-reports-a-stream-that-ended-unfinished ()
   "A 2xx whose parser never produced a terminal event did not succeed.

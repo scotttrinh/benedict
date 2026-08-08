@@ -66,6 +66,7 @@
 (require 'benedict-message)
 (require 'benedict-session)
 (require 'benedict-core)
+(require 'benedict-retry)
 (require 'vui)
 (require 'benedict-chat-widgets)
 (require 'benedict-chat-blocks)
@@ -379,6 +380,7 @@ Does not detach any session or kill any buffer."
   (let ((map (make-sparse-keymap)))
     (define-key map (kbd "C-c C-s") #'benedict-chat-send)
     (define-key map (kbd "C-c C-c") #'benedict-chat-abort)
+    (define-key map (kbd "C-c C-r") #'benedict-chat-retry)
     (define-key map (kbd "C-c C-n") #'benedict-chat-next-sibling)
     (define-key map (kbd "C-c C-p") #'benedict-chat-previous-sibling)
     ;; Shadow `vui-refresh'.  Its idea of a refresh is a root re-render, which
@@ -455,6 +457,15 @@ same command whether the agent is idle or working."
   "Abort this buffer's session.  Idempotent when it is already idle."
   (interactive)
   (benedict-session-abort (benedict-chat--session-or-error)))
+
+;;;###autoload
+(defun benedict-chat-retry ()
+  "Retry this buffer's failed assistant attempt as a new visible run.
+
+Bound to \\[benedict-chat-retry].  Signal `user-error' when the session is
+active or its current head is not an errored assistant entry."
+  (interactive)
+  (benedict-retry-now (benedict-chat--session-or-error)))
 
 (defun benedict-chat--cycle-sibling (step)
   "Move head to the sibling STEP positions from the entry at head.

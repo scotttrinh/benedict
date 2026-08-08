@@ -36,10 +36,13 @@
 (require 'benedict-provider)
 (require 'benedict-provider-vercel)
 (require 'benedict-eval)
+(require 'benedict-retry-http)
 
 ;;;; The smoke test
 (require 'benedict-api-stream)
 (require 'benedict-api-openai-responses)
+
+(benedict-retry-http-install)
 
 (defconst benedict-live-smoke--model "vercel-ai-gateway/deepseek/deepseek-v4-flash-0731"
   "The default model for the smoke test.  Cheap, reasoning-capable, tool-using.")
@@ -71,13 +74,16 @@ call, a matching result, and a second turn that references it."
       (benedict-live-smoke--report session))))
 
 (defun benedict-live-smoke--drain (session started)
-  "Process events until SESSION is idle or the timeout from STARTED expires."
-  (while (and (not (eq (benedict-session-state session) 'idle))
+  "Process events until SESSION is finally idle or STARTED reaches timeout."
+  (while (and (or (not (eq (benedict-session-state session) 'idle))
+                  (benedict-retry-pending-p session))
               (< (- (float-time) started) benedict-live-smoke--max-wait))
     (sit-for 0.1))
-  (unless (eq (benedict-session-state session) 'idle)
-    (message "Live smoke: timed out in state %s after %.0fs"
+  (unless (and (eq (benedict-session-state session) 'idle)
+               (not (benedict-retry-pending-p session)))
+    (message "Live smoke: timed out in state %s%s after %.0fs"
              (benedict-session-state session)
+             (if (benedict-retry-pending-p session) " with retry pending" "")
              (- (float-time) started))
     (kill-emacs 1)))
 

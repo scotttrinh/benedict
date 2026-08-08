@@ -543,6 +543,19 @@ back at the same instant."
 
 ;;;; Finishing exactly once
 
+(ert-deftest benedict-http-result-filters-compose-before-delivery ()
+  "Each filter sees the prior result and the caller sees only the final value."
+  (let ((benedict-http-result-filter-functions
+         (list (lambda (result) (plist-put result :first t))
+               (lambda (result)
+                 (should (plist-get result :first))
+                 (plist-put result :second t))))
+        delivered)
+    (benedict-http--finish
+     (benedict-http-test--request :on-end (lambda (result) (setq delivered result)))
+     '(:status 503))
+    (should (equal delivered '(:status 503 :first t :second t)))))
+
 (ert-deftest benedict-http-calls-its-callback-exactly-once ()
   "The stream contract of SPEC-001 7.3 rests on this one being true."
   (let* ((calls 0)

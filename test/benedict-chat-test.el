@@ -79,6 +79,35 @@ the whole buffer is the same one-chunk request a first display makes."
       (when (search-forward string nil t)
         (get-text-property (match-beginning 0) 'face)))))
 
+(ert-deftest benedict-chat-retry-command-retries-the-current-failure ()
+  "The chat command delegates an eligible buffer session to visible retry."
+  (benedict-test-with-clean-registries
+    (benedict-test-with-manual-defer
+      (benedict-chat-test--with-buffer
+          (benedict-test-session
+           '(((:error :reason error :message "failed"))
+             ((:text "retried"))))
+        (benedict-session-submit session "go")
+        (benedict-test-drain)
+        (with-current-buffer buffer (benedict-chat-retry))
+        (benedict-test-drain)
+        (should (equal (benedict-entry-text
+                        (car (last (benedict-session-path session))))
+                       "retried"))))))
+
+(ert-deftest benedict-chat-retry-command-reports-ineligible-state ()
+  "A non-failed head produces the retry extension's clear user error."
+  (benedict-test-with-clean-registries
+    (benedict-chat-test--with-buffer
+        (benedict-test-session '(((:text "unused"))))
+      (should-error (with-current-buffer buffer (benedict-chat-retry))
+                    :type 'user-error))))
+
+(ert-deftest benedict-chat-binds-visible-retry ()
+  "C-c C-r invokes the explicit visible retry command."
+  (should (eq (lookup-key benedict-chat-mode-map (kbd "C-c C-r"))
+              #'benedict-chat-retry)))
+
 ;;;; Exit criterion: streaming renders incrementally
 
 (ert-deftest benedict-chat-streams-a-partial-message-before-it-completes ()

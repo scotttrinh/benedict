@@ -131,7 +131,7 @@ a complete, testable agent runtime with zero tools and no UI.
 | `benedict-provider.el` | kernel | Provider/API registry, dispatch, model records |
 | `benedict-core.el` | kernel | Reducer, run state machine |
 | `benedict-schema.el` | kernel | Parameter DSL → JSON Schema |
-| `benedict-http.el` | support | SSE reader, retry, error-body extraction |
+| `benedict-http.el` | support | SSE reader, result filters, low-level request retry, error-body extraction |
 | `benedict-log.el` | support | Level-gated logging and a debug ring |
 | `benedict-api-transform.el` | provider | Canonical→wire lowering, cross-model degradation |
 | `benedict-api-stream.el` | provider | The shared auth→build→HTTP→parse path (D19) |
@@ -143,6 +143,8 @@ a complete, testable agent runtime with zero tools and no UI.
 | `benedict-files.el` | distro | `read-file`, `write-file`, `edit-file`, `search` |
 | `benedict-introspect.el` | distro | `describe`, `apropos` tools |
 | `benedict-approvals.el` | distro | Permission policy |
+| `benedict-retry.el` | distro | Visible request-attempt retry policy above sessions |
+| `benedict-retry-http.el` | distro | Safe HTTP failure classification for request retry |
 | `benedict-compact.el` | distro | Context compaction |
 | `benedict-skills.el` | distro | Agent Skills discovery |
 | `benedict-prompts.el` | distro | Prompt template commands |
@@ -386,6 +388,12 @@ The streaming entry is **not** appended to the transcript or written to the stor
 until the stream terminates. A failed or aborted stream still produces a terminal
 entry (with `stop-reason` of `error` or `aborted` and an `error-message`), so the
 transcript never contains a half-written entry and never silently loses a turn.
+Provider-stream attempts are never retried inside the transport.  Every failed
+attempt becomes one such visible, persisted terminal entry.  A retry is a new run
+from the current head, started with `(benedict-session-submit session nil)`; it is
+neither a kernel state nor a transcript fork.  This preserves partial failed
+output for the reader while structural repair (§7.8.6) keeps that entry out of
+the next model request.
 
 **A streaming entry has no id.** Ids are minted at append time, so the entry
 carried by `benedict-entry-start-functions` for a stream is identified only by
@@ -1090,7 +1098,7 @@ know only this:
 (:type :block-delta   :index 0 :delta "Hel")
 (:type :block-end     :index 0)
 (:type :done  :reason stop|length|tool-use  :usage (...) :response-id "...")
-(:type :error :reason error|aborted :message "...")
+(:type :error :reason error|aborted :message "..." :error-data (...))
 ```
 
 `block-type` is one of `text`, `thinking`, `tool-call`. Tool-call deltas carry
@@ -1118,6 +1126,25 @@ for a request, model, or network failure. Failures are encoded as a terminal
 `:error` event. This keeps the reducer's error path singular: every stream ends
 in exactly one of `:done` or `:error`, and the kernel finalizes the streaming
 entry identically in both cases.
+
+`:error-data` is optional, opaque to the kernel, and must already be safe for
+persistence.  The shared transport path may attach classifications and delay
+suggestions, but never raw response bodies, response headers, authorization
+values, or credentials.  The reducer stores the value unchanged as terminal
+assistant-entry metadata so extensions can make policy decisions without
+teaching the kernel about a transport.
+
+### 7.3.1 Transport result filters
+
+`benedict-http-result-filter-functions` is a global filter chain.  Each function
+takes a completed HTTP result plist and returns the result delivered to the
+caller's `on-end`; filters compose in hook order.  It is the neutral seam for an
+HTTP integration to classify failures and attach sanitized `:error-data`.
+
+The shared model-stream path always passes `:retry 0` to
+`benedict-http-stream`.  Catalog, authentication, and other non-streaming HTTP
+operations retain `benedict-http`'s low-level retries because those operations
+have no transcript attempt to expose.
 
 ### 7.4 First API: `openai-responses`
 
@@ -1684,11 +1711,45 @@ An extension can:
 | Add an interactive command | Ordinary `defun` + `interactive` |
 | Change rendering | Frontend-provided renderer hooks |
 | Persist state across restarts | `benedict-session-note` (§4.1) |
+| Retry a failed model attempt | observe run/head hooks, then submit nil from idle |
 
 Because everything is elisp, the honest answer to "can an extension do X" is
 "yes, including things this table does not anticipate." `advice-add` on kernel
 functions is available and occasionally correct. The hooks exist so that the
 common cases do not require advice, not to prevent it.
+
+### 9.3.1 Visible request retry
+
+The shipped `benedict-retry` extension observes terminal assistant entries and
+schedules a new run; it does not extend the session state machine.  Its
+replaceable `benedict-retry-policy-function` receives `(session entry attempt)`
+and returns seconds to wait or nil.  The default permits two automatic retries,
+uses jittered exponential backoff capped at 20 seconds, and accepts a safe delay
+suggestion in the entry's opaque error data.
+
+`benedict-retry-install` and `benedict-retry-uninstall` manage hooks and timers
+idempotently.  `benedict-retry-eligible-p` means the session is idle and its head
+is an assistant entry whose `:stop-reason` is `error`; aborted entries do not
+qualify.  `benedict-retry-pending-p` lets a UI or batch consumer distinguish
+ordinary idle from idle with an automatic retry pending.  Thus every attempt's
+run ends normally even while the extension intends another.
+
+A scheduled retry snapshots the failed entry id and current model.  It fires
+only while the session remains idle at that same head with that same model, and
+then calls `(benedict-session-submit session nil)`.  New user input, head or
+model changes, explicit retry, uninstall, and stale timer callbacks cancel or
+drop it.  `benedict-retry-now` explicitly retries any eligible failure, whether
+or not its transport metadata was transient or its automatic budget was
+exhausted; it cancels a pending timer and begins a fresh automatic-attempt
+budget.  Frontends report ineligible active/head states as user errors.
+
+`benedict-retry-http` supplies the initial transport integration.  Its result
+filter classifies 408, 425, 429, all 5xx statuses, and the existing retryable
+curl transport exits as transient.  A numeric `Retry-After` is retained as a
+suggested delay.  Only namespaced, persistence-safe metadata is attached.
+Install and uninstall add or remove both the classifier and generic retry policy
+idempotently.  Equivalent WebSocket or custom-transport modules can attach their
+own metadata through an equivalent result seam without changing retry policy.
 
 ### 9.4 Discovery
 
@@ -2502,12 +2563,14 @@ adapter must never signal" is actually enforced, by wrapping the parser in
 inside a process filter propagates nowhere useful, so without it a parser bug
 leaves the session wedged in `provider-wait` rather than failing visibly.
 
-**D20. Retry happens only before the first emitted event.** *(§3.2)*
-Retrying a stream that has already delivered deltas would append the retried
-content on top of what the kernel accumulated. The transport therefore retries
-on connection failures and on a non-2xx status — both of which are known before
-any event is emitted — and never once the stream has produced one. A mid-stream
-failure is a terminal `:error`, which the reducer already handles.
+**D20. Model-stream retries are visible new runs.** *(§4.3, §7.3.1, §9.3.1)*
+An invisible retry hides a real provider attempt, and after delivered deltas it
+would also append retried content on top of the kernel's accumulator. Therefore
+the shared provider-stream path disables transport retry altogether: every
+failure is a terminal `:error`, visible and persisted, and an optional extension
+may start a separate run with `benedict-session-submit` and nil input. Low-level
+retry remains correct for non-streaming catalog, authentication, and similar
+HTTP operations that do not represent model attempts in the transcript.
 
 **D21. Live service exercise is a script, not a test.** *(§12.5)*
 `nix run .#live` over `scripts/live-smoke.el`, outside `test/`. The alternative

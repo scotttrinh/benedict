@@ -93,12 +93,14 @@ with the Emacs version, so they are globbed rather than spelled out."
 (require 'benedict-provider-vercel)     ; registers the gateway provider
 (require 'benedict-provider-fake)       ; the offline provider `benedict-demo' uses
 (require 'benedict-eval)                ; registers the eval-elisp tool
+(require 'benedict-retry-http)
 (require 'benedict-chat)
 
 ;; Subscribing is a command rather than a load-time side effect, so that
 ;; requiring a ui/ file to reach a face does not enrol the image in every
 ;; session it holds.  Here we do want the image enrolled.
 (benedict-chat-install)
+(benedict-retry-http-install)
 
 (defvar benedict-dev-model "vercel-ai-gateway/deepseek/deepseek-v4-flash-0731"
   "Model for `benedict'.  The cheap reasoning-and-tool-use one live-smoke uses.

@@ -528,6 +528,9 @@ error message, so a failed turn is visible history rather than a gap."
         (benedict-entry-meta-put entry :response-id response-id))
       (when-let* ((message (plist-get event :message)))
         (benedict-entry-meta-put entry :error-message message))
+      (when (plist-member event :error-data)
+        (benedict-entry-meta-put entry :error-data
+                                 (plist-get event :error-data)))
       (benedict-core--append-entry session entry)
       (setf (benedict-run-assistant-entry run) entry))
     (cond

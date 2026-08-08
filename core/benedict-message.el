@@ -279,7 +279,8 @@ Well-known keys: `:provider', `:api', and `:model' record which model
 produced an assistant entry and are load-bearing rather than diagnostic,
 since a transcript may mix entries from several models and each must be
 lowered according to its own origin.  Also `:usage', `:stop-reason',
-`:error-message', and `:context' (see `benedict-entry-context-p')."))
+`:error-message', opaque persistence-safe `:error-data', and `:context' (see
+`benedict-entry-context-p')."))
 
 (defun benedict-entry-normalize-content (content)
   "Return CONTENT as a list of content blocks.

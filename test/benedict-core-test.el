@@ -213,6 +213,21 @@ runs the machine the way it actually runs, on `run-at-time'."
           (should (equal (benedict-entry-meta-get entry :error-message)
                          "upstream exploded")))))))
 
+(ert-deftest benedict-core-stores-error-data-on-the-terminal-entry ()
+  "The reducer persists opaque safe metadata without interpreting it."
+  (benedict-test-with-clean-registries
+    (benedict-test-with-manual-defer
+      (let ((session (benedict-test-session
+                      '(((:error :reason error :message "busy"
+                                  :error-data (:benedict-retry-http
+                                               (:transient t :retry-after 3))))))))
+        (benedict-session-submit session "hi")
+        (benedict-test-drain)
+        (should (equal
+                 (benedict-entry-meta-get
+                  (car (last (benedict-session-path session))) :error-data)
+                 '(:benedict-retry-http (:transient t :retry-after 3))))))))
+
 (ert-deftest benedict-core-a-signalling-filter-does-not-wedge-the-session ()
   "A broken extension ends the run with a reason rather than parking it."
   (benedict-test-with-clean-registries

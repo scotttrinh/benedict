@@ -264,6 +264,8 @@ the set of tools the suite starts with."
 
 Tools, fake models, and every kernel hook are global, so a test that
 registers one has to be prevented from changing the next test's meaning."
+  (when (fboundp 'benedict-retry-http-uninstall)
+    (benedict-retry-http-uninstall))
   (benedict-test--reset-tools)
   (benedict-provider-fake-reset)
   (dolist (hook '(benedict-run-start-functions

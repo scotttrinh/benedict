@@ -118,6 +118,15 @@ Passed through as `--connect-timeout'."
   :type '(choice (const :tag "curl default" nil) number)
   :group 'benedict-http)
 
+(defvar benedict-http-result-filter-functions nil
+  "Functions that transform a completed HTTP result before delivery.
+
+Each function is called with one result plist and must return the plist passed
+to the next function.  The final value reaches the request's ON-END callback.
+Filters that attach `:error-data' must include only persistence-safe values;
+raw bodies, headers, authorization values, and credentials must never be copied
+there.")
+
 (defcustom benedict-http-retry 2
   "Number of times a failed request is retried before it is reported.
 
@@ -697,6 +706,8 @@ the parse over."
               (benedict-http--request-cancelled request))
     (setf (benedict-http--request-finished request) t)
     (when-let* ((on-end (benedict-http--request-on-end request)))
+      (dolist (filter benedict-http-result-filter-functions)
+        (setq result (funcall filter result)))
       (funcall on-end result))))
 
 ;;;; Retry

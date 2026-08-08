@@ -136,8 +136,8 @@ waste for as long as the model keeps talking."
       (when terminal
         (benedict-api-stream--abandon state)))))
 
-(defun benedict-api-stream--fail (state message)
-  "End STATE's stream with a terminal error carrying MESSAGE.
+(defun benedict-api-stream--fail (state message &optional error-data)
+  "End STATE's stream with a terminal error carrying MESSAGE and ERROR-DATA.
 
 A no-op once a terminal event has been emitted, which is what lets every
 failure path call it without first working out whether it is the first
@@ -145,7 +145,8 @@ one to notice.  MESSAGE goes in `:message' rather than in a wider
 `:reason' vocabulary: SPEC-001 7.3 has `error' and `aborted', and no
 frontend yet exists that would branch on more."
   (benedict-api-stream--emit
-   state (list :type :error :reason 'error :message message)))
+   state (append (list :type :error :reason 'error :message message)
+                 (when error-data (list :error-data error-data)))))
 
 (defun benedict-api-stream--abandon (state)
   "Stop STATE's transport, if it has started one, emitting nothing."
@@ -255,6 +256,7 @@ The method is POST because every wire protocol Benedict speaks posts;
                  :method "POST"
                  :headers headers
                  :body body
+                 :retry 0
                  :on-event (lambda (type data)
                              (benedict-api-stream--sse state parser type data))
                  :on-end (lambda (result)
@@ -305,14 +307,16 @@ because the bytes it did receive arrived intact."
   (let ((status (plist-get result :status)))
     (cond
      ((plist-member result :error)
-      (benedict-api-stream--fail state (plist-get result :error)))
+      (benedict-api-stream--fail state (plist-get result :error)
+                                 (plist-get result :error-data)))
      ((and (integerp status) (<= 200 status 299))
       (benedict-api-stream--fail
        state "The response ended before the model finished answering"))
      (t
       (benedict-api-stream--fail
        state (benedict-api-stream--status-message
-              status (plist-get result :body)))))))
+              status (plist-get result :body))
+       (plist-get result :error-data))))))
 
 (defun benedict-api-stream--status-message (status body)
   "Return the error message for a response with STATUS and BODY."
