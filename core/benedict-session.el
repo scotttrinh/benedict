@@ -60,18 +60,16 @@
   "The session whose hook is currently running, or nil outside a hook.
 
 Bound dynamically around every hook, filter, and dispatch-chain
-invocation.  Observation hooks already receive their session as the first
-argument; this variable exists for the transform and dispatch chains,
-whose signatures are shaped by the value they operate on rather than by
-the session, and for globally registered functions that need to
-discriminate between coexisting sessions:
+invocation.  Observation hooks receive the session directly.  Transform and
+dispatch hooks read this variable when they need to distinguish between
+sessions:
 
   (defun my-approvals--dispatch (invocation next)
     (if (benedict-session-get benedict-current-session :trusted)
         (funcall next invocation)
       (my-approvals--confirm invocation next)))
 
-Do not set this.  Bind it only if you are implementing a hook runner.")
+Do not set this variable.  Bind it only when implementing a hook runner.")
 
 ;;;; Hooks -- observation
 
@@ -84,9 +82,9 @@ the `idle' state.  Return values are ignored.")
 
 (defvar benedict-run-end-functions nil
   "Functions called when a run ends, with one argument, the session.
-Fires once the session has returned to `idle', whether the run finished,
-was vetoed, errored, or was aborted; read `benedict-session-stop-reason'
-to tell those apart.  Return values are ignored.")
+Called after the session returns to `idle', whether the run completed, was
+vetoed, failed, or was aborted.  Read `benedict-session-stop-reason' to
+distinguish those outcomes.  Return values are ignored.")
 
 (defvar benedict-turn-start-functions nil
   "Functions called when a turn begins, with one argument, the session.
@@ -104,53 +102,47 @@ ignored.")
 (defvar benedict-entry-start-functions nil
   "Functions called when an entry begins, with (SESSION ENTRY).
 
-For a streamed assistant entry this fires when the stream opens, before
-any content has arrived and BEFORE THE ENTRY HAS AN ID -- it is not
-appended to the transcript until the stream terminates.  Key on the entry
-object's identity rather than on its id.  For every other kind of entry
-this fires immediately before it is appended.  Return values are
-ignored.")
+For a streamed assistant entry, functions run when the stream opens, before the
+entry has content or an id.  Use the entry object's identity until
+`benedict-entry-end-functions' runs.  For other entries, functions run
+immediately before append.  Return values are ignored.")
 
 (defvar benedict-entry-update-functions nil
   "Functions called as a streamed entry grows, with (SESSION ENTRY INDEX DELTA).
 
-INDEX is the position of the content block that changed and DELTA is the
-text just added to it.  The entry has already been mutated, so a renderer
-re-renders block INDEX from the entry rather than accumulating DELTA
-itself.  Return values are ignored.")
+INDEX is the changed content block's position.  DELTA is the text just added.
+ENTRY has already been mutated, so renderers should read block INDEX from ENTRY
+instead of accumulating DELTA.  Return values are ignored.")
 
 (defvar benedict-entry-end-functions nil
   "Functions called when an entry is complete, with (SESSION ENTRY).
 
-Fires after the entry has been appended to the transcript, so it has an
-id and the transcript head points at it.  This is the durability hook:
-the store subscribes here.  A failed or aborted stream still produces a
-terminal entry and still fires this, so a turn is never silently lost.
-Return values are ignored.")
+Functions run after append, when ENTRY has an id and is the transcript head.
+Failed and aborted streams also produce a terminal entry and call these
+functions.  Stores use this hook to persist completed entries.  Return values
+are ignored.")
 
 (defvar benedict-head-change-functions nil
   "Functions called when the transcript head moves, with (SESSION OLD-ID NEW-ID).
 
-Fires only for moves that no other hook reports -- in practice, forks.
-An append moves head too, but `benedict-entry-end-functions' already
-covers that case.  Two subscribers need this and neither is served by the
-entry hooks: the store must write a head marker or a session that ends on
-a fork reloads on the wrong branch, and a renderer must redraw its branch
-affordance.  Return values are ignored.")
+Functions run for explicit head moves, including forks, but not for append;
+`benedict-entry-end-functions' reports append.  Stores use this hook to persist
+the selected branch, and renderers use it to update branch controls.  Return
+values are ignored.")
 
 (defvar benedict-tool-start-functions nil
   "Functions called before a tool call is dispatched, with (SESSION INVOCATION).
 
-Fires before `benedict-tool-dispatch-functions', so an audit or budget
-observer sees every call including ones a filter goes on to deny.  Return
-values are ignored; to block a call, write a dispatch filter.")
+Functions run before `benedict-tool-dispatch-functions', so they observe calls
+that a dispatch filter later denies.  Return values are ignored; use a dispatch
+filter to block a call.")
 
 (defvar benedict-tool-end-functions nil
   "Functions called when a tool call finishes, with (SESSION INVOCATION RESULT).
 
-INVOCATION is the possibly-rewritten invocation that actually ran and
-RESULT is its `benedict-tool-result-value', including results
-manufactured for a denied or unknown tool.  Return values are ignored.")
+INVOCATION is the final, possibly rewritten call.  RESULT is its
+`benedict-tool-result-value', including a result produced for a denied or
+unknown tool.  Return values are ignored.")
 
 (defvar benedict-state-change-functions nil
   "Functions called on every run-state transition, with (SESSION OLD NEW).
@@ -164,14 +156,12 @@ ignored.")
 (defvar benedict-continue-predicate-functions nil
   "Functions asked whether a run should stop, with one argument, the session.
 
-Called at every turn boundary.  The FIRST NON-NIL return value wins and
-stops the run after this turn; its value is recorded as the session's
-stop reason, so return a string or symbol explaining why rather than a
-bare t.  Returning nil means \"no opinion\", not \"keep going\".
+Called at every turn boundary.  The first non-nil return value stops the run
+after the current turn and becomes `benedict-session-stop-reason'.  Return a
+string or symbol that explains the reason.  Nil means no opinion.
 
-A veto does not discard queued input: a steering or follow-up message
-still continues the run, because a human's queued message outranks a
-budget filter.")
+A veto does not discard queued input.  A steering or follow-up message still
+continues the run.")
 
 ;;;; Hooks -- transform
 
@@ -183,12 +173,9 @@ budget filter.")
 (defvar benedict-context-filter-functions nil
   "Functions that transform the entries sent to a provider, as (ENTRIES SESSION).
 
-Each returns a replacement list of canonical `benedict-entry' objects and
-is passed the previous function's output.  This is where compaction,
-injection, and pruning live.  It operates on canonical entries only --
-lowering them to a wire format happens later and belongs to the API
-adapter, and conflating the two is the mistake this separation exists to
-prevent.
+Each function receives the previous function's output and must return a list of
+canonical `benedict-entry' objects.  Use this hook for compaction, injection,
+and pruning.  Wire-format conversion happens later in the API adapter.
 
 The transcript itself is not modified; this shapes one request.")
 
@@ -211,9 +198,7 @@ summarizing live here.")
 (defvar benedict-tool-dispatch-functions nil
   "Filter chain around tool dispatch, each function taking (INVOCATION NEXT).
 
-This is the load-bearing hook: approval, permission policy, path
-protection, sandbox routing, and worker delegation are all this one
-mechanism.  A member may
+A function may:
 
   allow             (funcall next invocation)
   modify and allow  (funcall next (benedict-invocation-with invocation ...))
@@ -222,10 +207,8 @@ mechanism.  A member may
                                     :tool a-tool-that-runs-it-elsewhere))
   suspend           hold NEXT and call it later, from a callback
 
-A suspended run is simply one whose continuation has not been called yet.
-There is no separate yield concept, no approval state in the kernel, and
-no resume entry point.  NEXT must be called exactly once, eventually, or
-the run waits forever.
+A function suspends the run by retaining NEXT and calling it later.  NEXT must
+be called exactly once; until then, the run remains suspended.
 
 Return values are ignored -- the chain advances through NEXT.  The
 session is available as `benedict-current-session'.  Order matters: by
@@ -320,28 +303,26 @@ The kernel does not interpret it."))
 
 (cl-defun benedict-session-create (&key id system-prompt model provider tools
                                         store transcript)
-  "Return a new session.
+  "Create and return a session.
 
 MODEL is a `benedict-model' or a \"PROVIDER-ID/MODEL-ID\" string resolved
 through `benedict-model-resolve'.  PROVIDER, when given, is the provider
 id used as the prefix for a MODEL string that has none, so a caller
 holding the two separately need not concatenate them.
 
-TOOLS is this session's tool selection: either a list of tool ids and
-`benedict-tool' objects, or a function of the session returning such a
-list.  Pass (lambda (_session) (benedict-tool-list)) for the live view of
-every registered tool, which is what lets a session offer a tool that was
-registered after it was created.  A list is validated here, so a
-misspelled id signals now rather than at request time, but it is resolved
-again on every request -- see `benedict-session-tool-list'.
+TOOLS selects what the session may call.  It is either a list of tool ids
+and `benedict-tool' objects, or a function that receives the session and
+returns such a list.  Use (lambda (_session) (benedict-tool-list)) to
+select the live registry.  A list is validated now and resolved again for
+every request; see `benedict-session-tool-list'.
 
 SYSTEM-PROMPT is the instruction text sent with every request.  STORE is
 an opaque persistence handle the kernel never calls into.
 
-TRANSCRIPT adopts an existing `benedict-transcript' -- this is how a
-session is resumed from a log -- and its session id then wins over ID, so
-that entries appended after the reload keep being minted from the same
-id.  With no TRANSCRIPT an empty one is created.
+When TRANSCRIPT is non-nil, the session adopts it and uses its session id
+instead of ID.  This resumes a transcript without changing how later entry
+ids are minted.  Otherwise, the function creates an empty transcript using
+ID or a new session id.
 
 Signal `benedict-model-unknown' or `benedict-provider-unknown' when MODEL
 cannot be resolved, and `benedict-tool-unknown' for an unregistered tool
@@ -385,22 +366,16 @@ is chosen."
    (t (benedict-model-resolve model))))
 
 (defun benedict-session-tool-list (session)
-  "Resolve and return the `benedict-tool' objects SESSION currently offers.
+  "Return the `benedict-tool' objects currently available to SESSION.
 
-This is the only supported reader for what a session can call, and every
-request is built from it.  A frontend that lists available tools must
-call it rather than keeping its own copy, because the answer changes: a
-selection is resolved on each call, so a tool registered since the last
-one appears without anybody refreshing anything.
+Every request uses this function.  Frontends must also call it instead of
+caching the result because a session may use a dynamic selection.
 
-Ids resolve through the registry at this moment rather than when the
-session was created, so reloading the file that defines a tool also
-updates the schema a long-lived session sends -- a list selection fixes
-which tools are offered, not what they are.
+Ids resolve through the current registry.  An explicit list fixes which
+tools are offered, but re-registering one of those tools updates the
+object returned.
 
-Signal `benedict-tool-unknown' when the selection names an id with no
-registered tool.  Dropping it silently would hand the model a tool list
-quietly missing an entry, and the model has no way to notice."
+Signal `benedict-tool-unknown' when the selection names an unregistered id."
   (let ((selection (benedict-session-tool-selection session)))
     (benedict-tool-resolve
      (if (functionp selection) (funcall selection session) selection))))
@@ -481,10 +456,8 @@ always want the kernel's entry path instead of this."
 (defun benedict-session-fork (session id)
   "Move SESSION's head to ID and return ID.
 
-The next append then creates a sibling rather than extending the current
-branch, which is how undo, edit-and-resubmit, retry with another model,
-and non-destructive compaction are all expressed.  Nothing is removed:
-the abandoned branch stays in the transcript and stays renderable.
+The next append extends the branch at ID.  Existing entries remain in the
+transcript.
 
 ID may be nil, which makes the next append a new root.  Runs
 `benedict-head-change-functions' unless head was already at ID.  Signal
@@ -502,10 +475,8 @@ ID may be nil, which makes the next append a new root.  Runs
 Returns CONTENT.  CONTENT is anything `benedict-entry-create' accepts,
 including a bare string.
 
-Steering is drained before follow-ups, and by default one message per
-boundary: if a user types three corrections while the agent works,
-injecting all three at once means the agent never acts on the first
-before seeing the third.  See `benedict-queue-drain-mode'."
+Steering is drained before follow-ups.  `benedict-queue-drain-mode' controls
+whether one or all queued messages are consumed at a boundary."
   (setf (benedict-session-steer-queue session)
         (append (benedict-session-steer-queue session) (list content)))
   content)
@@ -540,12 +511,10 @@ is 0, and functions at equal depth run in the order they were added.
 Adding a FUNCTION already present moves it to the new depth rather than
 duplicating it.
 
-Session-local functions run AFTER global ones at equal depth, so a global
-policy sees a call before a session-specific one does.
+Session-local functions run after global functions at the same depth.
 
-As with global hooks, register a named function rather than a lambda: it
-is what makes a function removable and what makes reloading an extension
-file idempotent."
+Use a named function when it must be removable or survive extension reloads
+without duplication."
   (let* ((depth (or depth 0))
          (cell (assq hook (benedict-session-hooks session)))
          (kept (seq-remove (lambda (entry) (equal (car entry) function)) (cdr cell)))
@@ -630,16 +599,13 @@ must return its input; there is no \"no opinion\" return here."
 (defun benedict-hook-dispatch (session invocation done)
   "Run INVOCATION through SESSION's dispatch chain, then call DONE with it.
 
-The chain is `benedict-tool-dispatch-functions'.  Each member receives
-the running invocation and a continuation, and the chain advances only
-when that continuation is called -- so a member may hold it and resume
-the run later, which is what an approval prompt does.  DONE receives the
-invocation as the chain left it: possibly rewritten, blocked, or
-pointed at a different tool.
+Each `benedict-tool-dispatch-functions' member receives the current invocation
+and a continuation.  The chain advances when the member calls that continuation.
+DONE receives the final invocation, which may be rewritten, blocked, or routed
+to another tool.
 
-`benedict-current-session' is rebound at each step rather than once
-around the whole chain, because a suspended step resumes long after the
-original binding has been unwound."
+This function rebinds `benedict-current-session' at each step so an asynchronous
+continuation receives the correct session."
   (let ((functions (benedict-session-hook-functions
                     session 'benedict-tool-dispatch-functions)))
     (letrec ((step (lambda (remaining current)

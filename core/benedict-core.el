@@ -51,10 +51,7 @@
   "How many queued messages are injected at a turn boundary.
 
 `one-at-a-time' (the default) injects a single message per boundary.
-This produces finer interleaving: if a user types three corrections while
-the agent works, injecting all three at once means the agent never gets
-to act on the first before seeing the third, and the later messages were
-usually written without knowledge of what the first would change.
+This lets the agent act between messages queued while a run is active.
 
 `all' injects everything queued.  It exists for scripted and batch use,
 where the messages are a prepared sequence rather than reactions."
@@ -71,10 +68,8 @@ where the messages are a prepared sequence rather than reactions."
 (defvar benedict-core-defer-function #'benedict-core--defer-with-timer
   "Function called with a THUNK of no arguments to run it later.
 
-It MUST NOT call THUNK synchronously.  The reducer re-enters itself only
-through this function, and a synchronous implementation would grow the
-stack by a frame per turn until it overflows -- which is exactly what a
-fast scripted provider produces.
+It must not call THUNK synchronously because reducer re-entry must happen on a
+later event-loop turn.
 
 The default schedules THUNK with `run-at-time'.  Bind this to a queue
 that a test drains by hand to step the state machine deterministically,
@@ -124,12 +119,11 @@ until the stream terminates.")
 (defun benedict-session-streaming-entry (session)
   "Return SESSION's live, partially-built assistant entry, or nil.
 
-The kernel owns the stream accumulator: events mutate this entry in place
-and are re-emitted as `benedict-entry-update-functions' carrying only a
-block index and a delta, so a frontend re-renders the referenced block
-from here rather than accumulating deltas itself.
+Stream events mutate this entry in place.  Frontends should read the changed
+block from this entry when `benedict-entry-update-functions' runs instead of
+accumulating deltas.
 
-The entry HAS NO ID until the stream terminates and it is appended."
+The entry has no id until the stream terminates and it is appended."
   (when-let* ((run (benedict-session-run session)))
     (benedict-run-streaming-entry run)))
 
@@ -188,32 +182,16 @@ Return ENTRY."
 (defun benedict-session-note (session content &optional meta)
   "Append a note carrying CONTENT to SESSION, announce it, and return the entry.
 
-The only public way to put an entry in a transcript.  Appending and
-announcing are one operation here because separating them is how an entry
-gets lost: `benedict-session-append' moves the tree and fires nothing, so
-an entry written through it reaches neither the store nor a renderer.
-CONTENT is anything `benedict-entry-create' accepts, including a bare
-string.
-
-Notes only, and that is a boundary rather than a first version.  A note is
-the one role that is nobody's turn -- §9.3 offers notes for state that
-must outlive a restart, and an evaluated form that changed the running
-image is recorded as one -- while a `user' or `assistant' entry is a
-claim about who said something.  A transcript in which those can be
-minted from anywhere is not a record of a conversation.
+This is the public entry-creation path for extensions.  CONTENT accepts the
+forms documented by `benedict-entry-create', including a string.  Entry hooks
+run around the append, so stores and renderers observe the note.
 
 META is the entry's metadata plist.  A note stays out of provider context
-unless its META carries a non-nil `:context', which is what makes a
-durable instruction -- \"remember X for the rest of this session\" --
-survive as something the model keeps seeing rather than a comment only a
-human reads.
+unless META contains a non-nil `:context'.
 
-Safe during a run, with one consequence worth knowing: the note lands
-where head is.  Written from a tool handler that means between the
-assistant entry that made the call and the tool-result answering it, so a
-renderer that assumes a call is immediately followed by its result is
-wrong.  Recording when the image changed is worth more than that
-tidiness, so this does not wait for a turn boundary."
+This function may be called during a run.  It appends at the current head, so a
+note created by a tool handler may appear between the assistant call and its
+tool result."
   (benedict-core--emit-entry
    session
    (benedict-entry-create :role 'note :content content :meta meta)))
@@ -231,10 +209,8 @@ INPUT is anything `benedict-entry-create' accepts, including a bare
 string, or nil to resume without adding a message -- which is what
 fork-and-switch does after moving the head.
 
-Submitting while a run is already in flight does not start a second one:
-INPUT is queued as steering and the symbol `steered' is returned.  A user
-typing while the agent works is the ordinary case, and both a chat
-frontend and a batch script want it to mean the same thing.
+When a run is active, queue non-nil INPUT as steering and return `steered'
+without starting another run.
 
 Signal `benedict-session-error' when SESSION has no model."
   (cond
@@ -250,17 +226,12 @@ Signal `benedict-session-error' when SESSION has no model."
 (defun benedict-session-abort (session)
   "Ask SESSION to stop its run as soon as it can.  Return the session state.
 
-Cancels any stream in flight, finalizes a partially-streamed entry with a
-stop reason of `aborted' so the transcript never holds a half-written
-entry, and discards results from tools that were still outstanding.
-Returns immediately; the run ends on a later turn of the event loop.
+Cancels any active stream, finalizes a partial entry with stop reason `aborted',
+and ignores later results from outstanding tools.  Return immediately; the run
+ends on a later event-loop turn.
 
-Does nothing when SESSION is already idle, and nothing further when an
-abort is already in progress -- a second call must not schedule a second
-drain, or `benedict-run-end-functions' fires twice for one run.  Orphaned
-tool calls left behind are not repaired here -- that is the lowering
-pass's job, and keeping it there is what lets an aborted transcript still
-be replayed."
+Do nothing when SESSION is `idle' or already `stopping'.  Structural repair of
+orphaned tool calls happens during wire lowering."
   (unless (memq (benedict-session-state session) '(idle stopping))
     (setf (benedict-session-stop-reason session) 'aborted)
     (benedict-core--set-state session 'stopping)

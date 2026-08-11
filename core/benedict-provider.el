@@ -70,10 +70,8 @@
                             (:copier nil))
   "One wire protocol: how a request is shaped and how a stream is read.
 
-Every function here is pure with respect to Benedict state; an adapter
-holds no globals.  Streaming state lives in the closure `make-parser'
-returns, which is more idiomatic in Emacs Lisp than threading an explicit
-state object and keeps an adapter's internals genuinely private."
+An adapter keeps no global Benedict state.  The closure returned by
+`make-parser' holds state for one stream."
   (id nil
       :documentation "Symbol naming this protocol, such as `openai-responses'.")
   (name nil
@@ -90,9 +88,8 @@ lowering its entries to this protocol's wire shape happens here.")
                :documentation "Function of no arguments returning a stream parser.
 
 The parser is a closure of (SSE-EVENT) returning a list of normalized
-events.  It is a closure rather than a function plus a state object
-because it holds mutable state -- partial JSON accumulators, block index
-mapping, reasoning item ids -- across the whole stream.")
+events.  Its closure may retain partial JSON, block indexes, reasoning ids, and
+other state for that stream.")
   (meta nil
         :documentation "Property list of adapter-defined attributes."))
 
@@ -101,8 +98,8 @@ mapping, reasoning item ids -- across the whole stream.")
 
 (defun benedict-api-register (api)
   "Add API to the registry, replacing any API with the same id.  Return API.
-Replacement keeps `load-file' working as the reload mechanism; see
-SPEC-001 9.2."
+Signal `benedict-provider-error' when API is not a `benedict-api'.
+Replacement makes extension reloads idempotent; see SPEC-001 9.2."
   (unless (benedict-api-p api)
     (signal 'benedict-provider-error (list "Not an API" api)))
   (puthash (benedict-api-id api) api benedict-api--registry)
@@ -156,10 +153,8 @@ Re-evaluating replaces the previous definition.  Returns the API."
                                  (:copier nil))
   "One service that speaks a wire API.
 
-Cheap by construction: an id, where to reach it, which protocol it
-speaks, how to authenticate, and what models it offers.  A provider
-carries no protocol logic, which is what keeps adding one to a dozen
-lines."
+A provider records its endpoint, API, authentication method, model catalog, and
+compatibility flags.  Wire-protocol behavior belongs to `benedict-api'."
   (id nil
       :documentation "Symbol naming this service, such as `vercel-ai-gateway'.")
   (name nil
@@ -180,10 +175,8 @@ Opaque to this file; `benedict-auth' interprets it.")
   ;; `benedict-defprovider' accepts the short `:models' and `:stream' keys.
   (models-function nil
                    :documentation "Function of (&optional FORCE) returning this service's models.
-Resolved at runtime with an on-disk cache rather than generated at build
-time, because Benedict has no build step.  Falls back to a small
-hardcoded list when the network is unavailable, so the system stays
-usable offline.  Call it through `benedict-provider-models'.")
+Call through `benedict-provider-models'.  The provider decides how FORCE affects
+its cache and whether an offline fallback is available.")
   (stream-function nil
                    :documentation "Optional function of (MODEL REQUEST HANDLER) that sends a request.
 
@@ -221,8 +214,7 @@ Signal `benedict-provider-unknown' when nothing is registered under ID."
 
 (defun benedict-provider-unregister (id)
   "Remove the provider named ID from the registry.
-Return non-nil when a provider was removed.  Extensions do not need this
--- reloading replaces by id -- but tests and a provider-toggling UI do."
+Return non-nil when a provider was removed."
   (let ((present (and (gethash id benedict-provider--registry) t)))
     (remhash id benedict-provider--registry)
     present))
@@ -284,10 +276,8 @@ Re-evaluating replaces the previous definition.  Returns the provider."
                               (:copier nil))
   "One model offered by one provider over one wire API.
 
-The provider/api/model triple is the model's IDENTITY, not a label: a
-transcript may hold entries produced by several models, and each is
-lowered to the wire according to its own origin so that signatures are
-only ever replayed to the model that issued them.  See
+The provider, API, and model id together identify its origin.  Adapters use that
+origin to replay provider signatures only to the model that issued them.  See
 `benedict-model-same-origin-p'."
   (id nil
       :documentation "String naming the model to its provider, such as \"openai/gpt-5\".
@@ -332,10 +322,8 @@ Useful for reporting; use `benedict-model-same-origin-p' to compare."
   "Return non-nil when ORIGIN names exactly MODEL's provider, API, and model.
 
 ORIGIN is a plist with `:provider', `:api', and `:model', as returned by
-`benedict-entry-origin'.  All three must match.  This is the test that
-decides whether an entry's provider-opaque signatures may be replayed
-verbatim or must be degraded, and it is evaluated per entry rather than
-per conversation."
+`benedict-entry-origin'.  Adapters use this per-entry test to decide whether
+provider-opaque signatures may be replayed or must be degraded."
   (and (eq (plist-get origin :provider) (benedict-model-provider model))
        (eq (plist-get origin :api) (benedict-model-api model))
        (equal (plist-get origin :model) (benedict-model-id model))))
@@ -348,11 +336,8 @@ A model with no declared modalities is assumed to accept text only."
 (defun benedict-model-compat-get (model key &optional default)
   "Return the capability flag KEY for MODEL, or DEFAULT when unset.
 
-Consults MODEL's own flags first, then its provider's, so a model may
-override a service-wide default.  Adapters read differences between
-services through this function rather than through branches on a
-provider id -- when a new service needs a behavior no flag expresses,
-add a flag rather than a branch."
+Consult MODEL's flags first, then its provider's flags.  A model value,
+including nil, overrides the provider value."
   (let ((own (benedict-model-compat model)))
     (if (plist-member own key)
         (plist-get own key)
@@ -409,10 +394,8 @@ REQUEST is the canonical plist the kernel assembles, after
   (:entries ENTRIES :system-prompt STRING :tools TOOLS :model MODEL
    :session SESSION)
 
-ENTRIES are canonical `benedict-entry' structs.  Lowering them to a wire
-format is the adapter's work, not the kernel's: there is one canonical
-representation and N serializers, never a conversion between two wire
-formats.
+ENTRIES are canonical `benedict-entry' structs.  The API adapter converts them
+to its wire format.
 
 HANDLER receives event plists in the vocabulary of SPEC-001 7.3:
 
@@ -423,15 +406,12 @@ HANDLER receives event plists in the vocabulary of SPEC-001 7.3:
   (:type :done  :reason stop|length|tool-use :usage PLIST :response-id ID)
   (:type :error :reason error|aborted :message STRING)
 
-A stream ends in exactly one of `:done' or `:error'.  An adapter must
-never signal an Elisp error to its caller for a request, model, or
-network failure -- failures are encoded as a terminal `:error' event, so
-the kernel has one error path rather than two.
+A stream ends with exactly one `:done' or `:error' event.  Request, model, and
+network failures must become terminal `:error' events rather than signalled
+Elisp conditions.
 
-Returns a cancel thunk of no arguments, or nil when the stream cannot be
-cancelled.  Calling it asks the provider to stop; the kernel does not
-depend on it doing so promptly, and ignores any events that arrive
-afterwards.
+Return a cancel thunk of no arguments, or nil when cancellation is unavailable.
+The thunk requests cancellation but may return before the provider stops.
 
 Signal `benedict-provider-no-transport' when MODEL's provider has no
 `stream' function and its wire API has no HTTP transport available."

@@ -140,7 +140,7 @@ which `benedict-chat-region-kind' is `body'."
               (point-max)))))
 
 (defun benedict-chat--body-runs (beg end)
-  "Return the `body' runs overlapping BEG..END, in buffer order.
+  "Return complete `body' regions overlapping BEG..END, in buffer order.
 
 Each run is returned WHOLE, even where it reaches outside BEG..END.  A
 markdown construct is only recognizable from its start and jit-lock cuts

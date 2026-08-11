@@ -11,7 +11,7 @@ that exists.
 
 ## Table of Contents
 
-1. [Thesis](#1-thesis)
+1. [Purpose](#1-purpose)
 2. [Design Principles](#2-design-principles)
 3. [System Overview](#3-system-overview)
 4. [The Kernel](#4-the-kernel)
@@ -30,71 +30,70 @@ that exists.
 
 ---
 
-## 1. Thesis
+## 1. Purpose
 
 Benedict is an agent runtime whose operating medium is Emacs Lisp.
 
-Every agent harness gives its model an escape hatch into a general-purpose
-execution environment — for most, that hatch is `bash` and the environment is a
-POSIX shell. Benedict's hatch is `eval` and the environment is the running Emacs
-image. This is not a cosmetic substitution. It changes what self-extension costs:
+Most agent runtimes let the model call `bash` as a general-purpose escape hatch.
+Benedict instead lets the model evaluate Emacs Lisp in the running Emacs image.
+That choice makes self-extension cheaper:
 
-- A shell agent extends itself by writing a file, then reloading a runtime that
-  must be designed to be reloadable.
-- A Lisp agent extends itself by evaluating a form. The runtime is already live.
-  Redefinition is the normal case, not a lifecycle event.
+- A shell-based agent writes a file and reloads a runtime that must support
+  reloading.
+- A Lisp agent evaluates a form in an already running image. Redefinition is a
+  normal operation.
 
-The architecture follows from taking that seriously. The kernel stays small
-enough to hold in your head, and everything with an opinion in it — approval
-policy, compaction strategy, sandboxing, provider adapters, the chat UI — lives
-outside the kernel as ordinary Emacs Lisp that the agent itself can read, write,
-and load.
+The kernel contains the agent loop and the extension points around it. Policies
+and product choices live outside the kernel as ordinary Emacs Lisp. This
+includes approval rules, compaction, sandboxing, provider adapters, and the chat
+UI. The agent can inspect, change, and load that code with the same tools used
+for other Emacs Lisp.
 
-The design borrows heavily from [pi](https://pi.dev), whose central insight is
-that an agent harness should be a small loop plus a documented extension surface,
-with the harness's own documentation reachable by the agent's own tools. Section
-13 covers where Benedict follows pi and where the Emacs medium justifies
-divergence.
+The design builds on [pi](https://pi.dev): a small agent loop, a documented
+extension API, and documentation the agent can reach through its own tools.
+Section 13 compares the two systems and explains the differences required by
+Emacs Lisp.
 
 ---
 
 ## 2. Design Principles
 
-**P1. The kernel owns mechanism, never policy.**
-The kernel provides the point at which a tool call can be intercepted. It has no
-opinion about whether `rm -rf` needs confirmation. Policy is an extension.
+**P1. Keep policy outside the kernel.**
+The kernel provides extension points around operations such as tool dispatch.
+Extensions decide whether a particular operation requires approval, must run in
+a sandbox, or should be rejected.
 
-**P2. Anything the kernel can do, an extension can do.**
-The chat frontend is written against the same public API an extension uses. If a
-frontend needs private kernel access, the API is wrong and must grow — not the
-frontend's privileges.
+**P2. Frontends and extensions use the public API.**
+The chat frontend uses the same API available to extensions. If a frontend needs
+private kernel state, the public API is incomplete and must be extended.
 
-**P3. The transcript is append-only and durable per entry.**
-Because `eval` runs in-process, the agent can break its own runtime. Every
-transcript entry is written to disk as it is created, so a corrupted image is
-recoverable by restarting and resuming.
+**P3. Persist each transcript entry when it is created.**
+`eval` runs in-process, so the agent can damage the running Emacs image. An
+append-only transcript lets the user restart Emacs and resume from the last
+persisted entry.
 
-**P4. Data structures are the primary contract.**
-Frontends and extensions couple to entry structs more tightly than to functions.
-Struct shape changes are breaking changes; function additions are not.
+**P4. Treat public data structures as API.**
+Frontends and extensions depend directly on entry structs. Changing a public
+struct is a breaking change; adding a function is not.
 
-**P5. One mechanism per concern.**
-Approval, blocking, rewriting, and sandbox routing are all the same thing — an
-async filter around tool dispatch. Four features, one mechanism, one thing to
-learn.
+**P5. Use one extension mechanism for related behavior.**
+Approval, blocking, rewriting, and sandbox routing all use an asynchronous
+filter around tool dispatch. The kernel does not expose a separate mechanism
+for each policy.
 
-**P6. Prefer introspection to documentation.**
-Where the running image can answer a question about itself, do not write a
-markdown file that will drift. Ship the concepts as prose; ship the API surface
-as `describe-function`.
+**P6. Document APIs where Emacs can inspect them.**
+Conceptual and architectural documentation belongs in prose. Function,
+variable, hook, and struct-slot documentation belongs in docstrings available
+through `describe-function` and `describe-variable`.
 
-**P7. Provider is not API.**
-The wire protocol and the service that speaks it are separate concerns. Adding a
-service that speaks a known protocol must cost a dozen lines.
+**P7. Separate providers from wire protocols.**
+A provider describes a service and its model catalog. An API adapter implements
+a wire protocol. A new provider that uses an existing protocol must require
+only a small catalog entry.
 
-**P8. No build step.**
-Elisp needs no transpilation. An extension is a file. Loading it is `load-file`.
-Resist any design that reintroduces compilation, bundling, or a module loader.
+**P8. Extensions require no build step.**
+An extension is an Emacs Lisp file loaded with `load-file`. Benedict does not
+add transpilation, bundling, or a separate module loader.
 
 ---
 
@@ -150,36 +149,34 @@ a complete, testable agent runtime with zero tools and no UI.
 | `benedict-prompts.el` | distro | Prompt template commands |
 | `benedict-chat*.el`, `ui/` | frontend | Chat buffer and render components |
 
-### 3.3 What the kernel deliberately does not own
+### 3.3 Responsibilities outside the kernel
 
-Enumerated because the temptation to absorb each of these is strong:
-
-- **Approval, permission, budget, audit.** These are dispatch filters and
+- **Approval, permission, budget, and audit.** These are dispatch filters and
   observation hooks. See §6.4.
 - **Compaction.** A context filter. See §5.6.
 - **Persistence.** The kernel emits entries; the store subscribes. The kernel
   never touches the filesystem.
 - **Worker/sandbox delegation.** A tool whose handler routes elsewhere. The
   kernel cannot tell the difference between a local and a remote tool.
-- **Provider adapters.** The kernel knows the *protocol*, not any implementation.
+- **Provider adapters.** The kernel defines the normalized event protocol, not
+  its wire-format implementations.
 - **Model catalogs, pricing, token counting.** Provider-layer concerns.
 - **Slash commands, skills, prompt templates.** Text expansion above the kernel.
-- **UI of any kind.** Including approval prompts — the approval *extension* owns
-  its prompt, and delegates presentation to whatever frontend is attached.
+- **User interfaces.** The approval extension owns approval prompts and asks the
+  attached frontend to present them.
 
 ---
 
 ## 4. The Kernel
 
-Target size: **under 1,500 lines of code** across the six kernel modules. If it
-grows past that, something in §3.3 has leaked in.
+The six kernel modules must contain fewer than 1,500 lines of code. Exceeding
+that limit is a reason to check whether a responsibility from §3.3 has entered
+the kernel.
 
-*Lines of code*, specifically — not lines of file. §10.2 makes docstrings the
-API documentation, written for an agent reading them cold, and they run about
-one line for every line of code they explain. Counting them against a budget
-whose purpose is to detect leaked policy would punish exactly the thing that
-section asks for. Measure by excluding docstrings, comments, and blanks; at the
-end of Phase 2 the six modules were 1,226 lines of code in 3,069 lines of file.
+This limit excludes docstrings, comments, and blank lines. §10.2 requires
+detailed API docstrings, so total file length is not a useful measure of kernel
+scope. At the end of Phase 2, the six modules contained 1,226 lines of code and
+3,069 total lines.
 
 ### 4.1 Public API
 
@@ -226,68 +223,50 @@ The entire kernel surface:
 (benedict-provider-stream model request handler)  ; -> cancel thunk
 ```
 
-Plus the hook variables in §4.4, the dynamic variable
-`benedict-current-session`, and `benedict-core-defer-function` (D13). That is
-the whole contract.
+The public contract also includes the hook variables in §4.4, the dynamic
+variable `benedict-current-session`, and `benedict-core-defer-function` (D13).
 
 `:transcript` adopts an existing tree rather than creating one, which is how a
 session is resumed from a log: `benedict-store-load` returns a transcript and
 the session takes it, keeping its session id so that entry ids continue the same
 sequence.
 
-`benedict-session-note` is the only public function that appends an entry **and**
-announces it (D24). `benedict-session-append` is a tree operation and fires
-nothing, so an entry written through it reaches neither the store nor a
-renderer; that is correct for the tree and useless for an extension. Notes are
-the one entry role an extension has business creating — §9.3 offers them as the
-way to persist state across restarts and §10.3 asks `eval-elisp` to record
-runtime-modifying forms as notes — so exactly that case is published and nothing
-else is. An extension cannot mint a `user` or `assistant` entry, because a
-transcript in which those can appear from anywhere is not a record of a
-conversation.
+`benedict-session-note` is the only public function that both appends and
+announces an entry (D24). By contrast, `benedict-session-append` only changes the
+tree; it does not notify the store or renderer. Extensions may create notes to
+persist their state (§9.3) or record forms that changed the running image
+(§10.3). They may not create `user` or `assistant` entries, because those roles
+must remain a record of the conversation.
 
-`benedict-tool-unregister` is published because the registry is published. An
-interface over shared state that offers registration and lookup but no removal
-does not prevent removal — it leaves `remhash` on the private hash table as the
-only way, which is the shared-mutable-state access the interface exists to
-avoid. §9.2's "no unregister protocol" is a different claim and still holds: it
-says extensions need no teardown *lifecycle*, not that a tool cannot be
-withdrawn.
+The registry API includes `benedict-tool-unregister` so callers never need to
+modify its private hash table. This does not conflict with §9.2: extensions do
+not need a teardown lifecycle, but a caller may still withdraw a tool.
 
-This became consequential rather than merely tidy when tool lists went live
-(D23). Under snapshot semantics, unregistering could not affect a session that
-already existed; now it changes what every session selecting the registry offers
-on its next request, and is the only image-wide way to withdraw a capability.
-Withdrawing from one session remains a selection that excludes it.
+With live tool lists (D23), unregistering a tool removes it from the next request
+of every session that selects the registry. To remove a tool from only one
+session, change that session's selection instead.
 
-`benedict-session-tool-list` is the single reader for what a session offers, and
-the reason it is a function rather than a slot is D23: the answer is computed on
-demand, so a tool registered mid-run is advertised on the next request without
-anyone refreshing anything. Frontends must call it rather than reading the slot
-— a tool list rendered from a snapshot goes stale silently, and the surfaces
-that render one are permissions-adjacent.
+`benedict-session-tool-list` computes a session's available tools on demand, as
+required by D23. A tool registered during a run is therefore available on the
+next request. Frontends must call this function instead of reading the session
+slot, whose value may be a selector rather than a current list.
 
-`benedict-session-get`/`-put` are on the list because §4.4.1's own example calls
-them — a globally registered filter discriminating on
-`(benedict-session-get benedict-current-session :trusted)` needs somewhere for
-that property to live, and the alternative is every extension maintaining a
-weak hash table keyed by session.
+`benedict-session-get` and `benedict-session-put` give extensions a place to
+store session-local state. Without them, each extension would need its own weak
+hash table keyed by session. §4.4.1 shows a global filter reading a `:trusted`
+session property.
 
-`:store` looks like it contradicts §3.3's "the kernel never touches the
-filesystem," and does not: it is an **opaque handle**. The kernel keeps it in a
-slot so that extensions can find a session's store without a registry, and never
-calls anything on it. Persistence happens entirely through the observation hooks,
-which is why the store lives in `ext/`.
+The `:store` slot is an opaque handle. The kernel keeps it so extensions can find
+a session's store without a registry, but never calls it or accesses the
+filesystem. Persistence remains an `ext/` responsibility implemented through
+observation hooks.
 
 ### 4.2 Run state machine
 
-Emacs is single-threaded and has no `await`. The kernel is therefore a
-**reducer**, not a loop: a function that inspects session state, dispatches one
-asynchronous action, and arranges to be re-entered from that action's callback.
-
-This is forced by the medium, but it is also better than a loop for this system —
-every state transition is an explicit, observable, interceptable point, and the
-entire kernel is synchronously testable against a scripted provider.
+Emacs is single-threaded and has no `await`, so the kernel uses a reducer. Each
+call inspects the session state, dispatches one asynchronous action, and arranges
+for its callback to re-enter the reducer. This makes every transition explicit
+and lets tests drive the kernel synchronously with a scripted provider.
 
 **States:**
 
@@ -317,10 +296,10 @@ any ──abort─────────────────────�
 steering queue, then the follow-up queue. If a predicate vetoes and both queues
 are empty, the run ends.
 
-Spelled out, because the compression above hides two rules that matter:
+Two continuation rules are not visible in the diagram:
 
 1. **The default depends on the incoming edge.** A turn that produced tool
-   results continues by default — the model has not seen them yet, and stopping
+   results continues by default because the model has not seen them yet. Stopping
    there would strand the work. A turn that produced only text stops by default.
 2. **Queued input overrides a veto.** A drained steering or follow-up message
    continues the run whatever a predicate returned. A budget filter is a policy
@@ -571,24 +550,24 @@ mode worth engineering against.
 
 ### 5.1 Model
 
-Every entry carries a `parent` id. The transcript is a **tree stored as a flat,
-append-only log**; the session holds a `head` pointing at the current tip.
+Every entry carries a `parent` id. The transcript stores a tree as a flat,
+append-only log, and the session's `head` identifies the current tip.
 
-- **Append** — create an entry with `:parent head`, write it, set `head` to it.
-- **Fork** — set `head` to any earlier entry id. The next append creates a
+- **Append:** Create an entry with `:parent head`, write it, and move `head` to it.
+- **Fork:** Move `head` to an earlier entry. The next append creates a
   sibling.
-- **Materialize** — walk `head` → root via `parent`, reverse. That list is the
-  conversation.
+- **Materialize:** Follow `parent` from `head` to the root, then reverse the
+  result to produce the conversation.
 
-The log is never rewritten. This makes branching structurally free and makes the
-durability guarantee of P3 trivially satisfiable — there is no update-in-place
-operation that could tear.
+The log is never rewritten. Branching only moves `head`, and persistence never
+needs to update an existing record. This supports the durability requirement in
+P3.
 
 ### 5.2 Why day one
 
-Retrofitting a tree means rewriting the store, the reducer, the renderer, and
-every extension that walks the transcript. Building it in costs an `id` field, a
-`parent` field, a `head` field, and a walk function — roughly sixty lines.
+Retrofitting a tree would require changes to the store, reducer, renderer, and
+every extension that walks the transcript. Supporting it from the start adds an
+`id`, a `parent`, a `head`, and a path function, roughly sixty lines.
 
 ### 5.3 What it buys
 
@@ -602,11 +581,10 @@ every extension that walks the transcript. Building it in costs an `id` field, a
 
 ### 5.4 Log format
 
-One `read`-able s-expression per line:
-
-A log holds three kinds of record, told apart by a top-level `:type`. Entry
-records have no top-level `:type` — content blocks carry one, entries do not — so
-the discriminator needs no version-specific parsing.
+A log contains one `read`-able s-expression per line. It has three record types,
+distinguished by a top-level `:type`. Entry records omit this field; only their
+content blocks have a `:type`, so the reader can identify entries without
+version-specific parsing.
 
 ```elisp
 (:type header :format 1 :session-id "20260806T142530-a3f9" :created 1785...)
@@ -619,41 +597,39 @@ the discriminator needs no version-specific parsing.
 (:type head :id "20260806T142530-a3f9-e0001" :timestamp 1785...)
 ```
 
-`prin1` out, `read` in. No schema translation, no JSON round-trip, no loss of
-elisp types. The store appends with a single `write-region` in append mode per
-entry.
+The writer uses `prin1` and the reader uses `read`, preserving Emacs Lisp types
+without a schema translation or JSON conversion. Each entry is appended with
+one call to `write-region`.
 
-**Replay is last-write-wins, with no special cases.** Process records in order:
-an entry record inserts the entry and moves `head` to it; a head record moves
-`head` to its `:id`; an unrecognized `:type` is ignored, so a record kind added
-by a newer writer does not break an older reader. That one rule covers the
-awkward case — a session that appends A and B, forks back to A, and quits logs
-`A, B, (head A)`, and replay walks head A, B, A and stops where the session
-actually left off. A head record is elided when it would only repeat where the
-log already is, so it costs a line per fork and nothing otherwise.
+**Replay is last-write-wins.** Process records in order. An entry record inserts
+the entry and moves `head` to it. A head record moves `head` to its `:id`.
+Readers ignore unrecognized record types so a newer writer can add records
+without breaking an older reader. For example, a session that appends A and B,
+forks to A, and quits writes `A, B, (head A)`. Replay finishes at A. The writer
+omits a head record when it would repeat the current position, so only a fork
+adds one.
 
-**The print bindings are part of the format, not a style choice.** Left at their
-defaults each of these silently corrupts a log:
+The following print bindings are part of the file format. Their default values
+can produce a truncated, unreadable, or non-durable log:
 
 | Binding | What it prevents |
 |---|---|
-| `print-length`, `print-level` nil | An Emacs configured for interactive printing truncates long content to `...`. The log then reads back wrong with no error anywhere. |
-| `print-circle t` | A cyclic structure in an extension-authored entry makes `prin1` loop forever and takes the image with it. The reader understands the labels it emits. |
-| `print-escape-newlines`, `print-escape-control-characters` | Assistant text is full of newlines, so without these "one s-expression per line" is simply false. |
-| `coding-system-for-write 'utf-8-emacs-unix` | Lossless for Emacs's internal representation, and LF everywhere so the per-line invariant survives Windows. Pair it with an explicit `coding-system-for-read`. |
-| `write-region-inhibit-fsync` nil | It defaults to **t in batch**, so every batch and `--script` run would be silently non-durable — exactly the case P3 exists for. |
+| `print-length`, `print-level` nil | Prevents interactive print settings from truncating long content to `...`. |
+| `print-circle t` | Prevents `prin1` from looping on a cyclic value and emits labels that `read` understands. |
+| `print-escape-newlines`, `print-escape-control-characters` | Keeps each record on one physical line. |
+| `coding-system-for-write 'utf-8-emacs-unix` | Preserves Emacs's internal representation and uses LF on every platform. Pair it with an explicit `coding-system-for-read`. |
+| `write-region-inhibit-fsync` nil | Preserves per-entry durability in batch and `--script` runs, where this variable defaults to non-nil. |
 
-Session files live under `xdg-data-home` — normally
+Session files live under `xdg-data-home`, normally
 `~/.local/share/benedict/sessions/<session-id>.eld`, resolved through `xdg.el`
 at call time rather than at load time, since `XDG_DATA_HOME` can change after
-Emacs starts. Mode `600`: a session log contains whatever the model echoed.
+Emacs starts. Files use mode `600` because a log may contain sensitive text
+echoed by the model.
 
-**Malformed logs load anyway.** A crash can leave a partial final record.
-Recovering everything before it is worth far more than refusing the session, so
-the default is to warn and return what parsed; strictness is opt-in for callers
-that need to know a log was clean. The one exception is a `:format` this reader
-does not know — that always signals, because guessing at the shapes of a future
-format is worse than declining to read it.
+A crash can leave a partial final record. By default, the reader warns and
+returns every complete record before it. Callers may request strict parsing when
+they need to reject any malformed log. An unknown `:format` always signals an
+error because the reader cannot safely infer a future record format.
 
 ### 5.5 Identity
 
@@ -662,16 +638,14 @@ plus the session id is sufficient and keeps logs readable; do not use random
 UUIDs, which make manual log inspection painful for no benefit at this scale.
 
 The format is `<session-id>-e<NNNN>`, as in `20260806T142530-a3f9-e0007`. It is
-filename-safe, sorts, greps, and — the load-bearing part — lets the counter be
-recovered from an id by regexp, so reloading a session restores it without a
-sidecar record. Session ids are a UTC timestamp plus four random characters,
-enough to separate two sessions started in the same second.
+filename-safe, sorts lexically through counter 9999, and can be searched easily.
+The reader recovers the counter from the id, so resuming a session needs no
+sidecar record. Session ids contain a UTC timestamp and four random characters
+to distinguish sessions started in the same second.
 
 Ids come from one transcript-wide counter, so after forking to an early entry the
 next id continues from the highest minted so far rather than from the fork point.
-That is what keeps them unique; it does mean ids are not contiguous along any one
-branch, which is worth knowing before reading a log and concluding something is
-missing.
+This keeps ids unique, but means they need not be contiguous along a branch.
 
 ### 5.6 Compaction as a fork
 
@@ -682,59 +656,45 @@ Compaction does not delete history. It:
    summary.
 3. Moves `head` to the summary entry.
 
-The original branch remains in the log, remains navigable, and remains
-renderable. This is worth stating explicitly because it is the single best
-argument for building the tree first: compaction is otherwise a lossy operation
-that users learn to fear.
+The original branch remains in the log and can still be navigated and rendered.
+Compaction therefore changes the active context without destroying history.
 
 Context-flagged notes (§4.5) from the compacted range are re-emitted after the
 summary entry, so durable instructions survive.
 
 #### Trigger points
 
-Compaction uses **both** available hooks, for different purposes. They are not
-alternatives:
+Compaction uses both hooks for different purposes:
 
 | Hook | Role | Fires when |
 |---|---|---|
 | `benedict-context-filter-functions` | Primary. Compact in place, run continues. | Estimated context exceeds a soft threshold (default 70% of the model's window) |
 | `benedict-continue-predicate-functions` | Safety net. Stop the run cleanly. | A hard limit is hit, or compaction itself cannot free enough |
 
-The filter path is transparent — the user sees a compaction marker and the agent
-keeps working. The predicate path is the honest failure mode: when a single turn
-would not fit even after summarizing, stopping with a clear reason beats silently
-truncating something load-bearing.
-
-Only the thresholds are tuning; the two-path structure is the design.
+The context filter lets the run continue after adding a visible compaction
+marker. The continuation predicate stops the run with a reason when compaction
+cannot make the next request fit. Thresholds are configurable; the two distinct
+paths are required.
 
 ---
 
 ## 6. Tools
 
-### 6.0 Why tools exist at all
+### 6.0 Why tools exist
 
-The question is sharper in this medium than in any other harness, and it should
-be answered before the mechanics. Every tool is an elisp function, `eval-elisp`
-can call any function, and tools load the way all elisp loads. So the registry
-looks like a second namespace beside `obarray`, and the schema DSL looks like
-paperwork over `funcall`. If a tool were only a way to *execute* something, it
-would be redundant and this section would be an argument for deleting §6.
+Every Benedict tool is an Emacs Lisp function, and `eval-elisp` can call any
+function. Tools still provide two properties that arbitrary evaluation cannot:
+explicit availability and decidable calls.
 
-Two things survive that argument. One is social, one is formal.
+`benedict-deftool` marks a function as intended for a model to call. The tool
+registry is therefore a curated set, not a second function namespace. A tool's
+description is prompt text written for the model; a function docstring is API
+documentation written for a programmer or agent inspecting Emacs. One cannot be
+derived reliably from the other.
 
-**A tool is a promotion.** `benedict-deftool` designates: *this function is meant
-to be reached for by a model, in a session, on purpose.* The registry is a
-curated set rather than a namespace, and the `description` is prompt text rather
-than a docstring — written for a different reader than `describe-function`
-serves, which is why it cannot be derived from one. Promotion is an authoring
-gesture and it is most of what the concept is worth today.
-
-**A tool call is a form whose meaning is settled before it runs.** This is the
-formal half, and it is not the usual "structured versus opaque" claim, which
-would be false here. An s-expression is data: `read` yields the list without
-evaluating it, and walking that list is trivial. Inspection is not the problem.
-
-*Decision* is the problem, and it is undecidable:
+A tool call also has a fixed meaning before execution: its name identifies the
+operation and every argument is already a literal value. An arbitrary
+s-expression does not have that property:
 
 ```elisp
 (delete-file (compute-target))                      ; the argument is not in the form
@@ -742,48 +702,26 @@ evaluating it, and walking that list is trivial. Inspection is not the problem.
 (funcall (intern (concat "delete-" "file")) target) ; the head is not in the form either
 ```
 
-`macroexpand-all` runs arbitrary code to expand. The values that determine what
-happens are not in the tree. This is Rice's theorem rather than an engineering
-gap, so no analysis closes it, and a policy over arbitrary forms therefore has
-two options: judge heuristically, which is not a boundary, or restrict itself to
-a sublanguage it can decide about.
+`macroexpand-all` can run arbitrary code, and the values that determine behavior
+may not appear in the original form. A policy can either judge such forms with
+heuristics or restrict itself to a decidable subset. Tool calls define that
+subset: a literal operation name applied to literal arguments.
 
-**That sublanguage is exactly a tool.** A tool call is a form in normal form —
-the head is a name, every argument is a literal value, and nothing remains to be
-evaluated before its meaning is known. Sit down to define which forms an
-approval policy may reason about and you will write that constraint down, and
-you will have re-derived tools in s-expression syntax. The concept is *derived*
-rather than invented, which is the strongest thing that can be said for it.
+The wire format is not what makes this safe to inspect. A quoted list is as inert
+as JSON. The relevant property is that no evaluation remains before the call's
+meaning is known.
 
-Two corollaries follow, and both matter more than they look.
+Policies can also define narrower subsets of `eval-elisp`. For example, a
+dispatch filter could allow a whitelisted function with literal arguments, such
+as `(project-find-files "src")`, while rejecting
+`(project-find-files (compute-path))`. This belongs in an extension (§9.7), not
+the kernel.
 
-The wire format is incidental. JSON is inert, but so is a quoted list; inertness
-was never the property. *Fully evaluated* is the property, and a hypothetical
-provider that emitted tool calls as s-expressions would change nothing here.
-
-The gradient is continuous, not binary. `eval-elisp` is maximum capability with
-no decidable surface; a tool gives up arbitrary capability to gain one. Between
-them sits a dispatch filter that accepts `eval-elisp` forms which are a literal
-application of a whitelisted function to literal arguments and denies everything
-else — approving `(project-find-files "src")` while refusing
-`(project-find-files (compute-path))`. That is a real, decidable policy over
-elisp, and it is an ordinary §9.7 package rather than anything the kernel needs
-to know about.
-
-**What this concept has not yet earned.** Everything above about decidability is
-load-bearing for approvals, sandbox routing, and worker delegation, none of
-which exist before Phase 6. Today the honest accounting is that tools earn their
-keep on promotion alone, and the reification is an investment. That is worth
-recording rather than defending the concept with capabilities it has not been
-asked for yet — and it has a consequence: while promotion is the main value,
-promotion should be nearly free. A form that lifts an existing function,
-deriving the schema from its arglist and asking the author only for the sentence
-the model reads, is the ergonomic shape to aim for. §6.1's DSL is the general
-case, not the common one.
-
-That models are trained on tool-calling is true, and is the weakest of these
-reasons rather than the strongest. It argues for the wire format. The normal-form
-argument would hold against a model that called functions by writing elisp.
+Before approval, sandboxing, and delegation arrive in Phase 6, a tool's immediate
+value is its explicit promotion to the model. Promotion should therefore be
+cheap. The common case should lift an existing function, derive its schema from
+the argument list, and ask the author only for the description shown to the
+model. The DSL in §6.1 remains available for definitions that need more control.
 
 ### 6.1 Definition
 
@@ -1876,8 +1814,8 @@ package split is the same principle one level up.
 
 ## 10. Self-Extension
 
-This is the point of the architecture. It deserves an explicit specification
-rather than being left to emerge.
+Self-extension is a required workflow, not an incidental effect of running in
+Emacs.
 
 ### 10.1 The loop
 
@@ -1892,21 +1830,14 @@ A user asks for a capability that does not exist. The agent:
 4. **Loads it.** `eval-elisp` → `(load-file "...")`.
 5. **Tests it** by invoking the new tool or triggering the hook.
 
-Step 4 is the payoff and the reason the medium was chosen. There is no reload
-subsystem to design, no restart, no lost session.
+Loading the file changes the running image without restarting or losing the
+session. Writing a file is optional: a session using the live tool selection
+(§6.6) advertises a tool as soon as it is registered. A file makes the change
+survive an Emacs restart; it is not required to test or use the change (§10.3).
 
-Step 3 is optional, and saying so is not a detail. A session whose selection is
-the live view (§6.6) advertises a tool the moment it is registered, so the loop
-can complete without a file existing at all — §10.3 is that case. The file is
-what makes a change outlive the image, not what makes it real.
-
-**A tool that lives in one person's config forever is the loop succeeding.** The
-temptation is to read a useful user-authored tool as a draft of an upstream
-contribution; it is not. The measure of this design is how many people extend
-their own Benedict for their own use, not how much of that extension flows back
-here. The extension skill should say so, because an agent asked to write a tool
-will otherwise reach for the shape it has seen most — a contribution to a
-project — when what was wanted was a tool for the person it is talking to.
+A user-specific tool does not need to become an upstream contribution. The
+extension skill should present personal configuration as a normal destination,
+not as a staging area for project code.
 
 ### 10.2 Introspection over documentation
 
@@ -1921,48 +1852,41 @@ disk. Emacs can answer, so Benedict splits the problem:
 | "What hooks exist?" | `apropos` `"benedict-.*-functions"` |
 | "What does this hook's contract say?" | `describe-variable` docstring |
 
-The second column can never drift from the implementation. This makes docstring
-quality a **load-bearing engineering requirement**, not a nicety: every kernel
-hook variable, every public function, and every struct accessor needs a docstring
-written for an agent reading it cold. Hook variable docstrings in particular must
-state the exact calling convention and what return values mean.
+The sources in the second column are part of the implementation, which reduces
+the chance that API documentation drifts. Every public function, hook variable,
+and struct accessor needs a docstring that an agent can understand without other
+context. A hook docstring must state its calling convention and explain how
+return values are used.
 
 ### 10.3 Ephemeral extension
 
-A capability unique to this medium and worth designing for: the agent can `eval`
-a change into the live image *without writing a file*, verify it works, and only
-then persist it. Redefining a function to add a trace, running one turn, and
-reverting is a normal debugging workflow here.
+The agent can evaluate a change in the live image, verify it, and then decide
+whether to persist it. For example, it can redefine a function to add tracing,
+run one turn, and restore the original definition without writing a file.
 
-The implication for the store: `role note` entries should record evaluated forms
-that modify the runtime, so a session transcript explains why the running image
-differs from what is on disk. `benedict-session-note` (§4.1, D24) is the
-function that makes this writable — an entry appended through it is announced,
-so it reaches the store and the renderer rather than only the tree.
-
-This is also the honest half of §13.3's accepted risk. An image that has been
-extended mid-session is an image that no longer matches its sources, and a
-transcript that records the forms is the difference between a divergence you can
-read back and one you can only discover.
+`role note` entries should record evaluated forms that modify the runtime. This
+lets the transcript explain why the running image differs from the files on
+disk. `benedict-session-note` (§4.1, D24) announces the entry so it reaches the
+store and renderer as well as the transcript tree. Recording these forms makes
+the accepted risk in §13.3 inspectable after the fact.
 
 ### 10.4 System prompt
 
-Kept small. It states: you are running inside a live Emacs image; `eval-elisp`
+The system prompt stays small. It states that the agent runs inside a live Emacs image; `eval-elisp`
 evaluates in that image; introspection tools are the way to learn the API; a
 change you make lives for the session, the image, or on disk, and choosing is
 part of the task (§9.6).
 
-It does **not** state where extensions live or how they are loaded, because the
-kernel does not know (§9.4) — whichever package the user opted into does, and it
-is that package's business to say so. A system prompt that hard-codes a path is
-the discovery table coming back in through the prompt.
+It does not state where extensions live or how they are loaded because the
+kernel does not know (§9.4). The package selected by the user supplies that
+information. Hard-coding a path in the system prompt would bypass the discovery
+mechanism.
 
-Skills are the same shape one level out. Whether the prompt carries skill
-descriptions at all, and from where, is a package's decision (§9.7); the
-progressive-disclosure model — descriptions in the prompt, full text read on
-demand — is the one this project recommends and the Agent Skills standard should
-be implemented as published so skills are shared with other harnesses (§12.4).
-Recommending is not the same as the kernel doing it.
+The skills package makes the same decision for skill descriptions (§9.7). This
+project recommends putting descriptions in the prompt and reading full skill
+text on demand. It should implement the published Agent Skills standard so
+skills remain portable across runtimes (§12.4). None of this belongs in the
+kernel.
 
 ---
 

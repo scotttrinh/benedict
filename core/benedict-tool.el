@@ -65,39 +65,35 @@ or with the `benedict-deftool' macro, which also registers the result."
 Falls back to the id when nil.")
   (description nil
                :documentation "Prose sent to the model describing what the tool does.
-This is prompt text, not a docstring: it is the model's only guidance on
-when to reach for the tool, so write it for that reader.")
+This is prompt text, not API documentation.  Tell the model when to use
+the tool and what result to expect.")
   (parameters nil
               :documentation "The `benedict-schema' parameter DSL this tool was defined with.
-Kept alongside the compiled schema because it is what a human or an agent
-reading the tool back wants to see.")
+This is the readable source form of the compiled `schema' slot.")
   (schema nil
           :documentation "Compiled JSON Schema plist, ready for `json-serialize'.
-Produced from `parameters' by `benedict-schema-compile' at definition
-time, so a malformed DSL fails when the tool is defined rather than when
-a request is built.")
+`benedict-tool-create' compiles it from `parameters'.")
   (handler nil
            :documentation "Function of (INVOCATION DONE) that performs the call.
 DONE is called with a `benedict-tool-result-value' when the call
 finishes.  A handler that never calls DONE leaves the run suspended,
-which is a supported state rather than a bug.")
+which allows approval prompts and external workers to resume it later.")
   (meta nil
         :documentation "Property list for extension-defined attributes.
 The kernel does not interpret it."))
 
 (cl-defun benedict-tool-create (&key id label description parameters handler sync)
-  "Return a new tool named ID.
+  "Create and return a tool named ID without registering it.
 
 LABEL is the short human-readable name a frontend displays, defaulting
 to ID.  DESCRIPTION is the prose the model sees.  PARAMETERS is the
-`benedict-schema' DSL and is compiled here, so a malformed DSL signals
-`benedict-schema-error' now rather than at request time.  HANDLER is a
+`benedict-schema' DSL and is compiled before the tool is returned.  HANDLER is a
 function of (INVOCATION DONE) unless SYNC is non-nil, in which case it
 is a function of (INVOCATION) returning a result and is wrapped to
 satisfy the asynchronous contract.
 
 Signal `benedict-tool-error' when ID is not a symbol or HANDLER is not a
-function.  Does not register the tool; see `benedict-tool-register'."
+function.  Signal `benedict-schema-error' when PARAMETERS is invalid."
   (unless (and id (symbolp id))
     (signal 'benedict-tool-error (list "Tool id is not a symbol" id)))
   (unless (functionp handler)
@@ -128,9 +124,8 @@ learning that synchronous tools exist."
 (defun benedict-tool-register (tool)
   "Add TOOL to the registry, replacing any tool with the same id.  Return TOOL.
 
-Replacement rather than refusal is deliberate: reloading an extension is
-`load-file', and every registration primitive has to be idempotent for
-that to work without an unregister protocol.  See SPEC-001 9.2."
+Signal `benedict-tool-error' when TOOL is not a `benedict-tool'.
+Replacement makes reloading an extension idempotent; see SPEC-001 9.2."
   (unless (benedict-tool-p tool)
     (signal 'benedict-tool-error (list "Not a tool" tool)))
   (puthash (benedict-tool-id tool) tool benedict-tool--registry)
@@ -150,14 +145,9 @@ Signal `benedict-tool-unknown' when no tool is registered under ID."
   "Remove the tool named ID from the registry.
 Return non-nil when a tool was removed.
 
-Reloading an extension does not need this, since registration replaces by
-id, but withdrawing a tool does, and this is the only image-wide way:
-withdrawing from one session is a tool selection that excludes it.  A
-session selecting the whole registry stops offering ID on its next
-request, while one naming ID in a list selection signals
-`benedict-tool-unknown' the next time it resolves -- the selection
-promised a tool that is gone, and a list quietly one entry short is not
-something the model can notice."
+Sessions selecting the full registry stop offering ID on their next request.
+A session whose explicit selection names ID instead signals
+`benedict-tool-unknown' when it next resolves that selection."
   (let ((present (and (gethash id benedict-tool--registry) t)))
     (remhash id benedict-tool--registry)
     present))
@@ -165,21 +155,18 @@ something the model can notice."
 (defun benedict-tool-list ()
   "Return every registered tool, sorted by id.
 
-Sorted rather than in registration order because the list reaches the
-model in this order, and a stable order keeps provider-side prompt caches
-warm across restarts."
+The stable order keeps provider-side prompt caches useful across restarts."
   (let ((tools nil))
     (maphash (lambda (_id tool) (push tool tools)) benedict-tool--registry)
     (sort tools (lambda (a b) (string< (symbol-name (benedict-tool-id a))
                                        (symbol-name (benedict-tool-id b)))))))
 
 (defun benedict-tool-resolve (specs)
-  "Return the tools named by SPECS, a list of ids and tool structs.
+  "Resolve SPECS and return a list of `benedict-tool' objects.
 
-Ids are looked up in the registry and structs pass through, so a session
-can be given a mix of registry names and one-off tools.  Signal
-`benedict-tool-unknown' for an id with no registered tool -- silently
-dropping it would present the model a tool list quietly missing an entry."
+Each member of SPECS may be a registered tool id or a `benedict-tool', which
+passes through unchanged.  Signal `benedict-tool-unknown' for an unregistered
+id and `benedict-tool-error' for any other value."
   (mapcar (lambda (spec)
             (cond
              ((benedict-tool-p spec) spec)
@@ -193,9 +180,7 @@ dropping it would present the model a tool list quietly missing an entry."
 
 BODY is a plist accepting `:label', `:description', `:parameters',
 `:sync', and `:handler', with the meanings given by
-`benedict-tool-create'.  The tool is registered as a side effect of
-evaluating the definition, so loading the file that defines it is all
-that is required to make it available.
+`benedict-tool-create'.  Evaluating the definition registers the tool.
 
   (benedict-deftool eval-elisp
     :label \"Evaluate Elisp\"
@@ -205,8 +190,7 @@ that is required to make it available.
     :handler (lambda (invocation done)
                (funcall done (benedict-tool-result :content \"nil\"))))
 
-Re-evaluating a definition replaces the previous tool, which is what
-makes reloading an extension a plain `load-file'.  Returns the tool."
+Re-evaluating NAME replaces its previous registration.  Return the tool."
   (declare (indent 1) (doc-string 3))
   `(benedict-tool-register (benedict-tool-create :id ',name ,@body)))
 
@@ -291,9 +275,8 @@ only documented way to derive one; this is its implementation."
   "Return a copy of INVOCATION with KEYS-AND-VALUES replacing its slots.
 
 Does not modify INVOCATION.  KEYS-AND-VALUES is a plist whose keys are
-`:id', `:name', `:arguments', `:tool', or `:blocked-reason'.
-This is how a dispatch filter rewrites a call -- mutating the invocation
-in place would be visible to filters that already ran.
+`:id', `:name', `:arguments', `:tool', or `:blocked-reason'.  Dispatch
+filters use this function to rewrite or reroute a call.
 
 Signal `benedict-tool-error' on an odd argument count or an unknown key."
   (when (cl-oddp (length keys-and-values))
@@ -316,10 +299,8 @@ Signal `benedict-tool-error' on an odd argument count or an unknown key."
 (defun benedict-tool-blocked (invocation reason)
   "Return a copy of INVOCATION marked as denied, explaining REASON.
 
-Hand the result to a dispatch filter's `next' continuation to deny a
-call.  Denial is not an error and not an exception: the call becomes a
-tool result with `error-p' set and REASON as its content, because a model
-that asked for a tool must always be told what happened to it."
+Pass the result to a dispatch filter's NEXT continuation to deny the call.
+Execution converts it to a failed tool result whose content is REASON."
   (benedict-invocation-with invocation :blocked-reason reason))
 
 (defun benedict-invocation-blocked-p (invocation)
@@ -383,17 +364,12 @@ its call when the transcript is lowered to the wire."
 (defun benedict-tool-execute (invocation done)
   "Execute INVOCATION and call DONE with a `benedict-tool-result-value'.
 
-Two conditions short-circuit to a failed result rather than signalling,
-because each is something the model has to learn about in order to
-recover: INVOCATION was blocked by a dispatch filter, or it names a tool
-that is not registered.  An error signalled by the handler is a third:
-a tool that breaks must not take the run with it, and the model needs to
-see what went wrong in order to try something else.
+Blocked calls, unknown tools, and errors signalled by a handler become failed
+tool results instead of escaping this function.  This ensures the model receives
+a result for every call it made.
 
-DONE may be called on a later turn of the event loop.  A handler that
-never calls it leaves the run suspended, which is how approval works --
-and is also how a handler that sends the call to another process waits
-for the answer."
+DONE may be called asynchronously.  Until it is called, the run remains
+suspended."
   (cond
    ((benedict-invocation-blocked-p invocation)
     (funcall done (benedict-tool-result-error

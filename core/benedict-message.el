@@ -240,22 +240,19 @@ TYPE is matched literally and must not be quoted."
 (defconst benedict-entry-roles '(user assistant tool-result note)
   "The roles a `benedict-entry' may carry.
 
-There is deliberately no `system' role: the system prompt is a property
-of the session, not an entry in its transcript.
+The system prompt is a session property, so there is no `system' entry role.
 
-`note' is for entries that are part of the record but are not ordinarily
-sent to a provider -- extension annotations, model-change markers, UI
-markers, and evaluated forms that modified the running image.  A note may
-opt into provider context; see `benedict-entry-context-p'.")
+`note' records extension annotations, model changes, UI markers, and evaluated
+forms.  Notes are excluded from provider context by default; see
+`benedict-entry-context-p'.")
 
 (cl-defstruct (benedict-entry (:constructor benedict-entry--create)
                               (:copier nil))
   "A canonical transcript entry.
 
-Entries are never mutated once appended to a transcript: the canonical
-representation is the single source of truth, and each provider lowers
-it to that provider's wire format at request time.  Use
-`benedict-entry-with' to derive a changed copy.
+Do not mutate an entry after appending it to a transcript.  Use
+`benedict-entry-with' to derive a changed copy for wire-format lowering or other
+transformations.
 
 Construct with `benedict-entry-create', which validates the role and
 normalizes content."
@@ -275,20 +272,16 @@ See `benedict-block-text' and its siblings for the shapes, and
              :documentation "Creation time, as returned by `float-time'.")
   (meta nil
         :documentation "Property list of entry metadata.
-Well-known keys: `:provider', `:api', and `:model' record which model
-produced an assistant entry and are load-bearing rather than diagnostic,
-since a transcript may mix entries from several models and each must be
-lowered according to its own origin.  Also `:usage', `:stop-reason',
-`:error-message', opaque persistence-safe `:error-data', and `:context' (see
-`benedict-entry-context-p')."))
+`:provider', `:api', and `:model' record the origin used for wire lowering.
+Other defined keys are `:usage', `:stop-reason', `:error-message', opaque
+persistence-safe `:error-data', and `:context'; see
+`benedict-entry-context-p'."))
 
 (defun benedict-entry-normalize-content (content)
   "Return CONTENT as a list of content blocks.
 
-Accepts a list of blocks unchanged, wraps a single block plist in a
-list, converts a bare string into a one-element list holding a text
-block, and passes nil through.  This is what lets callers and tests
-write :content \"hello\" instead of spelling out the block.
+Return nil unchanged.  Convert a string to one text block, wrap a single block
+plist in a list, and return a list of blocks unchanged.
 
 Signal `benedict-entry-error' when CONTENT is none of those."
   (cond
@@ -329,11 +322,8 @@ supplied as nil.  Slots that are not supplied are carried over, and
 carried-over CONTENT and META are copied with `copy-tree' so the result
 shares no mutable structure with ENTRY.
 
-This is the replacement for the struct copier, which is deliberately
-suppressed: entries carry identity, so a shallow copy that silently
-shares content with the original is almost always a bug.  Rebuilding an
-entry with degraded content for a foreign model is exactly
-\(benedict-entry-with entry :content degraded)."
+The struct has no generated copier because a shallow copy would share CONTENT
+and META."
   (benedict-entry-create
    :id (if id-p id (benedict-entry-id entry))
    :parent (if parent-p parent (benedict-entry-parent entry))
@@ -398,11 +388,9 @@ carried over from ENTRY is shared with it, so do not modify one in place."
 (defun benedict-entry-origin (entry)
   "Return the provider, API, and model that produced ENTRY, as a plist.
 
-The plist has keys `:provider', `:api', and `:model'.  Origin decides how
-an entry is lowered to the wire: a transcript may hold entries from
-several models, and each is lowered according to its own origin rather
-than the conversation's current model, so signatures are only ever
-replayed to the model that issued them."
+The plist has keys `:provider', `:api', and `:model'.  Adapters use it to lower
+each entry according to its own origin and to avoid replaying opaque signatures
+to another model."
   (list :provider (benedict-entry-meta-get entry :provider)
         :api (benedict-entry-meta-get entry :api)
         :model (benedict-entry-meta-get entry :model)))
@@ -441,12 +429,10 @@ are not text blocks and are not included."
                                    (:copier nil))
   "A tree of `benedict-entry' objects, stored as a flat append-only log.
 
-Every entry names its parent, so the tree needs no nested structure: a
-conversation is materialized by walking `head' back to a root.  Appending
-creates a child of head; `benedict-transcript-fork' moves head somewhere
-earlier so the next append creates a sibling instead.  Nothing is ever
-rewritten or removed, which is what makes branching free and what lets
-non-destructive compaction be expressed as a fork.
+Every entry names its parent.  `head' identifies the current tip, and
+`benedict-transcript-path' materializes the path from a root to that tip.
+Appending adds a child of `head'; `benedict-transcript-fork' moves `head'
+without removing entries.
 
 This struct is session-independent so that it can be built and tested
 without a session; `benedict-session' holds one and delegates to it."
@@ -510,10 +496,8 @@ Signal `benedict-entry-error' on a duplicate id and
 `benedict-transcript-broken-chain' when an explicitly-set parent is not
 in TRANSCRIPT.
 
-Note that ids come from a transcript-wide counter, so after forking to an
-early entry the next id continues from the highest minted so far rather
-than from the fork point.  That is what keeps ids unique, but it does
-mean ids are not contiguous along any single branch."
+Ids use a transcript-wide counter.  After a fork, the next id continues from the
+highest counter already minted, so ids need not be contiguous along a branch."
   (let ((id (benedict-entry-id entry)))
     (if id
         (benedict-transcript--absorb-counter transcript id)
@@ -530,10 +514,9 @@ mean ids are not contiguous along any single branch."
 (defun benedict-transcript-insert (transcript entry)
   "Record ENTRY in TRANSCRIPT without moving head.  Return ENTRY.
 
-This is the load path.  ENTRY must already carry an id, which advances
-TRANSCRIPT's counter if it encodes a larger one.  Head is left alone
-because a log replays head separately -- a session that ended on a fork
-has a head that is not its last entry.
+ENTRY must already have an id.  The id advances TRANSCRIPT's counter when it
+encodes a larger value.  This function leaves the head unchanged so log replay
+can restore it separately.
 
 Use `benedict-transcript-append' to add an entry to a live conversation."
   (let ((id (benedict-entry-id entry)))
@@ -566,9 +549,8 @@ Signal `benedict-transcript-unknown-entry' when ID is not in TRANSCRIPT."
 (defun benedict-transcript-fork (transcript id)
   "Move TRANSCRIPT's head to ID and return ID.
 
-The next append then creates a sibling of ID's existing children rather
-than extending the current branch.  Nothing is removed: the abandoned
-branch stays in the transcript and stays renderable.
+The next append creates a child of ID.  Existing entries remain in the
+transcript.
 
 ID may be nil, which makes the next append a new root.  Signal
 `benedict-transcript-unknown-entry' when ID is not in TRANSCRIPT."
@@ -584,9 +566,7 @@ conversation.  Returns nil for an empty transcript.
 
 Signal `benedict-transcript-unknown-entry' when ID itself is absent,
 `benedict-transcript-broken-chain' when some ancestor is, and
-`benedict-transcript-cycle' when the parent chain revisits an entry --
-which can only happen in a hand-edited or corrupted log, and is worth an
-error rather than an infinite loop inside a renderer."
+`benedict-transcript-cycle' when the parent chain revisits an entry."
   (let ((id (or id (benedict-transcript-head transcript)))
         (seen (make-hash-table :test #'equal))
         (path nil))
@@ -618,11 +598,8 @@ This is the whole tree, not a single branch; see
 (defun benedict-transcript-equal-p (a b)
   "Return non-nil when transcripts A and B hold the same entries and head.
 
-Compares entries in append order, and head.  Ignores the child index,
-which is derived, and the counter, which is worth asserting separately.
-
-This exists because `equal' on the struct itself is always nil: two hash
-tables are never `equal', however identical their contents."
+Compare entries in append order and compare the heads.  Ignore the derived child
+index and the transcript counter."
   (and (equal (benedict-transcript-head a) (benedict-transcript-head b))
        (equal (benedict-transcript-entries a) (benedict-transcript-entries b))))
 

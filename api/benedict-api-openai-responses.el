@@ -151,11 +151,11 @@ A thinking block without a `:signature' never survives lowering for a
 foreign model (it is degraded to text), and a same-origin thinking block
 without a `:signature' has no item id to replay, so both are skipped.
 
-A tool-call block's `:id' is the `call_id' the wire returned — it is what
-matches a `function_call_output'.  Its `:signature' is the item `id'
-(beginning `fc_').  A same-origin call keeps the signature; a foreign call's
-signature is stripped by lowering, so a synthetic `fc_' id is derived from
-a hash of the call id.  See SPEC-001 7.8.5."
+A tool-call block's `:id' is the `call_id' the wire returned and matches a
+`function_call_output'.  Its `:signature' is the item `id', which begins
+with `fc_'.  A same-origin call keeps the signature; a foreign call's
+signature is stripped by lowering, so a synthetic `fc_' id is derived
+from a hash of the call id.  See SPEC-001 7.8.5."
   (pcase (benedict-block-type block)
     ('thinking
      (when-let* ((signature (plist-get block :signature))
@@ -238,7 +238,7 @@ The closure takes one argument, a plist `(:event TYPE :data DATA)' where
 TYPE is the SSE event type string (nil when no `event:' field was sent) and
 DATA is the raw data string.  It returns a LIST of normalized events,
 possibly empty.  The parser never signals: the caller wraps it in a
-condition-case, but signalling would still leave the block map in an
+`condition-case', but signalling would still leave the block map in an
 inconsistent state, so internal errors are swallowed and logged by the
 caller.
 
@@ -267,9 +267,8 @@ See SPEC-001 7.3 and 7.4 for the event vocabulary and the mapping."
     (type json response-id blocks set-response-id set-tool-call get-tool-call)
   "Dispatch on TYPE with parsed JSON, returning a list of normalized events.
 
-RESPONSE-ID, BLOCKS, and the three callbacks thread the parser's mutable
-state through a pure dispatch, which is what makes fixture replay testable
-without a closure."
+RESPONSE-ID and BLOCKS hold parser state.  SET-RESPONSE-ID,
+SET-TOOL-CALL, and GET-TOOL-CALL update or read the remaining state."
   (pcase type
     ("response.created"
      (let ((id (benedict-api-openai-responses--response-id json)))
@@ -306,7 +305,8 @@ without a closure."
 ;;;;; Item lifecycle
 
 (defun benedict-api-openai-responses--item-added (json blocks set-tool-call)
-  "Return the `:block-start' event for an output_item.added, updating BLOCKS."
+  "Handle output_item.added JSON using BLOCKS and SET-TOOL-CALL.
+Return its `:block-start' event."
   (let* ((index (plist-get json :output_index))
          (item (plist-get json :item))
          (item-type (plist-get item :type)))
@@ -335,24 +335,24 @@ without a closure."
       (_ nil))))
 
 (defun benedict-api-openai-responses--text-delta (json blocks)
-  "Return the `:block-delta' event for an output_text.delta."
+  "Return the `:block-delta' event for output_text.delta JSON using BLOCKS."
   (let ((index (plist-get json :output_index))
         (delta (plist-get json :delta)))
     (when (and delta (gethash index blocks))
       (list (list :type :block-delta :index index :delta delta)))))
 
 (defun benedict-api-openai-responses--reasoning-delta (json blocks)
-  "Return the `:block-delta' event for a reasoning(.summary_text)?.delta."
+  "Return a reasoning `:block-delta' from JSON using BLOCKS."
   (let ((index (plist-get json :output_index))
         (delta (plist-get json :delta)))
     (when (and delta (gethash index blocks))
       (list (list :type :block-delta :index index :delta delta)))))
 
 (defun benedict-api-openai-responses--args-delta (json blocks)
-  "Return the `:block-delta' event for a function_call_arguments.delta.
+  "Handle function-call argument JSON using BLOCKS.
 
-The raw partial JSON is forwarded as the delta text so a frontend can render
-the argument string arriving; the adapter parses it at block-end."
+Return a `:block-delta' event carrying the raw partial argument text.  The
+adapter parses the completed value at block end."
   (let ((index (plist-get json :output_index))
         (delta (plist-get json :delta)))
     (let ((block (gethash index blocks)))
@@ -361,7 +361,7 @@ the argument string arriving; the adapter parses it at block-end."
         (list (list :type :block-delta :index index :delta delta))))))
 
 (defun benedict-api-openai-responses--args-done (json blocks)
-  "Record parsed arguments from function_call_arguments.done in BLOCKS.
+  "Record parsed arguments from JSON in BLOCKS.
 
 Returns no events — the block closes at output_item.done, which is where
 `:block-end' carries the assembled arguments."
@@ -374,7 +374,7 @@ Returns no events — the block closes at output_item.done, which is where
         nil))))
 
 (defun benedict-api-openai-responses--item-done (json blocks)
-  "Return the `:block-end' event for an output_item.done, updating BLOCKS."
+  "Handle output_item.done JSON using BLOCKS and return its `:block-end' event."
   (let* ((index (plist-get json :output_index))
          (item (plist-get json :item))
          (item-type (plist-get item :type))
@@ -411,12 +411,11 @@ Returns no events — the block closes at output_item.done, which is where
 
 (defun benedict-api-openai-responses--done-event
     (json response-id get-tool-call fallback-reason)
-  "Return the `:done' event for a completed or incomplete response.
+  "Build a `:done' event from JSON and RESPONSE-ID.
 
-The reason is `tool-use' when the stream opened any function_call item,
-otherwise FALLBACK-REASON (`stop' for completed, `length' for incomplete).
-The kernel branches on whether the entry carries tool calls, not on this
-reason; the reason is the transcript's stop marker."
+Use GET-TOOL-CALL to detect tool use.  Otherwise use FALLBACK-REASON,
+which is normally `stop' for a completed response or `length' for an
+incomplete response."
   (let* ((response (plist-get json :response))
          (usage (benedict-api-openai-responses--usage
                  (plist-get response :usage)))
@@ -426,7 +425,7 @@ reason; the reason is the transcript's stop marker."
             (when response-id (list :response-id response-id)))))
 
 (defun benedict-api-openai-responses--usage (usage)
-  "Return the normalized usage plist for a Responses usage object.
+  "Return the normalized plist for Responses USAGE.
 
 `input_tokens' includes cached tokens; subtracting
 `input_tokens_details.cached_tokens' gives the uncached input count so
@@ -443,7 +442,7 @@ neither is inferred from — see SPEC-001 7.4."
             :cache-read cached))))
 
 (defun benedict-api-openai-responses--failed-message (json)
-  "Return the error message for a response.failed event."
+  "Return the error message from response.failed JSON."
   (let* ((response (plist-get json :response))
          (error (and response (plist-get response :error)))
          (message (and error (plist-get error :message))))
@@ -476,7 +475,7 @@ arguments) rather than signalled."
         (error nil)))))
 
 (defun benedict-api-openai-responses--response-id (json)
-  "Extract the response id from a response.created payload."
+  "Return the response id from response.created JSON."
   (let ((response (plist-get json :response)))
     (and response (plist-get response :id))))
 
