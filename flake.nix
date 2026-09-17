@@ -71,11 +71,27 @@
           '');
         };
 
+        # Exercises a REAL provider, with real credentials, and spends real
+        # money.  Deliberately not a test: `nix run .#test' is offline and
+        # credential-free and stays that way (SPEC-001 12.5, D21).
+        apps.live = {
+          type = "app";
+          program = toString (runWithEask "run-live" ''
+            exec ${eask}/bin/eask exec ${emacs}/bin/emacs --batch \
+              -l scripts/live-smoke.el -f benedict-live-smoke "$@"
+          '');
+        };
+
         apps.lint = {
           type = "app";
           program = toString (runWithEask "run-lint" ''
-            exec ${eask}/bin/eask lint checkdoc
-            exec ${eask}/bin/eask lint package
+            # Run both linters and report a combined status.  `set -e' would
+            # short-circuit on the first failure, and `exec' would replace the
+            # shell so the second never ran at all.
+            status=0
+            ${eask}/bin/eask lint checkdoc "$@" || status=1
+            ${eask}/bin/eask lint package  "$@" || status=1
+            exit $status
           '');
         };
 

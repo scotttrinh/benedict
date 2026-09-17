@@ -1,0 +1,312 @@
+#+title: Extending Benedict
+
+* Why extend Benedict
+
+Benedict is deliberately tiny.  Its core runs conversations, tools, providers,
+and hooks.  The user builds the behavior they want from that core with ordinary
+Emacs Lisp.  Personal extension is how Benedict becomes the user's Benedict.
+
+Explore the live Emacs environment when the user needs behavior Benedict does
+not provide.  Inspect existing functions and variables, try small changes, and
+refine them from the user's feedback.  The user may keep the resulting
+functionality for themselves or share it with others.  Both are complete
+outcomes.
+
+* You are inside Emacs
+
+Benedict runs in a live Emacs image.  =eval-elisp= reads and evaluates one
+Emacs Lisp form in that image.  A definition or setting takes effect
+immediately.  You do not need to rebuild or restart Benedict.
+
+Use this loop:
+
+1. Choose how long the change should live.
+2. Inspect the live API.
+3. Evaluate the smallest useful change.
+4. Exercise the changed behavior.
+5. Refine the change from the user's feedback.
+6. Persist the change only when it should survive an Emacs restart.
+
+* Choose the lifetime first
+
+Every change has one of three lifetimes:
+
+| Lifetime | Use it for | Mechanism |
+|----------+------------+-----------|
+| Session | One conversation | Session tools, session hooks, or session state |
+| Image | Until Emacs exits | Definitions, global hooks, advice, or settings |
+| Disk | Across restarts | The same Elisp in a file loaded by the user's Emacs configuration |
+
+Do not write a file when a session-local or image-local change is enough.  Do
+not make an image-wide change when only one session should observe it.
+
+* Inspect before changing
+
+Treat the running image as the source of truth for API details.  Use
+=eval-elisp= to query it.
+
+Read a function's documentation:
+
+#+begin_src emacs-lisp
+(documentation #'benedict-deftool)
+#+end_src
+
+Inspect its argument list:
+
+#+begin_src emacs-lisp
+(help-function-arglist #'benedict-deftool t)
+#+end_src
+
+Read a variable or hook contract:
+
+#+begin_src emacs-lisp
+(documentation-property
+ 'benedict-tool-dispatch-functions
+ 'variable-documentation)
+#+end_src
+
+Find matching functions:
+
+#+begin_src emacs-lisp
+(apropos-internal "^benedict-tool-" #'fboundp)
+#+end_src
+
+Find Benedict hook variables:
+
+#+begin_src emacs-lisp
+(apropos-internal "^benedict-.*-functions$")
+#+end_src
+
+Read docstrings instead of guessing signatures, argument meanings, callback
+contracts, or return values.
+
+* Prototype in the live image
+
+=eval-elisp= accepts one form.  Use =progn= when the operation needs several
+forms.
+
+#+begin_src emacs-lisp
+(progn
+  (defun my-benedict-helper (value)
+    (* value 2))
+  (my-benedict-helper 21))
+#+end_src
+
+Evaluate the change, then trigger the behavior it affects.  Redefine the
+function and test again when necessary.  Writing a file does not make a change
+more real; it only makes the change durable.
+
+* Use the narrowest mechanism
+
+Use ordinary Emacs Lisp mechanisms:
+
+- Use a session property for session-local state.
+- Use a session hook for behavior that applies to one session.
+- Use a global hook for behavior that applies to the whole Emacs image.
+- Define a tool when the model should invoke a named capability deliberately.
+- Use a filter or dispatch hook to transform, block, approve, or reroute work.
+- Use =setopt= for a published user option.
+- Use advice or function redefinition only when no published hook expresses the
+  change.
+
+A tool is a promoted capability, not the only way to run Elisp.  Give it a
+clear model-facing description and a narrow, inspectable argument schema.
+
+Hook contracts differ.  Some observe, some transform a value, and some receive
+a continuation.  Inspect each hook's variable documentation before using it.
+Hooks run in explicit scope order: the default global hook list first, then the
+session-local list, independently of the current buffer.  =add-hook='s =DEPTH=
+orders functions within one scope only; it does not sort across scopes, so a
+local negative depth cannot precede a global hook.  Equal-depth global ties
+keep Emacs's existing behavior; session-local ties keep insertion order.
+Install order-dependent policy functions together in the appropriate scope.
+Hooks compose scoped policy; they do not establish an isolation boundary
+against image-wide Elisp such as global hooks, advice, variables, or registries.
+The dynamic =benedict-current-session= binding is present at resumed chain
+steps and handler entry, but it does not follow arbitrary timers created by an
+extension; callbacks that outlive the hook invocation must capture =SESSION=
+lexically.
+
+* Make the change durable
+
+Persist a proven change as an ordinary Emacs Lisp file.  Require the libraries
+whose public interfaces it uses, give public and internal definitions distinct
+names, and provide a feature.
+
+Make the user's Emacs configuration load the file with =require= or =load=.
+Benedict does not own extension discovery or load order.  The user's Emacs
+configuration is the root of durable loading.
+
+Prefer a separate extension file over placing substantial code directly in the
+user's init file.  A broken extension can be disabled while Emacs still starts.
+Keep configuration under version control so a bad persistent change is easy to
+recover.
+
+* Keep reloading idempotent
+
+Assume the extension file will be loaded more than once.
+
+- Define hook functions by name.  *Never add an anonymous lambda to a hook.*
+- Register tools and providers by stable identifiers.
+- Replace definitions and registrations instead of accumulating copies.
+- Avoid irreversible load-time side effects.
+
+=defun= replaces a function definition.  Benedict's keyed registrations
+replace the prior value.  =add-hook= with the same named function does not add a
+duplicate.  These properties are the reload mechanism.
+
+* Verify the result
+
+Do not stop after evaluation or file creation.
+
+1. Confirm that the definition, hook, tool, or setting exists in the image.
+2. Trigger the behavior through the same path that will use it.
+3. Inspect the result and any changed session state.
+4. Reload a durable extension and verify that it does not duplicate effects.
+5. Report the lifetime and loading arrangement to the user.
+
+An extension in the user's configuration is a complete result.  Sharing it as a
+package or contributing it to Benedict is also valid.  Let the user choose the
+scope.
+
+* Supported capabilities at a glance
+
+This guide is a map, not a second API reference.  Use =describe-function= and
+=describe-variable= for signatures and current docstrings.  The executable
+examples are in =test/benedict-extension-contract-test.el= in the repository;
+tests are not included in the installed package.
+
+| Capability | Public interface | Lifetime and ownership |
+|------------+------------------+-----------------------|
+| Session-local tool | =benedict-session-create :tools= with a tool object or selection function | Resolved for each request; offered tool objects are borrowed read-only. |
+| Session-local policy | =benedict-session-add-hook= / =benedict-session-remove-hook= | Global hooks run first, then the session-local list; scope is not isolation. |
+| Extension state | =benedict-session-get= / =benedict-session-put= | Owned by the extension and lives with the session. |
+| Request transformation | =benedict-request-filter-functions= | Return a replacement canonical request plist, never wire JSON. |
+| Tool interception | =benedict-tool-dispatch-functions= | Call =next= at most once, or retain it for a later callback. |
+| Context shaping | =benedict-context-filter-functions= | Return canonical entries; compaction is a non-destructive fork. |
+| Persistence | Store observation hooks plus =benedict-session-note= | The store is opaque; notes carry declarative state for reconstruction. |
+| Provider adapter | =benedict-defapi= and public accessors | =:build= receives =(REQUEST MODEL)= and returns a JSON string. |
+
+*Lifecycle rules.* A request captures the final model origin and offered tool
+objects at dispatch.  Replacing the session model or registry definitions
+affects the next request, not the in-flight one; duplicate offered tool ids are
+first-wins.  Tool objects, invocations, and result values passed to extension
+code are borrowed values: inspect them, and return copies or replacement
+objects rather than mutating them.  A dispatch continuation is consumed before
+downstream code and must be called no more than once.  Late callbacks after
+abort, replacement, or a terminal event are ignored.  Provider and callback
+failures become one terminal failure, preserve the first condition in
+=benedict-session-last-error=, and cannot restart the run; terminal observers
+are attempted once each.  A cancellation thunk requests cleanup and may return
+before transport shutdown completes, so cleanup must be idempotent.
+
+Hooks receive the dynamic =benedict-current-session= only during hook, resumed
+dispatch, and handler entry.  A timer or other callback that outlives that
+dynamic extent must capture the session lexically.  Global hooks precede local
+hooks regardless of depth; depth orders functions only within one scope, and
+the hook lists do not isolate a session from image-wide advice, variables, or
+registries.
+
+Within one scope, use depth 0 for approval filters, depth 90 for routing
+filters, and depth -90 for observation-only wrappers.  Depth never reorders
+global hooks relative to session-local hooks: global functions run first, then
+the session-local list.
+
+*Session-local tools.* Keep an unregistered tool in the session's selection;
+the function form is useful when the selection should follow live state:
+
+#+begin_src emacs-lisp
+(let ((tool (benedict-tool-create
+             :id 'project-lint :description "Lint this project"
+             :parameters nil :handler #'my-project-lint :sync t)))
+  (benedict-session-create
+   :model model
+   :tools (lambda (_session) (list tool))))
+#+end_src
+
+*Lexical session capture.* The dynamic binding is not carried into arbitrary
+timers.  Capture the session explicitly when installing asynchronous work:
+
+#+begin_src emacs-lisp
+(defun my-session-watch (session)
+  (run-at-time 1 nil
+               (let ((session session))
+                 (lambda ()
+                   (benedict-session-put session :watch-fired t)))))
+#+end_src
+
+*Declarative-state reconstruction.* Store extension configuration as a
+context note, then rebuild hooks and properties from that note after loading
+the transcript.  Do not serialize closures or rely on a private store slot:
+
+#+begin_src emacs-lisp
+(benedict-session-note
+ session "My extension configuration"
+ '(:context t :my-extension (:project-root "/work" :mode safe)))
+
+(let* ((note (seq-find #'my-extension-config-note-p
+                       (reverse (benedict-transcript-path transcript))))
+       (config (benedict-entry-meta-get note :my-extension))
+       (session (benedict-session-create :transcript transcript :model model)))
+  (benedict-session-put session :project-root
+                        (plist-get config :project-root))
+  (benedict-session-add-hook session 'benedict-request-filter-functions
+                             #'my-extension-request-filter)
+  session)
+#+end_src
+
+*Composed adapter callbacks.* Delegate every unchanged adapter slot through
+the public accessors.  Compose =:build= around the actual request/model
+contract, parse the base JSON, and return a new JSON string without changing
+the base registration:
+
+#+begin_src emacs-lisp
+(let ((base (benedict-api-get 'my-base-api)))
+  (benedict-defapi my-adapter
+    :name "My adapter"
+    :endpoint (benedict-api-endpoint base)
+    :headers (benedict-api-headers base)
+    :make-parser (benedict-api-make-parser base)
+    :build (lambda (request model)
+             (let ((body (json-parse-string
+                          (funcall (benedict-api-build base) request model)
+                          :object-type 'plist)))
+               (json-serialize
+                (plist-put body :my-option "enabled"))))))
+#+end_src
+
+*Cancel cleanup.* Own cleanup in session state, clear it before invoking the
+callback, and make the callback idempotent.  Only =benedict-session-abort=
+enters =stopping=; terminal provider errors and internal failures transition
+directly to =idle=.  =benedict-run-end-functions= runs on every terminal path,
+including abort and failure, so subscribe to the state change for abort
+responsiveness and to run-end for failure completeness.  Use run-end alone when
+immediate abort response is not needed:
+
+#+begin_src emacs-lisp
+(defun my-cleanup (session)
+  (when-let* ((cancel (benedict-session-get session :my-cancel)))
+    (benedict-session-put session :my-cancel nil)
+    (funcall cancel)))
+
+(defun my-cleanup-on-stop (session _old new)
+  (when (eq new 'stopping)
+    (my-cleanup session)))
+
+(defun my-cleanup-on-run-end (session)
+  (my-cleanup session))
+
+(benedict-session-put session :my-cancel #'my-idempotent-cleanup)
+(benedict-session-add-hook session 'benedict-state-change-functions
+                           #'my-cleanup-on-stop)
+(benedict-session-add-hook session 'benedict-run-end-functions
+                           #'my-cleanup-on-run-end)
+#+end_src
+
+*Deferred capabilities.* These are intentionally future extension work, not
+promises of the current base: native OAuth in the shared resolver (the
+descriptor and headless interfaces exist, but resolution reports unsupported
+today); real skill discovery; automatic session assembly; UI model selection;
+first-party coding tools; the packaging split; and transparent asynchronous
+same-run compaction.  Current extensions compose the published interfaces
+without assuming any of those capabilities.

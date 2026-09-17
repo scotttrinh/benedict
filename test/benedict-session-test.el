@@ -1,1006 +1,566 @@
-;;; benedict-session-test.el --- Tests for benedict-session -*- lexical-binding: t -*-
+;;; benedict-session-test.el --- Sessions, scoping, and queues  -*- lexical-binding: t; -*-
 
 ;;; Commentary:
-;; Unit and property tests for the benedict-session module.
+
+;; SPEC-001 D5 makes hook scoping a Phase 2 concern rather than a frontend one,
+;; because it shapes the hook-running helpers themselves.  The Phase 2 exit
+;; criterion is two concurrent sessions where a session-local dispatch filter
+;; fires for one and not the other, and a global filter discriminates via
+;; `benedict-current-session'.  That is
+;; `benedict-session-scoping-separates-two-sessions'.
+;;
+;; The rest of this file covers the session surface those two sessions are
+;; built from: transcript delegation, forking, queues, and properties.
 
 ;;; Code:
 
 (require 'ert)
-(require 'ert-async)
-(require 'propcheck)
+(require 'test-helper)
 
-(let* ((root (file-name-directory (or load-file-name buffer-file-name)))
-       (repo (expand-file-name ".." root)))
-  (add-to-list 'load-path repo))
+(defun benedict-session-test--tool ()
+  "Register and return a tool that reports which session ran it."
+  (benedict-deftool benedict-test-whoami
+    :description "Report the calling session."
+    :parameters nil
+    :sync t
+    :handler (lambda (_invocation)
+               (benedict-tool-result
+                :content (benedict-session-id benedict-current-session)))))
 
-(require 'benedict-session)
-(require 'benedict-store)
-(require 'benedict-tools)
+(defun benedict-session-test--calling-session ()
+  "Return a session that calls `benedict-test-whoami' once, then stops."
+  (benedict-test-session
+   '(((:tool-call benedict-test-whoami nil))
+     ((:text "done")))
+   :tools '(benedict-test-whoami)))
 
-;;; Registry Tests
+;;;; Exit criterion: two concurrent sessions
 
-(ert-deftest benedict-session-test-add-message-creates-canonical-entry ()
-  "Adding a legacy message also stores a canonical entry."
-  (let ((benedict-session--registry (make-hash-table :test 'equal)))
+(ert-deftest benedict-session-scoping-separates-two-sessions ()
+  "A session-local filter fires for its own session and no other."
+  (benedict-test-with-clean-registries
+    (benedict-session-test--tool)
+    (benedict-test-with-manual-defer
+      (let ((guarded (benedict-session-test--calling-session))
+            (open (benedict-session-test--calling-session))
+            (fired nil))
+        ;; Only the guarded session gets the policy.  The other coexists in the
+        ;; same image with the same tool and the same global hooks.
+        (benedict-session-add-hook
+         guarded 'benedict-tool-dispatch-functions
+         (lambda (invocation next)
+           (push (benedict-session-id benedict-current-session) fired)
+           (funcall next (benedict-tool-blocked invocation "Denied here"))))
+
+        (benedict-session-submit guarded "go")
+        (benedict-session-submit open "go")
+        (benedict-test-drain)
+
+        (should (equal fired (list (benedict-session-id guarded))))
+        (should (equal (benedict-session-test--results guarded) '("Denied here")))
+        (should (equal (benedict-session-test--results open)
+                       (list (benedict-session-id open))))))))
+
+(ert-deftest benedict-session-global-filter-discriminates-by-current-session ()
+  "A globally registered filter tells sessions apart via the dynamic variable."
+  (benedict-test-with-clean-registries
+    (benedict-session-test--tool)
+    (benedict-test-with-manual-defer
+      (let ((trusted (benedict-session-test--calling-session))
+            (untrusted (benedict-session-test--calling-session)))
+        (benedict-session-put trusted :trusted t)
+        ;; This is the SPEC-001 4.4.1 example: one global function, no session
+        ;; argument in its signature, discriminating anyway.
+        (add-hook 'benedict-tool-dispatch-functions
+                  (lambda (invocation next)
+                    (if (benedict-session-get benedict-current-session :trusted)
+                        (funcall next invocation)
+                      (funcall next (benedict-tool-blocked invocation "Untrusted")))))
+        (benedict-session-submit trusted "go")
+        (benedict-session-submit untrusted "go")
+        (benedict-test-drain)
+        (should (equal (benedict-session-test--results trusted)
+                       (list (benedict-session-id trusted))))
+        (should (equal (benedict-session-test--results untrusted) '("Untrusted")))))))
+
+(ert-deftest benedict-session-current-session-is-bound-in-every-hook-kind ()
+  "Observation, veto, filter, and dispatch hooks all see the running session."
+  (benedict-test-with-clean-registries
+    (benedict-session-test--tool)
+    (benedict-test-with-manual-defer
+      (let ((session (benedict-session-test--calling-session))
+            (seen nil))
+        (benedict-session-add-hook
+         session 'benedict-context-filter-functions
+         (lambda (entries _session)
+           (push (cons 'context (eq benedict-current-session session)) seen)
+           entries))
+        (benedict-session-add-hook
+         session 'benedict-tool-result-filter-functions
+         (lambda (result _invocation)
+           (push (cons 'result (eq benedict-current-session session)) seen)
+           result))
+        (benedict-session-add-hook
+         session 'benedict-continue-predicate-functions
+         (lambda (_session)
+           (push (cons 'continue (eq benedict-current-session session)) seen)
+           nil))
+        (benedict-session-add-hook
+         session 'benedict-tool-dispatch-functions
+         (lambda (invocation next)
+           (push (cons 'dispatch (eq benedict-current-session session)) seen)
+           (funcall next invocation)))
+        (benedict-session-submit session "go")
+        (benedict-test-drain)
+        (should (seq-every-p #'cdr seen))
+        (should (equal (sort (delete-dups (mapcar #'car seen)) #'string<)
+                       '(context continue dispatch result)))))))
+
+(ert-deftest benedict-session-local-hooks-do-not-leak-across-sessions ()
+  "Session-local lists are per session, and removal takes effect."
+  (benedict-test-with-clean-registries
+    (let ((a (benedict-session-create))
+          (b (benedict-session-create))
+          (fn (lambda (&rest _) nil)))
+      (benedict-session-add-hook a 'benedict-run-start-functions fn)
+      (should (equal (benedict-session-hook-functions a 'benedict-run-start-functions)
+                     (list fn)))
+      (should (null (benedict-session-hook-functions b 'benedict-run-start-functions)))
+      (should (benedict-session-remove-hook a 'benedict-run-start-functions fn))
+      (should (null (benedict-session-hook-functions a 'benedict-run-start-functions)))
+      (should-not (benedict-session-remove-hook a 'benedict-run-start-functions fn)))))
+
+(ert-deftest benedict-session-adding-a-hook-twice-moves-it ()
+  "Re-adding a function changes its depth rather than duplicating it."
+  (benedict-test-with-clean-registries
+    (let ((session (benedict-session-create))
+          (early (lambda (&rest _) 'early))
+          (late (lambda (&rest _) 'late)))
+      (benedict-session-add-hook session 'benedict-run-start-functions late 10)
+      (benedict-session-add-hook session 'benedict-run-start-functions early 20)
+      (benedict-session-add-hook session 'benedict-run-start-functions early -10)
+      (should (equal (benedict-session-hook-functions session
+                                                      'benedict-run-start-functions)
+                     (list early late))))))
+
+(ert-deftest benedict-session-hook-functions-puts-global-first ()
+  "The combined list is global then local, and drops `add-hook''s t marker."
+  (benedict-test-with-clean-registries
+    (let ((session (benedict-session-create))
+          (global (lambda (&rest _) 'global))
+          (local (lambda (&rest _) 'local)))
+      (add-hook 'benedict-run-start-functions global)
+      (setq benedict-run-start-functions (append benedict-run-start-functions '(t)))
+      (benedict-session-add-hook session 'benedict-run-start-functions local)
+      (should (equal (benedict-session-hook-functions session
+                                                      'benedict-run-start-functions)
+                     (list global local))))))
+
+(defun benedict-session-test--global-tie-first (&rest _)
+  "Named no-op hook function used to observe Emacs global tie order."
+  nil)
+
+(defun benedict-session-test--global-tie-second (&rest _)
+  "Named no-op hook function used to observe Emacs global tie order."
+  nil)
+
+
+(defun benedict-session-test--local-tie-first (&rest _)
+  "Named no-op hook function used to observe local tie order."
+  nil)
+
+(defun benedict-session-test--local-tie-second (&rest _)
+  "Named no-op hook function used to observe local tie order."
+  nil)
+(ert-deftest benedict-session-hook-functions-accepts-singleton-global-value ()
+  "A singleton default global hook value still runs for a session.
+
+This locks the legal `run-hooks' value shape where a global hook variable
+holds one function rather than a list; session-local scope still composes
+after it."
+  (benedict-test-with-clean-registries
+    (let* ((seen nil)
+           (function (lambda (&rest _)
+                       (setq seen t)))
+           (session (benedict-session-create)))
+      (setq-default benedict-run-start-functions function)
+      (benedict-hook-run session 'benedict-run-start-functions)
+      (should seen))))
+
+(ert-deftest benedict-session-hook-order-is-global-then-local ()
+  "Global hooks precede local hooks, regardless of their relative depths.
+
+This locks the cross-scope contract: DEPTH orders functions within each
+scope, but a global routing function at depth 90 still precedes a
+session-local approval function at depth -90."
+  (benedict-test-with-clean-registries
     (let* ((session (benedict-session-create))
-           (message (benedict-session-add-message session '(:role user :content "First")))
-           (entry (car (benedict-session-entries session))))
-      (should (string= (benedict-message-id message) (benedict-message-id entry)))
-      (should (eq 'user (benedict-message-role entry)))
-      (should (string= "First" (benedict-message-text entry))))))
+           (seen nil)
+           (global-approval (lambda (&rest _) (push 'global-approval seen)))
+           (global-routing (lambda (&rest _) (push 'global-routing seen)))
+           (local-observation (lambda (&rest _) (push 'local-observation seen)))
+           (local-approval (lambda (&rest _) (push 'local-approval seen))))
+      (add-hook 'benedict-run-start-functions global-routing 90)
+      (add-hook 'benedict-run-start-functions global-approval 0)
+      (benedict-session-add-hook session 'benedict-run-start-functions
+                                 local-observation -90)
+      (benedict-session-add-hook session 'benedict-run-start-functions
+                                 local-approval 0)
+      (benedict-hook-run session 'benedict-run-start-functions)
+      (should (equal (nreverse seen)
+                     '(global-approval global-routing
+                       local-observation local-approval))))))
 
-(ert-deftest benedict-session-test-entries-chronological ()
-  "Canonical entries preserve chronological ordering."
-  (let ((benedict-session--registry (make-hash-table :test 'equal)))
+(ert-deftest benedict-session-global-hook-keeps-emacs-tie-and-registration-behavior ()
+  "Global equal-depth ties retain Emacs ordering and named registration rules.
+
+This locks the contract without claiming that global `add-hook' ties are
+insertion-ordered: repeated named registration stays deduplicated, and the
+observed equal-depth order remains the order supplied by Emacs."
+  (benedict-test-with-clean-registries
+    (add-hook 'benedict-run-start-functions
+              #'benedict-session-test--global-tie-first 0)
+    (add-hook 'benedict-run-start-functions
+              #'benedict-session-test--global-tie-second 0)
+    (add-hook 'benedict-run-start-functions
+              #'benedict-session-test--global-tie-first 0)
+    (let ((functions (benedict-session-hook-functions
+                      nil 'benedict-run-start-functions)))
+      (should (= (cl-count #'benedict-session-test--global-tie-first functions)
+                 1))
+      (should (= (cl-count #'benedict-session-test--global-tie-second functions)
+                 1))
+      (should (equal functions
+                     (list #'benedict-session-test--global-tie-second
+                           #'benedict-session-test--global-tie-first))))))
+
+(ert-deftest benedict-session-local-equal-depth-is-insertion-ordered ()
+  "Session-local equal depths preserve insertion order after sorting.
+
+This locks the session scope's tie behavior independently of Emacs global
+hook ties: named re-registration replaces and re-inserts rather than
+duplicating the function."
+  (benedict-test-with-clean-registries
+    (let* ((session (benedict-session-create))
+           (first #'benedict-session-test--local-tie-first)
+           (second #'benedict-session-test--local-tie-second))
+      (benedict-session-add-hook session 'benedict-run-start-functions first 0)
+      (benedict-session-add-hook session 'benedict-run-start-functions second 0)
+      (should (equal (benedict-session-local-hook-functions
+                      session 'benedict-run-start-functions)
+                     (list first second)))
+      (benedict-session-add-hook session 'benedict-run-start-functions first 0)
+      (should (equal (benedict-session-local-hook-functions
+                      session 'benedict-run-start-functions)
+                     (list second first))))))
+
+(ert-deftest benedict-session-hooks-ignore-buffer-local-values ()
+  "Hook collection uses the default global list, not the active buffer.
+
+This locks buffer independence across deferred steps and the `t' marker
+contract: a buffer-local hook value must neither run nor alter session hooks."
+  (benedict-test-with-clean-registries
+    (let* ((session (benedict-test-session
+                     '(((:tool-call benedict-test-whoami nil)))))
+           (seen nil)
+           (global (lambda (invocation next)
+                     (push 'global seen)
+                     (funcall next invocation)))
+           (local (lambda (invocation next)
+                    (push 'local seen)
+                    (funcall next invocation)))
+           (buffer (generate-new-buffer " *benedict-hook-scope-test*")))
+      (unwind-protect
+          (progn
+            (add-hook 'benedict-tool-dispatch-functions global)
+            (benedict-session-add-hook
+             session 'benedict-tool-dispatch-functions local)
+            (benedict-test-with-manual-defer
+              (benedict-session-submit session "go")
+              ;; Open the stream before switching to a buffer carrying an
+              ;; incidental local value; collection happens on a later tick.
+              (should (benedict-test-step))
+              (with-current-buffer buffer
+                (setq-local benedict-tool-dispatch-functions
+                            (list (lambda (&rest _)
+                                    (error "buffer-local hook ran"))
+                                  t))
+                (should (benedict-test-step))
+                (benedict-test-drain))
+              (should (equal seen '(local global)))))
+        (when (buffer-live-p buffer)
+          (kill-buffer buffer))))))
+
+;;;; Creation
+
+(ert-deftest benedict-session-create-resolves-models-and-tools ()
+  "A session resolves a model spec string and a list of tool ids."
+  (benedict-test-with-clean-registries
+    (benedict-deftool benedict-test-noop
+      :description "Does nothing."
+      :parameters nil
+      :sync t
+      :handler (lambda (_invocation) (benedict-tool-result :content "")))
+    (let* ((script (benedict-provider-fake-script nil))
+           (model (benedict-provider-fake-model script))
+           (session (benedict-session-create :model "fake/fake-model"
+                                             :tools '(benedict-test-noop))))
+      (should (eq (benedict-session-model session) model))
+      (should (eq (benedict-session-provider session) 'fake))
+      (should (equal (mapcar #'benedict-tool-id (benedict-session-tool-list session))
+                     '(benedict-test-noop)))
+      (should (eq (benedict-session-state session) 'idle)))))
+
+(ert-deftest benedict-session-create-accepts-a-separate-provider ()
+  "A bare model id resolves when the provider is given alongside it."
+  (benedict-test-with-clean-registries
+    (benedict-provider-fake-model (benedict-provider-fake-script nil))
+    (let ((session (benedict-session-create :provider 'fake :model "fake-model")))
+      (should (equal (benedict-model-id (benedict-session-model session))
+                     "fake-model")))))
+
+(ert-deftest benedict-session-create-adopts-a-transcript ()
+  "Adopting a transcript keeps its session id, so later ids stay consistent."
+  (benedict-test-with-clean-registries
+    (let* ((transcript (benedict-transcript-create :session-id "adopted"))
+           (session (benedict-session-create :id "ignored" :transcript transcript)))
+      (should (equal (benedict-session-id session) "adopted"))
+      (should (eq (benedict-session-transcript session) transcript)))))
+
+(ert-deftest benedict-session-submit-without-a-model-signals ()
+  (benedict-test-with-clean-registries
     (let ((session (benedict-session-create)))
-      (benedict-session-add-message session '(:role user :content "First"))
-      (benedict-session-add-message session '(:role assistant :content "Second"))
-      (let ((entries (benedict-session-entries-chronological session)))
-        (should (string= "First" (benedict-message-text (car entries))))
-        (should (string= "Second" (benedict-message-text (cadr entries))))))))
+      (should-error (benedict-session-submit session "hi")
+                    :type 'benedict-session-error))))
 
-(ert-deftest benedict-session-test-create-registers ()
-  "Creating a session registers it in the registry."
-  (let ((benedict-session--registry (make-hash-table :test 'equal)))
-    (let ((session (benedict-session-create :title "Test")))
-      (should (benedict-session-p session))
-      (should (stringp (benedict-session-id session)))
-      (should (benedict-session-get (benedict-session-id session))))))
+(ert-deftest benedict-session-unknown-tool-id-signals ()
+  (benedict-test-with-clean-registries
+    (should-error (benedict-session-create :tools '(benedict-test-absent))
+                  :type 'benedict-tool-unknown)))
 
-(ert-deftest benedict-session-test-create-with-fields ()
-  "Session creation accepts initial field values."
-  (let ((benedict-session--registry (make-hash-table :test 'equal)))
+;;;; The tool selection
+
+(defun benedict-session-test--deftool (id)
+  "Register and return a do-nothing tool named ID."
+  (benedict-tool-register
+   (benedict-tool-create :id id :parameters nil :sync t
+                         :handler (lambda (_invocation)
+                                    (benedict-tool-result :content "")))))
+
+(ert-deftest benedict-session-tool-list-resolves-a-list-per-call ()
+  "A list selection is fixed, but its ids resolve fresh on every call.
+
+The distinction is what makes reloading an extension file take effect in
+a session created before the reload: the selection names which tools are
+offered, not which structs."
+  (benedict-test-with-clean-registries
+    (benedict-session-test--deftool 'benedict-test-a)
+    (let* ((session (benedict-session-create :tools '(benedict-test-a)))
+           (first (car (benedict-session-tool-list session))))
+      (should (eq first (benedict-tool-get 'benedict-test-a)))
+      (let ((replacement (benedict-session-test--deftool 'benedict-test-a)))
+        (should-not (eq first replacement))
+        (should (eq (car (benedict-session-tool-list session)) replacement))))))
+
+(ert-deftest benedict-session-tool-list-follows-a-function-selection ()
+  "A function selection is called per resolution, so later registrations appear.
+
+Asserted as a delta rather than against the whole registry, which also
+holds whatever tools the image loaded -- `eval-elisp' among them."
+  (benedict-test-with-clean-registries
+    (benedict-session-test--deftool 'benedict-test-a)
+    (let* ((session (benedict-session-create
+                     :tools (lambda (_session) (benedict-tool-list))))
+           (before (mapcar #'benedict-tool-id (benedict-session-tool-list session))))
+      (should (memq 'benedict-test-a before))
+      (should-not (memq 'benedict-test-b before))
+      (benedict-session-test--deftool 'benedict-test-b)
+      (let ((after (mapcar #'benedict-tool-id (benedict-session-tool-list session))))
+        (should (memq 'benedict-test-b after))
+        (should (equal (seq-difference after before) '(benedict-test-b)))))))
+
+(ert-deftest benedict-session-tool-list-passes-the-session-to-a-selection ()
+  "A selection function receives its session, so it can read session state."
+  (benedict-test-with-clean-registries
+    (benedict-session-test--deftool 'benedict-test-a)
     (let ((session (benedict-session-create
-                    :title "My Session"
-                    :profile 'test-profile
-                    :root "/tmp/project")))
-      (should (string= "My Session" (benedict-session-title session)))
-      (should (eq 'test-profile (benedict-session-profile session)))
-      (should (string= "/tmp/project" (benedict-session-root session))))))
+                    :tools (lambda (session)
+                             (and (benedict-session-get session :allowed)
+                                  '(benedict-test-a))))))
+      (should-not (benedict-session-tool-list session))
+      (benedict-session-put session :allowed t)
+      (should (equal (mapcar #'benedict-tool-id (benedict-session-tool-list session))
+                     '(benedict-test-a))))))
 
-(ert-deftest benedict-session-test-list-returns-all ()
-  "Listing sessions returns all registered sessions."
-  (let ((benedict-session--registry (make-hash-table :test 'equal)))
-    (benedict-session-create :title "First")
-    (benedict-session-create :title "Second")
-    (benedict-session-create :title "Third")
-    (should (= 3 (length (benedict-session-list))))))
+(ert-deftest benedict-session-tool-list-offers-an-unregistered-tool ()
+  "A selection may carry a tool struct that was never registered.
 
-(ert-deftest benedict-session-test-list-with-predicate ()
-  "Listing sessions accepts a filter predicate."
-  (let ((benedict-session--registry (make-hash-table :test 'equal)))
-    (benedict-session-create :title "Alpha")
-    (benedict-session-create :title "Beta")
-    (let ((alphas (benedict-session-list
-                   (lambda (s) (string-prefix-p "A" (benedict-session-title s))))))
-      (should (= 1 (length alphas))))))
+This is the whole of session scoping: the registry is image-wide, so a
+tool that must reach one session only stays out of it."
+  (benedict-test-with-clean-registries
+    (let* ((scoped (benedict-tool-create
+                    :id 'benedict-test-scoped :parameters nil :sync t
+                    :handler (lambda (_invocation) (benedict-tool-result :content ""))))
+           (session (benedict-session-create :tools (list scoped))))
+      (should (equal (benedict-session-tool-list session) (list scoped)))
+      (should-not (benedict-tool-get 'benedict-test-scoped)))))
 
-(ert-deftest benedict-session-test-delete-removes ()
-  "Deleting a session removes it from the registry."
-  (let ((benedict-session--registry (make-hash-table :test 'equal)))
-    (let* ((session (benedict-session-create))
-           (id (benedict-session-id session)))
-      (should (benedict-session-delete id))
-      (should-not (benedict-session-get id))
-      (should-not (benedict-session-delete id)))))  ; Returns nil if not found
+(ert-deftest benedict-session-tool-list-signals-for-an-id-that-went-away ()
+  "Unregistering a selected tool signals rather than silently shortening the list."
+  (benedict-test-with-clean-registries
+    (benedict-session-test--deftool 'benedict-test-a)
+    (let ((session (benedict-session-create :tools '(benedict-test-a))))
+      (should (benedict-session-tool-list session))
+      (benedict-tool-unregister 'benedict-test-a)
+      (should-error (benedict-session-tool-list session)
+                    :type 'benedict-tool-unknown))))
 
-(ert-deftest benedict-session-test-touch-updates-timestamp ()
-  "Touching a session updates its updated-at timestamp."
-  (let ((benedict-session--registry (make-hash-table :test 'equal)))
-    (let* ((session (benedict-session-create))
-           (original (benedict-session-updated-at session)))
-      (sleep-for 0.01)
-      (benedict-session-touch session)
-      (should (time-less-p original (benedict-session-updated-at session))))))
+(ert-deftest benedict-session-create-does-not-call-a-selection-function ()
+  "A function selection is not validated at creation; there is no session yet."
+  (benedict-test-with-clean-registries
+    (let ((called nil))
+      (benedict-session-create :tools (lambda (_session) (setq called t) nil))
+      (should-not called))))
 
-;;; Message Tests
+;;;; Transcript delegation and forking
 
-(ert-deftest benedict-session-test-add-message-assigns-id ()
-  "Adding a message assigns a sequential ID."
-  (let ((benedict-session--registry (make-hash-table :test 'equal)))
-    (let ((session (benedict-session-create)))
-      (let ((m1 (benedict-session-add-message session '(:role user :content "First")))
-            (m2 (benedict-session-add-message session '(:role assistant :content "Second"))))
-        (should (string= "msg-001" (benedict-message-id m1)))
-        (should (string= "msg-002" (benedict-message-id m2)))))))
-
-(ert-deftest benedict-session-test-add-message-assigns-timestamp ()
-  "Adding a message assigns a timestamp."
-  (let ((benedict-session--registry (make-hash-table :test 'equal)))
-    (let ((session (benedict-session-create)))
-      (let ((msg (benedict-session-add-message session '(:role user :content "Test"))))
-        (should (benedict-message-timestamp msg))))))
-
-(ert-deftest benedict-session-test-messages-newest-first ()
-  "Messages are stored newest-first."
-  (let ((benedict-session--registry (make-hash-table :test 'equal)))
-    (let ((session (benedict-session-create)))
-      (benedict-session-add-message session '(:role user :content "First"))
-      (benedict-session-add-message session '(:role assistant :content "Second"))
-      (let ((messages (benedict-session-entries session)))
-        (should (string= "Second" (benedict-message-text (car messages))))))))
-
-(ert-deftest benedict-session-test-messages-chronological ()
-  "Chronological accessor returns oldest-first."
-  (let ((benedict-session--registry (make-hash-table :test 'equal)))
-    (let ((session (benedict-session-create)))
-      (benedict-session-add-message session '(:role user :content "First"))
-      (benedict-session-add-message session '(:role assistant :content "Second"))
-      (let ((messages (benedict-session-messages-chronological session)))
-        (should (string= "First" (benedict-message-text (car messages))))))))
-
-(ert-deftest benedict-session-test-get-message-by-id ()
-  "Can retrieve message by ID."
-  (let ((benedict-session--registry (make-hash-table :test 'equal)))
-    (let ((session (benedict-session-create)))
-      (benedict-session-add-message session '(:role user :content "Find me"))
-      (let ((found (benedict-session-get-message session "msg-001")))
-        (should found)
-        (should (string= "Find me" (benedict-message-text found))))
-      (should-not (benedict-session-get-message session "msg-999")))))
-
-(ert-deftest benedict-session-test-update-message ()
-  "Can update message fields."
-  (let ((benedict-session--registry (make-hash-table :test 'equal)))
-    (let ((session (benedict-session-create)))
-      (benedict-session-add-message session '(:role user :content "Original"))
-      (benedict-session-update-message session "msg-001" '(:metadata (:edited t)))
-      (let ((msg (benedict-session-get-message session "msg-001")))
-        (should (plist-get (benedict-message-metadata msg) :edited))))))
-
-;;; State Tests
-
-(ert-deftest benedict-session-test-initial-state-idle ()
-  "New sessions start in idle state."
-  (let ((benedict-session--registry (make-hash-table :test 'equal)))
-    (let ((session (benedict-session-create)))
-      (should (eq 'idle (benedict-session-state session))))))
-
-(ert-deftest benedict-session-test-set-state ()
-  "Can transition session state."
-  (let ((benedict-session--registry (make-hash-table :test 'equal)))
-    (let ((session (benedict-session-create)))
-      (benedict-session-set-state session 'streaming)
-      (should (eq 'streaming (benedict-session-state session))))))
-
-(ert-deftest benedict-session-test-set-state-no-op-same ()
-  "Setting same state doesn't emit event."
-  (let ((benedict-session--registry (make-hash-table :test 'equal))
-        (events nil))
-    (let ((session (benedict-session-create)))
-      (add-hook 'benedict-session-event-hook
-                (lambda (_s type _p) (push type events)))
-      (benedict-session-set-state session 'idle)  ; Already idle
-      (should-not (memq 'state-changed events)))))
-
-;;; Draft Tests
-
-(ert-deftest benedict-session-test-start-draft ()
-  "Starting draft creates accumulator and sets streaming state."
-  (let ((benedict-session--registry (make-hash-table :test 'equal)))
-    (let ((session (benedict-session-create)))
-      (benedict-session-start-draft session)
-      (should (benedict-session-draft session))
-      (should (eq 'streaming (benedict-session-state session)))
-      (should (string= "" (plist-get (benedict-session-draft session) :content))))))
-
-(ert-deftest benedict-session-test-append-draft ()
-  "Appending to draft accumulates content."
-  (let ((benedict-session--registry (make-hash-table :test 'equal)))
-    (let ((session (benedict-session-create)))
-      (benedict-session-start-draft session)
-      (benedict-session-append-draft session "Hello ")
-      (benedict-session-append-draft session "world")
-      (should (string= "Hello world"
-                       (plist-get (benedict-session-draft session) :content))))))
-
-(ert-deftest benedict-session-test-draft-tool-calls ()
-  "Can accumulate tool calls in draft."
-  (let ((benedict-session--registry (make-hash-table :test 'equal)))
-    (let ((session (benedict-session-create)))
-      (benedict-session-start-draft session)
-      (benedict-session-add-draft-tool-call session '(:id "call1" :name read_file))
-      (benedict-session-add-draft-tool-call session '(:id "call2" :name write_file))
-      (should (= 2 (length (plist-get (benedict-session-draft session) :tool-calls)))))))
-
-(ert-deftest benedict-session-test-finalize-draft ()
-  "Finalizing draft creates message and clears draft."
-  (let ((benedict-session--registry (make-hash-table :test 'equal)))
-    (let ((session (benedict-session-create)))
-      (benedict-session-start-draft session)
-      (benedict-session-append-draft session "Response text")
-      (let ((msg (benedict-session-finalize-draft session)))
-        (should (eq 'assistant (benedict-message-role msg)))
-        (should (string= "Response text" (benedict-message-text msg)))
-        (should-not (benedict-session-draft session))
-        (should (eq 'idle (benedict-session-state session)))))))
-
-(ert-deftest benedict-session-test-discard-draft ()
-  "Discarding draft clears without creating message."
-  (let ((benedict-session--registry (make-hash-table :test 'equal)))
-    (let ((session (benedict-session-create)))
-      (benedict-session-start-draft session)
-      (benedict-session-append-draft session "Partial")
-      (benedict-session-discard-draft session)
-      (should-not (benedict-session-draft session))
-      (should (= 0 (length (benedict-session-entries session)))))))
-
-;;; Inflight Request Tests
-
-(ert-deftest benedict-session-test-start-request ()
-  "Starting request records handle and returns ID."
-  (let ((benedict-session--registry (make-hash-table :test 'equal)))
-    (let ((session (benedict-session-create)))
-      (let ((id (benedict-session-start-request session 'fake-handle)))
-        (should (numberp id))
-        (should (benedict-session-request-active-p session))
-        (should (eq 'fake-handle
-                    (plist-get (benedict-session-inflight session) :request)))))))
-
-(ert-deftest benedict-session-test-clear-request ()
-  "Clearing request removes inflight state."
-  (let ((benedict-session--registry (make-hash-table :test 'equal)))
-    (let ((session (benedict-session-create)))
-      (benedict-session-start-request session 'handle)
-      (benedict-session-clear-request session)
-      (should-not (benedict-session-request-active-p session)))))
-
-(ert-deftest benedict-session-test-cancel ()
-  "Cancelling clears request, discards draft, sets cancelled state."
-  (let ((benedict-session--registry (make-hash-table :test 'equal)))
-    (let ((session (benedict-session-create)))
-      (benedict-session-start-request session 'handle)
-      (benedict-session-start-draft session)
-      (benedict-session-cancel session)
-      (should (eq 'cancelled (benedict-session-state session)))
-      (should-not (benedict-session-request-active-p session))
-      (should-not (benedict-session-draft session)))))
-
-;;; Dispatch Tests
-
-(ert-deftest benedict-session-test-busy-p-idle ()
-  "Idle session is not busy."
-  (let ((benedict-session--registry (make-hash-table :test 'equal)))
-    (let ((session (benedict-session-create)))
-      (should-not (benedict-session-busy-p session)))))
-
-(ert-deftest benedict-session-test-busy-p-streaming ()
-  "Streaming session is busy."
-  (let ((benedict-session--registry (make-hash-table :test 'equal)))
-    (let ((session (benedict-session-create)))
-      (benedict-session-start-draft session)
-      (should (benedict-session-busy-p session)))))
-
-(ert-deftest benedict-session-test-busy-p-request ()
-  "Session with active request is busy."
-  (let ((benedict-session--registry (make-hash-table :test 'equal)))
-    (let ((session (benedict-session-create)))
-      (benedict-session-start-request session 'handle)
-      (should (benedict-session-busy-p session)))))
-
-(ert-deftest benedict-session-test-dispatch-rejects-busy ()
-  "Dispatch signals error when session is busy."
-  (let ((benedict-session--registry (make-hash-table :test 'equal)))
-    (let ((session (benedict-session-create)))
-      (benedict-session-start-request session 'handle)
-      (should-error
-       (benedict-session-dispatch session '(:provider test :model test :messages []))))))
-
-(ert-deftest benedict-session-test-dispatch-headless ()
-  "Dispatch works without any buffer (headless operation)."
-  (let ((benedict-session--registry (make-hash-table :test 'equal))
-        (captured-callbacks nil)
-        (events nil))
-    (let ((session (benedict-session-create)))
-      (add-hook 'benedict-session-event-hook
-                (lambda (_s type payload) (push (cons type payload) events)))
-      (let ((mock-dispatch
-             (lambda (request &rest callbacks)
-               (setq captured-callbacks callbacks)
-               'mock-handle)))
-        (let ((request-id (benedict-session-dispatch
-                           session
-                           '(:provider mock :model mock :messages [(:role user :content "test")])
-                           :dispatch-fn mock-dispatch)))
-          (should (numberp request-id))
-          (should (benedict-session-busy-p session))
-          (should (cl-find 'request-started events :key #'car))
-          (funcall (plist-get captured-callbacks :on-delta)
-                   '(:kind content-delta :text "Hello "))
-          (funcall (plist-get captured-callbacks :on-delta)
-                   '(:kind content-delta :text "world"))
-          (should (string= "Hello world"
-                           (plist-get (benedict-session-draft session) :content)))
-          (funcall (plist-get captured-callbacks :on-success)
-                   '(:message (:role assistant :content "Hello world")
-                     :provider mock :model mock
-                     :usage (:prompt_tokens 10 :completion_tokens 5 :total_tokens 15)))
-          (should-not (benedict-session-busy-p session))
-          (should (eq 'idle (benedict-session-state session)))
-          (should (= 1 (length (benedict-session-entries session))))
-          (should (cl-find 'request-completed events :key #'car)))))))
-
-(ert-deftest benedict-session-test-dispatch-error-headless ()
-  "Dispatch handles errors correctly without buffer."
-  (let ((benedict-session--registry (make-hash-table :test 'equal))
-        (captured-callbacks nil))
-    (let ((session (benedict-session-create)))
-      (let ((mock-dispatch
-             (lambda (_request &rest callbacks)
-               (setq captured-callbacks callbacks)
-               'mock-handle)))
-        (benedict-session-dispatch
-         session '(:provider mock :model mock :messages [])
-         :dispatch-fn mock-dispatch)
-        (funcall (plist-get captured-callbacks :on-error)
-                 '(:type api :message "Rate limited" :retryable t))
-        (should-not (benedict-session-busy-p session))
-        (should (eq 'error (benedict-session-state session)))
-        (should (equal "Rate limited"
-                       (plist-get (benedict-session-last-error session) :message)))))))
-
-(ert-deftest benedict-session-test-dispatch-non-streaming ()
-  "Dispatch handles non-streaming responses."
-  (let ((benedict-session--registry (make-hash-table :test 'equal))
-        (captured-callbacks nil))
-    (let ((session (benedict-session-create)))
-      (let ((mock-dispatch
-             (lambda (_request &rest callbacks)
-               (setq captured-callbacks callbacks)
-               'mock-handle)))
-        (benedict-session-dispatch
-         session '(:provider mock :model mock :messages [])
-         :dispatch-fn mock-dispatch)
-        (funcall (plist-get captured-callbacks :on-success)
-                 '(:message (:role assistant :content "Direct response")
-                   :provider mock :model mock))
-        (should (= 1 (length (benedict-session-entries session))))
-        (should (string= "Direct response"
-                         (benedict-message-text (car (benedict-session-entries session)))))))))
-
-;;; Tool Execution Tests
-
-(ert-deftest benedict-session-test-invoke-tool-success ()
-  "Tool invocation records result and emits events."
-  (let ((benedict-session--registry (make-hash-table :test 'equal))
-        (benedict-session-tool-invoke-fn (lambda (id _args)
-                                           (format "Result for %s" id)))
-        (events nil))
-    (let ((session (benedict-session-create)))
-      (add-hook 'benedict-session-event-hook
-                (lambda (_s type payload) (push (cons type payload) events)))
-      (let ((result (benedict-session--invoke-tool
-                     session '(:id "call-1" :name read_file :arguments (:path "/tmp")))))
-        (should (eq 'success (plist-get result :status)))
-        (should (string-match "Result for" (plist-get result :output)))
-        (should (cl-find 'tool-started events :key #'car))
-        (should (cl-find 'tool-completed events :key #'car))))))
-
-(ert-deftest benedict-session-test-invoke-tool-failure ()
-  "Tool failure is captured and emitted."
-  (let ((benedict-session--registry (make-hash-table :test 'equal))
-        (benedict-session-tool-invoke-fn (lambda (_id _args)
-                                           (error "Tool failed")))
-        (events nil))
-    (let ((session (benedict-session-create)))
-      (add-hook 'benedict-session-event-hook
-                (lambda (_s type payload) (push (cons type payload) events)))
-      (let ((result (benedict-session--invoke-tool
-                     session '(:id "call-1" :name broken_tool :arguments nil))))
-        (should (eq 'failure (plist-get result :status)))
-        (should (plist-get result :error))
-        (should (cl-find 'tool-completed events :key #'car))))))
-
-(ert-deftest benedict-session-test-invoke-tool-permission-denied ()
-  "Permission denials are captured as structured failures."
-  (let ((benedict-session--registry (make-hash-table :test 'equal))
-        (benedict-session-tool-invoke-fn
-         (lambda (_id _args &rest _options)
-           '(:status denied
-             :error (:message "Denied by policy"
-                     :code permission-denied))))
-        (events nil))
-    (let ((session (benedict-session-create)))
-      (add-hook 'benedict-session-event-hook
-                (lambda (_s type payload) (push (cons type payload) events)))
-      (let* ((result (benedict-session--invoke-tool
-                      session '(:id "call-1" :name project-search :arguments nil)))
-             (error-info (plist-get result :error)))
-        (should (eq 'denied (plist-get result :status)))
-        (should (eq 'permission-denied (plist-get error-info :code)))
-        (should (cl-find 'tool-completed events :key #'car))))))
-
-(ert-deftest benedict-session-test-invoke-tool-emits-permission-allow-decision-event ()
-  "Predicate allow decisions emit permission audit events."
-  (let* ((tool-id 'benedict-session-test-permission-allow)
-         (events nil)
-         (old-default (default-value 'benedict-tool-permission-predicate))
-         (benedict-session--registry (make-hash-table :test 'equal))
-         (benedict-session-event-hook nil)
-         (benedict-session-tool-invoke-fn #'benedict-tool-invoke))
-    (unwind-protect
-        (progn
-          (benedict-tools-register
-           :id tool-id
-           :fn (lambda (&rest _args) "ok")
-           :approval 'confirm)
-          (set-default 'benedict-tool-permission-predicate
-                       (lambda (_tool _args) t))
-          (let ((session (benedict-session-create)))
-            (add-hook 'benedict-session-event-hook
-                      (lambda (_s type payload)
-                        (push (cons type payload) events)))
-            (let* ((result (benedict-session--invoke-tool
-                            session
-                            `(:id "call-allow" :name ,tool-id :arguments (:a 1))))
-                   (audit-event
-                    (cl-find-if
-                     (lambda (event)
-                       (and (eq 'tool-audit (car event))
-                            (eq 'authorization
-                                (plist-get (plist-get (cdr event) :audit) :phase))))
-                     events))
-                   (decision-event (and audit-event
-                                        (plist-get (cdr audit-event) :audit))))
-              (should (eq 'success (plist-get result :status)))
-              (should decision-event)
-              (should (eq 'allow (plist-get decision-event :policy)))
-              (should (eq 'predicate-allow (plist-get decision-event :decision)))
-              (should (eq tool-id (plist-get decision-event :tool-id))))))
-      (set-default 'benedict-tool-permission-predicate old-default)
-      (remhash tool-id benedict--tools))))
-
-(ert-deftest benedict-session-test-invoke-tool-emits-permission-deny-decision-event ()
-  "Predicate deny decisions emit permission audit events."
-  (let* ((tool-id 'benedict-session-test-permission-deny)
-         (events nil)
-         (old-default (default-value 'benedict-tool-permission-predicate))
-         (benedict-session--registry (make-hash-table :test 'equal))
-         (benedict-session-event-hook nil)
-         (benedict-session-tool-invoke-fn #'benedict-tool-invoke))
-    (unwind-protect
-        (progn
-          (benedict-tools-register
-           :id tool-id
-           :fn (lambda (&rest _args) "ok")
-           :approval 'auto)
-          (set-default 'benedict-tool-permission-predicate
-                       (lambda (_tool _args) nil))
-          (let ((session (benedict-session-create)))
-            (add-hook 'benedict-session-event-hook
-                      (lambda (_s type payload)
-                        (push (cons type payload) events)))
-            (let* ((result (benedict-session--invoke-tool
-                            session
-                            `(:id "call-deny" :name ,tool-id :arguments nil)))
-                   (error-info (plist-get result :error))
-                   (audit-event
-                    (cl-find-if
-                     (lambda (event)
-                       (and (eq 'tool-audit (car event))
-                            (eq 'authorization
-                                (plist-get (plist-get (cdr event) :audit) :phase))))
-                     events))
-                   (decision-event (and audit-event
-                                        (plist-get (cdr audit-event) :audit))))
-              (should (eq 'denied (plist-get result :status)))
-              (should (eq 'permission-denied (plist-get error-info :code)))
-              (should decision-event)
-              (should (eq 'deny (plist-get decision-event :policy)))
-              (should (eq 'predicate-deny
-                          (plist-get decision-event :decision))))))
-      (set-default 'benedict-tool-permission-predicate old-default)
-      (remhash tool-id benedict--tools))))
-
-(ert-deftest benedict-session-test-invoke-tool-emits-permission-fallback-on-error-event ()
-  "Predicate errors emit fallback audit events and yield pending approval."
-  (let* ((tool-id 'benedict-session-test-permission-fallback)
-         (events nil)
-         (old-default (default-value 'benedict-tool-permission-predicate))
-         (benedict-session--registry (make-hash-table :test 'equal))
-         (benedict-session-event-hook nil)
-         (benedict-session-tool-invoke-fn #'benedict-tool-invoke))
-    (unwind-protect
-        (progn
-          (benedict-tools-register
-           :id tool-id
-           :fn (lambda (&rest _args) "ok")
-           :approval 'confirm)
-          (set-default 'benedict-tool-permission-predicate
-                       (lambda (_tool _args)
-                         (error "Permission predicate blew up")))
-          (let ((session (benedict-session-create))
-                (frontend (generate-new-buffer " *benedict-session-approval*")))
-            (unwind-protect
-                (progn
-                  (benedict-session--add-frontend session frontend)
-                  (add-hook 'benedict-session-event-hook
-                            (lambda (_s type payload)
-                              (push (cons type payload) events)))
-                  (let* ((result (benedict-session--invoke-tool
-                                  session
-                                  `(:id "call-fallback" :name ,tool-id :arguments nil)))
-                         (audit-event
-                          (cl-find-if
-                           (lambda (event)
-                             (and (eq 'tool-audit (car event))
-                                  (eq 'authorization
-                                      (plist-get (plist-get (cdr event) :audit) :phase))))
-                           events))
-                         (decision-event (and audit-event
-                                              (plist-get (cdr audit-event) :audit))))
-                    (should (eq 'pending (plist-get result :status)))
-                    (should decision-event)
-                    (should (eq 'fallback (plist-get decision-event :policy)))
-                    (should (eq 'fallback-on-error (plist-get decision-event :decision)))
-                    (should (string-match-p "predicate blew up"
-                                            (or (plist-get decision-event :error-message)
-                                                "")))))
-              (kill-buffer frontend))))
-      (set-default 'benedict-tool-permission-predicate old-default)
-      (remhash tool-id benedict--tools))))
-
-(ert-deftest benedict-session-test-process-tool-calls ()
-  "Processing multiple tool calls records all results."
-  (let ((benedict-session--registry (make-hash-table :test 'equal))
-        (benedict-session-tool-invoke-fn (lambda (id _args)
-                                           (format "Output from %s" id))))
-    (let ((session (benedict-session-create)))
-      (benedict-session--process-tool-calls
-       session
-       '((:id "call-1" :name tool_a :arguments nil)
-         (:id "call-2" :name tool_b :arguments nil)))
-      (let ((entries (benedict-session-entries session)))
-        (should (= 2 (length entries)))
-        (should (eq 'tool (benedict-message-role (car entries))))))))
-
-(ert-deftest benedict-session-test-process-tool-calls-records-denial-message ()
-  "Denied tool calls still leave a readable transcript entry."
-  (let ((benedict-session--registry (make-hash-table :test 'equal))
-        (benedict-session-tool-invoke-fn
-         (lambda (_id _args &rest _options)
-           '(:status denied
-             :error (:message "Denied by policy"
-                     :code permission-denied)))))
-    (let ((session (benedict-session-create)))
-      (benedict-session--process-tool-calls
-       session
-       '((:id "call-1" :name project-search :arguments (:query "needle"))))
-      (let* ((entry (car (benedict-session-entries session)))
-             (details (benedict-message-tool-result-details entry)))
-        (should (eq 'tool (benedict-message-role entry)))
-        (should (eq 'denied (benedict-message-status entry)))
-        (should (string-match-p "Tool denied:" (benedict-message-text entry)))
-        (should (eq 'permission-denied (plist-get details :code)))))))
-
-(ert-deftest benedict-session-test-process-tool-calls-stops-for-approval ()
-  "Approval-required tool calls stop the loop and store pending approval state."
-  (let ((benedict-session--registry (make-hash-table :test 'equal))
-        (benedict-session-tool-invoke-fn
-         (lambda (tool-id _args &rest _options)
-           (if (eq tool-id 'tool_a)
-               '(:status pending
-                 :approval (:tool-id tool_a :approval confirm :args (:foo "bar")))
-             '(:status success :output "ok")))))
+(ert-deftest benedict-session-fork-announces-the-head-move ()
+  "`benedict-session-fork' runs the head-change hook; appending does not."
+  (benedict-test-with-clean-registries
     (let ((session (benedict-session-create))
-          (frontend (generate-new-buffer " *benedict-session-approval*")))
-      (unwind-protect
-          (progn
-            (benedict-session--add-frontend session frontend)
-            (benedict-session-add-message
-             session
-             '(:role assistant :content "" :tool-calls ((:id "call-1" :name tool_a :arguments (:foo "bar"))
-                                                       (:id "call-2" :name tool_b :arguments nil))))
-            (let ((result (benedict-session--process-tool-calls
-                           session
-                           '((:id "call-1" :name tool_a :arguments (:foo "bar"))
-                             (:id "call-2" :name tool_b :arguments nil)))))
-              (should (eq 'pending (plist-get result :status)))
-              (should (benedict-session-approval-pending-p session))
-              (should (equal "call-1"
-                             (plist-get (benedict-session-pending-question session) :call-id)))))
-        (kill-buffer frontend)))))
+          (moves nil))
+      (benedict-session-add-hook
+       session 'benedict-head-change-functions
+       (lambda (_session old new) (push (cons old new) moves)))
+      (let ((a (benedict-session-append session (benedict-test-entry 'user "a")))
+            (b (benedict-session-append session (benedict-test-entry 'user "b"))))
+        (should (null moves))
+        (should (equal (benedict-session-head session) (benedict-entry-id b)))
+        (benedict-session-fork session (benedict-entry-id a))
+        (should (equal moves (list (cons (benedict-entry-id b)
+                                         (benedict-entry-id a)))))
+        ;; Forking to where head already is announces nothing.
+        (benedict-session-fork session (benedict-entry-id a))
+        (should (equal (length moves) 1))
+        (let ((c (benedict-session-append session (benedict-test-entry 'user "c"))))
+          (should (equal (mapcar #'benedict-entry-id
+                                 (benedict-session-children
+                                  session (benedict-entry-id a)))
+                         (list (benedict-entry-id b) (benedict-entry-id c))))
+          (should (equal (mapcar #'benedict-entry-text
+                                 (benedict-session-path session))
+                         '("a" "c"))))))))
 
-(ert-deftest benedict-session-test-approve-pending-tool-records-result ()
-  "Approving a pending tool executes it and clears the pending state."
-  (let ((benedict-session--registry (make-hash-table :test 'equal))
-        (benedict-session-tool-invoke-fn
-         (lambda (_tool-id _args &rest options)
-           (if (plist-get options :skip-approval)
-               '(:status success :output "approved output")
-             '(:status pending
-               :approval (:tool-id tool_a :approval confirm :args (:foo "bar")))))))
-    (let ((session (benedict-session-create))
-          (frontend (generate-new-buffer " *benedict-session-approval*")))
-      (unwind-protect
-          (progn
-            (benedict-session--add-frontend session frontend)
-            (benedict-session-add-message
-             session
-             '(:role assistant :content "" :tool-calls ((:id "call-1" :name tool_a :arguments (:foo "bar")))))
-            (benedict-session--process-tool-calls
-             session
-             '((:id "call-1" :name tool_a :arguments (:foo "bar"))))
-            (let ((result (benedict-session-approve-pending-tool session)))
-              (should (eq 'success (plist-get result :status)))
-              (should-not (benedict-session-approval-pending-p session))
-              (should (string-match-p "approved output"
-                                      (benedict-message-text (car (benedict-session-entries session)))))))
-        (kill-buffer frontend)))))
+(ert-deftest benedict-session-fork-and-resume-branches-the-transcript ()
+  "Forking then submitting nil resumes from the fork without a new message."
+  (benedict-test-with-clean-registries
+    (benedict-test-with-manual-defer
+      (let ((session (benedict-test-session '(((:text "first")) ((:text "second"))))))
+        (benedict-session-submit session "hello")
+        (benedict-test-drain)
+        (let ((fork-point (benedict-entry-id (nth 0 (benedict-session-path session)))))
+          (should (equal (mapcar #'benedict-entry-text
+                                 (benedict-session-path session))
+                         '("hello" "first")))
+          (benedict-session-fork session fork-point)
+          (benedict-session-submit session nil)
+          (benedict-test-drain)
+          (should (equal (mapcar #'benedict-entry-text
+                                 (benedict-session-path session))
+                         '("hello" "second")))
+          ;; Both answers are still in the tree, and both are reachable.
+          (should (equal (length (benedict-session-children session fork-point)) 2))
+          (should (equal (length (benedict-session-entries session)) 3)))))))
 
-(ert-deftest benedict-session-test-deny-pending-tool-records-result ()
-  "Denying a pending tool records a denied result and clears the pending state."
-  (let ((benedict-session--registry (make-hash-table :test 'equal))
-        (benedict-session-tool-invoke-fn
-         (lambda (_tool-id _args &rest _options)
-           '(:status pending
-             :approval (:tool-id tool_a :approval confirm :args (:foo "bar"))))))
-    (let ((session (benedict-session-create))
-          (frontend (generate-new-buffer " *benedict-session-approval*")))
-      (unwind-protect
-          (progn
-            (benedict-session--add-frontend session frontend)
-            (benedict-session-add-message
-             session
-             '(:role assistant :content "" :tool-calls ((:id "call-1" :name tool_a :arguments (:foo "bar")))))
-            (benedict-session--process-tool-calls
-             session
-             '((:id "call-1" :name tool_a :arguments (:foo "bar"))))
-            (let ((result (benedict-session-deny-pending-tool session)))
-              (should (eq 'denied (plist-get result :status)))
-              (should-not (benedict-session-approval-pending-p session))
-              (should (string-match-p "Tool denied:"
-                                      (benedict-message-text (car (benedict-session-entries session)))))))
-        (kill-buffer frontend)))))
+;;;; Queues
 
-(ert-deftest benedict-session-test-tool-event-ordering ()
-  "Tool events fire after request completion and preserve message order."
-  (let ((benedict-session--registry (make-hash-table :test 'equal))
-        (benedict-session-tool-invoke-fn (lambda (_id _args) "OK"))
-        (events nil)
-        (captured-callbacks nil))
+(ert-deftest benedict-session-steering-drains-one-message-per-boundary ()
+  "The default drain mode injects a single queued message at a time."
+  (benedict-test-with-clean-registries
+    (benedict-test-with-manual-defer
+      (let ((session (benedict-test-session
+                      '(((:text "1")) ((:text "2")) ((:text "3"))))))
+        (benedict-session-steer session "second")
+        (benedict-session-steer session "third")
+        (benedict-session-submit session "first")
+        (benedict-test-drain)
+        (should (equal (mapcar #'benedict-entry-text (benedict-session-path session))
+                       '("first" "1" "second" "2" "third" "3")))))))
+
+(ert-deftest benedict-session-drain-mode-all-injects-everything ()
+  "`all' puts every queued message in at one boundary, for scripted use."
+  (benedict-test-with-clean-registries
+    (benedict-test-with-manual-defer
+      (let ((benedict-queue-drain-mode 'all)
+            (session (benedict-test-session '(((:text "1")) ((:text "2"))))))
+        (benedict-session-steer session "second")
+        (benedict-session-steer session "third")
+        (benedict-session-submit session "first")
+        (benedict-test-drain)
+        (should (equal (mapcar #'benedict-entry-text (benedict-session-path session))
+                       '("first" "1" "second" "third" "2")))))))
+
+(ert-deftest benedict-session-steering-drains-before-follow-ups ()
+  "Steering is taken first; a follow-up waits for the next boundary."
+  (benedict-test-with-clean-registries
+    (benedict-test-with-manual-defer
+      (let ((session (benedict-test-session
+                      '(((:text "1")) ((:text "2")) ((:text "3"))))))
+        (benedict-session-follow-up session "later")
+        (benedict-session-steer session "sooner")
+        (benedict-session-submit session "first")
+        (benedict-test-drain)
+        (should (equal (mapcar #'benedict-entry-text (benedict-session-path session))
+                       '("first" "1" "sooner" "2" "later" "3")))))))
+
+(ert-deftest benedict-session-queued-message-outranks-a-veto ()
+  "A predicate veto stops the model's own momentum, not a human's message."
+  (benedict-test-with-clean-registries
+    (benedict-test-with-manual-defer
+      (let ((session (benedict-test-session '(((:text "1")) ((:text "2"))))))
+        (benedict-session-add-hook session 'benedict-continue-predicate-functions
+                                   (lambda (_session) 'enough))
+        (benedict-session-follow-up session "one more thing")
+        (benedict-session-submit session "hi")
+        (benedict-test-drain)
+        (should (equal (mapcar #'benedict-entry-text (benedict-session-path session))
+                       '("hi" "1" "one more thing" "2")))
+        (should (eq (benedict-session-state session) 'idle))))))
+
+(ert-deftest benedict-session-submit-during-a-run-steers ()
+  "Submitting while busy queues rather than starting a second run."
+  (benedict-test-with-clean-registries
+    (benedict-test-with-manual-defer
+      (let ((session (benedict-test-session '(((:text "1")) ((:text "2"))))))
+        (benedict-session-submit session "first")
+        (should (benedict-test-run-until
+                 (lambda () (benedict-session-streaming-entry session))))
+        (should (eq (benedict-session-submit session "interrupting") 'steered))
+        (benedict-test-drain)
+        (should (equal (mapcar #'benedict-entry-text (benedict-session-path session))
+                       '("first" "1" "interrupting" "2")))))))
+
+;;;; Properties
+
+(ert-deftest benedict-session-properties-round-trip ()
+  (benedict-test-with-clean-registries
     (let ((session (benedict-session-create)))
-      (add-hook 'benedict-session-event-hook
-                (lambda (_s type payload) (push (cons type payload) events)))
-      (let ((mock-dispatch
-             (lambda (_request &rest callbacks)
-               (setq captured-callbacks callbacks)
-               'mock-handle)))
-        (benedict-session-dispatch
-         session
-         '(:provider mock :model mock :messages [])
-         :dispatch-fn mock-dispatch)
-        (funcall (plist-get captured-callbacks :on-success)
-                 '(:message (:role assistant
-                            :content "Done"
-                            :tool-calls ((:id "call-1"
-                                          :name demo-tool
-                                          :arguments (:foo "bar"))))
-                   :provider mock :model mock))
-        (let* ((ordered (nreverse events))
-               (types (mapcar #'car ordered))
-               (assistant-idx (cl-position 'message-added types))
-               (request-idx (cl-position 'request-completed types))
-               (tool-start-idx (cl-position 'tool-started types))
-               (tool-complete-idx (cl-position 'tool-completed types))
-               (tool-msg-idx (cl-position 'message-added types
-                                          :start (1+ assistant-idx))))
-          (should assistant-idx)
-          (should request-idx)
-          (should tool-start-idx)
-          (should tool-complete-idx)
-          (should tool-msg-idx)
-          (should (< assistant-idx request-idx))
-          (should (< request-idx tool-start-idx))
-          (should (< tool-start-idx tool-complete-idx))
-          (should (< tool-complete-idx tool-msg-idx)))
-        (let ((history (benedict-session-messages-chronological session)))
-          (should (= 2 (length history)))
-          (should (eq 'assistant (benedict-message-role (car history))))
-          (should (eq 'tool (benedict-message-role (cadr history)))))))))
+      (should (eq (benedict-session-get session :missing 'fallback) 'fallback))
+      (benedict-session-put session :trusted t)
+      (should (eq (benedict-session-get session :trusted) t))
+      (benedict-session-put session :trusted nil)
+      (should (null (benedict-session-get session :trusted 'fallback)))
+      ;; A nil session is the case a global hook hits outside any run.
+      (should (eq (benedict-session-get nil :trusted 'fallback) 'fallback)))))
 
-;;; Loop Management Tests
+;;;; Helpers
 
-(ert-deftest benedict-session-test-check-repetition ()
-  "Repetition detection finds duplicate tool calls."
-  (let ((benedict-session--registry (make-hash-table :test 'equal)))
-    (let ((session (benedict-session-create)))
-      (benedict-session-add-message
-       session '(:role assistant :content "" :tool-calls [(:name foo)]))
-      (benedict-session-add-message
-       session '(:role tool :content "result"))
-      (benedict-session-add-message
-       session '(:role assistant :content "" :tool-calls [(:name foo)]))
-      (should (benedict-session--check-repetition session '[(:name foo)])))))
-
-(ert-deftest benedict-session-test-check-turn-limit ()
-  "Turn limit emits checkpoint event."
-  (let ((benedict-session--registry (make-hash-table :test 'equal))
-        (events nil))
-    (let ((session (benedict-session-create)))
-      (add-hook 'benedict-session-event-hook
-                (lambda (_s type payload) (push (cons type payload) events)))
-      (setf (benedict-session-loop-config session) '(:max-turns 5))
-      (setf (benedict-session-loop-turn-count session) 5)
-      (should (benedict-session--check-turn-limit session))
-      (should (cl-find 'checkpoint-requested events :key #'car)))))
-
-(ert-deftest benedict-session-test-continue-after-checkpoint ()
-  "Session can continue after checkpoint.
-When provider/model are not configured, dispatch-needed is emitted and
-session returns to idle state."
-  (let ((benedict-session--registry (make-hash-table :test 'equal))
-        (events nil))
-    (let ((session (benedict-session-create)))
-      (add-hook 'benedict-session-event-hook
-                (lambda (_s type payload) (push (cons type payload) events)))
-      (benedict-session-set-state session 'checkpoint)
-      (benedict-session-continue session)
-      ;; Without provider/model, dispatch fails and session goes idle
-      (should (eq 'idle (benedict-session-state session)))
-      (should (cl-find 'dispatch-needed events :key #'car)))))
-
-(ert-deftest benedict-session-test-stop-loop ()
-  "Session can be stopped."
-  (let ((benedict-session--registry (make-hash-table :test 'equal))
-        (events nil))
-    (let ((session (benedict-session-create)))
-      (add-hook 'benedict-session-event-hook
-                (lambda (_s type payload) (push (cons type payload) events)))
-      (benedict-session-set-state session 'running)
-      (benedict-session-stop session)
-      (should (eq 'idle (benedict-session-state session)))
-      (should (cl-find 'loop-stopped events :key #'car)))))
-
-;;; Request Building Tests
-
-(ert-deftest benedict-session-test-build-request ()
-  "Request building uses session state."
-  (let ((benedict-session--registry (make-hash-table :test 'equal)))
-    (let ((session (benedict-session-create
-                    :provider 'openrouter
-                    :model "claude-3"
-                    :tools '((:name read_file)))))
-      (benedict-session-add-message session '(:role user :content "Hello"))
-      (let ((request (benedict-session--build-request session)))
-        (should (eq 'openrouter (plist-get request :provider)))
-        (should (string= "claude-3" (plist-get request :model)))
-        (should (= 1 (length (plist-get request :messages))))))))
-
-(ert-deftest benedict-session-test-configure ()
-  "Configuration updates session state."
-  (let ((benedict-session--registry (make-hash-table :test 'equal)))
-    (let ((session (benedict-session-create)))
-      (benedict-session-configure session
-                                  :provider 'anthropic
-                                  :model "claude-4"
-                                  :loop-config '(:max-turns 10))
-      (should (eq 'anthropic (benedict-session-provider session)))
-      (should (string= "claude-4" (benedict-session-model session)))
-      (should (= 10 (plist-get (benedict-session-loop-config session) :max-turns))))))
-
-;;; Frontend Tests
-
-(ert-deftest benedict-session-test-add-frontend ()
-  "Can attach buffer as frontend."
-  (let ((benedict-session--registry (make-hash-table :test 'equal)))
-    (let ((session (benedict-session-create)))
-      (with-temp-buffer
-        (benedict-session--add-frontend session (current-buffer))
-        (should (benedict-session-has-frontend-p session))
-        (should (memq (current-buffer) (benedict-session-frontends session)))))))
-
-(ert-deftest benedict-session-test-remove-frontend ()
-  "Can detach buffer from session."
-  (let ((benedict-session--registry (make-hash-table :test 'equal)))
-    (let ((session (benedict-session-create)))
-      (with-temp-buffer
-        (benedict-session--add-frontend session (current-buffer))
-        (benedict-session--remove-frontend session (current-buffer))
-        (should-not (benedict-session-has-frontend-p session))))))
-
-(ert-deftest benedict-session-test-dead-buffer-cleanup ()
-  "Dead buffers are automatically removed from frontends."
-  (let ((benedict-session--registry (make-hash-table :test 'equal)))
-    (let ((session (benedict-session-create))
-          (buf (generate-new-buffer " *test*")))
-      (benedict-session--add-frontend session buf)
-      (should (benedict-session-has-frontend-p session))
-      (kill-buffer buf)
-      (should-not (benedict-session-has-frontend-p session)))))
-
-;;; Event Tests
-
-(ert-deftest benedict-session-test-event-on-state-change ()
-  "State changes emit events."
-  (let ((benedict-session--registry (make-hash-table :test 'equal))
-        (events nil))
-    (let ((session (benedict-session-create)))
-      (add-hook 'benedict-session-event-hook
-                (lambda (s type payload)
-                  (push (list s type payload) events)))
-      (benedict-session-set-state session 'streaming)
-      (should (= 1 (length events)))
-      (should (eq 'state-changed (cadr (car events)))))))
-
-(ert-deftest benedict-session-test-event-on-message-add ()
-  "Adding message emits event."
-  (let ((benedict-session--registry (make-hash-table :test 'equal))
-        (events nil))
-    (let ((session (benedict-session-create)))
-      (add-hook 'benedict-session-event-hook
-                (lambda (s type payload)
-                  (push (list s type payload) events)))
-      (benedict-session-add-message session '(:role user :content "Test"))
-      (should (cl-find 'message-added events :key #'cadr)))))
-
-(ert-deftest benedict-session-test-event-payload-includes-canonical-event ()
-  "Session event payloads include a `benedict-event' object."
-  (let ((benedict-session--registry (make-hash-table :test 'equal))
-        (captured nil))
-    (let ((session (benedict-session-create)))
-      (add-hook 'benedict-session-event-hook
-                (lambda (_s _type payload)
-                  (setq captured (plist-get payload :event))))
-      (benedict-session-add-message session '(:role user :content "Test"))
-      (should (benedict-event-p captured))
-      (should (eq 'message-added (benedict-event-type captured)))
-      (should (equal (benedict-session-id session)
-                     (benedict-event-session-id captured))))))
-
-(ert-deftest benedict-session-test-event-on-draft-update ()
-  "Draft updates emit events."
-  (let ((benedict-session--registry (make-hash-table :test 'equal))
-        (events nil))
-    (let ((session (benedict-session-create)))
-      (add-hook 'benedict-session-event-hook
-                (lambda (s type payload)
-                  (push (list s type payload) events)))
-      (benedict-session-start-draft session)
-      (benedict-session-append-draft session "chunk")
-      (should (cl-find 'draft-started events :key #'cadr))
-      (should (cl-find 'draft-updated events :key #'cadr)))))
-
-;;; Lifecycle Tests
-
-(ert-deftest benedict-session-test-destroy ()
-  "Destroying session cleans up and removes from registry."
-  (let ((benedict-session--registry (make-hash-table :test 'equal)))
-    (let* ((session (benedict-session-create))
-           (id (benedict-session-id session)))
-      (benedict-session-start-request session 'handle)
-      (benedict-session-destroy session)
-      (should-not (benedict-session-get id)))))
-
-;;; Telemetry Accumulation Tests
-
-(ert-deftest benedict-session-test-accumulate-usage ()
-  "Usage accumulates across multiple calls."
-  (let ((benedict-session--registry (make-hash-table :test 'equal)))
-    (let ((session (benedict-session-create)))
-      (benedict-session-accumulate-usage session
-        '(:prompt-tokens 100 :completion-tokens 50 :total-tokens 150) 1.5)
-      (should (= 100 (plist-get (benedict-session-accumulated-usage session) :prompt)))
-      (should (= 50 (plist-get (benedict-session-accumulated-usage session) :completion)))
-      (should (= 150 (plist-get (benedict-session-accumulated-usage session) :total)))
-      (should (= 1.5 (benedict-session-accumulated-seconds session)))
-      ;; Second call accumulates
-      (benedict-session-accumulate-usage session
-        '(:prompt-tokens 200 :completion-tokens 100 :total-tokens 300) 2.0)
-      (should (= 300 (plist-get (benedict-session-accumulated-usage session) :prompt)))
-      (should (= 150 (plist-get (benedict-session-accumulated-usage session) :completion)))
-      (should (= 450 (plist-get (benedict-session-accumulated-usage session) :total)))
-      (should (= 3.5 (benedict-session-accumulated-seconds session))))))
-
-(ert-deftest benedict-session-test-accumulate-usage-with-cost ()
-  "Cost accumulates correctly."
-  (let ((benedict-session--registry (make-hash-table :test 'equal)))
-    (let ((session (benedict-session-create)))
-      (benedict-session-accumulate-usage session
-        '(:prompt-tokens 100 :completion-tokens 50 :total-tokens 150 :cost 0.01) 1.0)
-      (should (= 0.01 (plist-get (benedict-session-accumulated-usage session) :cost)))
-      (benedict-session-accumulate-usage session
-        '(:prompt-tokens 100 :completion-tokens 50 :total-tokens 150 :cost 0.02) 1.0)
-      (should (= 0.03 (plist-get (benedict-session-accumulated-usage session) :cost))))))
-
-(ert-deftest benedict-session-test-accumulate-usage-nil-safe ()
-  "Accumulation handles nil usage and elapsed gracefully."
-  (let ((benedict-session--registry (make-hash-table :test 'equal)))
-    (let ((session (benedict-session-create)))
-      ;; nil usage, non-nil elapsed
-      (benedict-session-accumulate-usage session nil 1.0)
-      (should (= 1.0 (benedict-session-accumulated-seconds session)))
-      (should-not (benedict-session-accumulated-usage session))
-      ;; non-nil usage, nil elapsed
-      (benedict-session-accumulate-usage session
-        '(:prompt-tokens 100 :completion-tokens 50 :total-tokens 150) nil)
-      (should (= 100 (plist-get (benedict-session-accumulated-usage session) :prompt)))
-      (should (= 1.0 (benedict-session-accumulated-seconds session))))))
-
-(ert-deftest benedict-session-test-save-load-roundtrip ()
-  "Saving and loading a session preserves canonical transcript state."
-  (let ((benedict-session--registry (make-hash-table :test 'equal)))
-    (let* ((root (make-temp-file "benedict-store-" t))
-           (session (benedict-session-create
-                     :title "Persistent Session"
-                     :root "/tmp/project"
-                     :provider 'fake
-                     :model "benedict/fake-echo"
-                     :profile 'coder
-                     :meta '(:instruction-sources ("AGENTS.md" ".wigg/specs/01_overview.md")
-                             :branch-parent-id "ses-parent-001")
-                     :system-prompt '((:role system :content "System seed"))))
-           (loaded nil)
-           (request nil))
-      (unwind-protect
-          (progn
-            (setf (benedict-session-loop-config session) '(:max-turns 3 :max-tool-calls 2))
-            (setf (benedict-harness-audit-log (benedict-session-harness session))
-                  '((:phase authorization :tool-id read-file :policy allow :decision allow)))
-            (benedict-session-add-message session '(:role user :content "Persist me"))
-            (benedict-session-add-message
-             session
-             (benedict-message-tool-result "call-1" 'read-file 'success "Tool output"))
-            (benedict-session-save session :root root)
-            (setq loaded (benedict-session-load
-                          (benedict-store-session-path (benedict-session-id session) root)))
-            (setq request (benedict-session--build-request loaded))
-            (should (equal (benedict-session-id session) (benedict-session-id loaded)))
-            (should (equal "Persistent Session" (benedict-session-title loaded)))
-            (should (equal 'fake (plist-get request :provider)))
-            (should (equal "benedict/fake-echo" (plist-get request :model)))
-            (should (= 2 (length (benedict-session-entries-chronological loaded))))
-            (should (equal '(:max-turns 3 :max-tool-calls 2)
-                           (benedict-session-loop-config loaded)))
-            (should (equal "ses-parent-001"
-                           (plist-get (benedict-session-meta loaded) :branch-parent-id)))
-            (should (= 1 (length (benedict-harness-audit-log
-                                  (benedict-session-harness loaded)))))
-            (should (equal "Persist me"
-                           (benedict-message-text
-                            (car (benedict-session-entries-chronological loaded)))))
-            (should (equal 'tool
-                           (benedict-message-role
-                            (cadr (benedict-session-entries-chronological loaded)))))
-            (should (equal "Tool output"
-                           (plist-get (car (last (plist-get request :messages))) :content))))
-        (delete-directory root t)))))
-
-;;; Property Tests
-
-(propcheck-deftest benedict-session-prop-ids-unique ()
-  "Session IDs are always unique."
-  (let ((benedict-session--registry (make-hash-table :test 'equal))
-        (n (propcheck-generate-integer "count" :min 2 :max 50)))
-    (dotimes (_ n) (benedict-session-create))
-    (let ((ids (mapcar #'benedict-session-id (benedict-session-list))))
-      (propcheck-should (= (length ids) (length (delete-dups (copy-sequence ids))))))))
-
-(propcheck-deftest benedict-session-prop-message-ids-sequential ()
-  "Message IDs are always sequential within a session."
-  (let* ((benedict-session--registry (make-hash-table :test 'equal))
-         (session (benedict-session-create))
-         (n (propcheck-generate-integer "count" :min 1 :max 100)))
-    (dotimes (i n)
-      (benedict-session-add-message session `(:role user :content ,(format "msg %d" i))))
-    (let ((ids (mapcar #'benedict-message-id
-                       (benedict-session-messages-chronological session))))
-      (propcheck-should (equal ids
-                               (cl-loop for i from 1 to n
-                                        collect (format "msg-%03d" i)))))))
-
-(propcheck-deftest benedict-session-prop-draft-accumulates ()
-  "Draft content accumulates all appended deltas."
-  (let* ((benedict-session--registry (make-hash-table :test 'equal))
-         (session (benedict-session-create))
-         (chunks (list (propcheck-generate-string "c1")
-                       (propcheck-generate-string "c2")
-                       (propcheck-generate-string "c3"))))
-    (benedict-session-start-draft session)
-    (dolist (chunk chunks)
-      (benedict-session-append-draft session chunk))
-    (propcheck-should (string= (apply #'concat chunks)
-                               (plist-get (benedict-session-draft session) :content)))))
+(defun benedict-session-test--results (session)
+  "Return the content of each tool-result entry on SESSION's path."
+  (mapcar (lambda (entry) (plist-get (car (benedict-entry-content entry)) :content))
+          (seq-filter #'benedict-entry-tool-result-p
+                      (benedict-session-path session))))
 
 (provide 'benedict-session-test)
+
 ;;; benedict-session-test.el ends here

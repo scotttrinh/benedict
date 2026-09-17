@@ -1,22 +1,35 @@
 (source "gnu")
+(source "nongnu")
 (source "melpa")
 
-(package "benedict" "0.1.0pre" "Emacs-first AI assistant")
-(package-file "benedict.el")
+(package "benedict" "0.1.0" "An agent runtime whose medium is Emacs Lisp")
+(package-file "core/benedict.el")
 (website-url "https://github.com/scotttrinh/benedict")
 (keywords "tools" "convenience" "ai")
-(files "benedict.el" "benedict-*.el" "components/*.el" "test/*.el")
 
-(depends-on "emacs" "27.1")
-(depends-on "dash")
-(depends-on "s")
-(depends-on "lgr")
+;; Layer directories per SPEC-001 12.1.  Prefixes stay globally unique, so the
+;; layout is organizational rather than semantic.  Tests are not part of the
+;; package and are deliberately absent here.
+(files "core/*.el" "support/*.el" "api/*.el" "providers/*.el" "ext/*.el" "ui/*.el" "docs/extending-benedict.org")
+
+(load-paths "./core" "./support" "./api" "./providers" "./ext" "./ui")
+
+(depends-on "emacs" "29.1")
+
+;; Frontend dependencies, per SPEC-001 12.2's note that they arrive with ui/.
+;; core/, support/, api/, providers/, and ext/ still require nothing beyond
+;; Emacs 29.1 and curl; the boundaries test is what keeps that true, since
+;; package.el has no vocabulary for a per-directory dependency.
+;;
+;; vui is pinned to a tag rather than tracked on MELPA.  The pre-reset frontend
+;; carried `fboundp' cascades against a moving vui API, and 1.3.0 itself renamed
+;; button activation out from under the old test helpers; a render layer that
+;; shifts underneath the bridge is how that code rotted.  `:vc' hands its tail
+;; to `package-vc-install', whose second argument is the revision.  Bump
+;; deliberately.
 (depends-on "markdown-mode")
-(depends-on "svg-lib")
-(depends-on "vui")
+(depends-on "vui" :vc '(vui :url "https://github.com/d12frosted/vui.el") "v1.3.0")
 
+;; `eask test ert-runner' installs ert-runner itself, so it is not listed.
 (development
- (depends-on "ert-async")
- (depends-on "package-lint")
- (depends-on "propcheck" :fetcher 'github :repo "Wilfred/propcheck" :files '("propcheck.el"))
- (depends-on "flywire" :fetcher 'github :repo "scotttrinh/flywire" :files '("*.el")))
+ (depends-on "package-lint"))
