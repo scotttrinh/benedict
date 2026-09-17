@@ -128,11 +128,13 @@ In the buffer, \\<benedict-chat-mode-map>
 branch siblings, and \\[benedict-chat-revert] redraws from the transcript.
 Sending during a run is not an error -- the kernel queues it as steering."
   (interactive)
-  (pop-to-buffer
-   (benedict-chat-for-session
-    (benedict-session-create :model benedict-dev-model
-                             :tools '(eval-elisp)
-                             :system-prompt benedict-dev-system-prompt))))
+  (let ((session (benedict-session-create
+                  :model benedict-dev-model
+                  :tools '(eval-elisp)
+                  :system-prompt benedict-dev-system-prompt)))
+    (benedict-eval-attach session :project-root (expand-file-name default-directory)
+                         :target-buffer (current-buffer))
+    (pop-to-buffer (benedict-chat-for-session session))))
 
 (defun benedict-demo ()
   "Open a chat buffer on a scripted offline session.  Return the session.
@@ -151,6 +153,8 @@ then a closing turn -- which is every component row the frontend draws."
          (session (benedict-session-create :model model
                                            :tools '(eval-elisp)
                                            :system-prompt "You are helpful.")))
+    (benedict-eval-attach session :project-root (expand-file-name default-directory)
+                         :target-buffer (current-buffer))
     (pop-to-buffer (benedict-chat-for-session session))
     (benedict-session-submit session "What is (+ 1 2)?")
     session))

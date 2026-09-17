@@ -28,7 +28,7 @@
   "Absolute path to the Benedict project root.")
 
 (defconst benedict-test-layers
-  '("core" "support" "api" "providers" "ext" "ui")
+  '("core" "support" "api" "providers" "ext" "ui" "distro")
   "Source layer directories, in dependency order.
 Each may only require from itself and the layers before it; see
 `benedict-boundaries-test.el'.")
@@ -212,12 +212,14 @@ TOOLS, SYSTEM-PROMPT, STORE, ID, and TRANSCRIPT are passed to
   (let* ((script (benedict-provider-fake-script
                   turns :exhausted-action exhausted-action))
          (model (benedict-provider-fake-model script)))
-    (benedict-session-create :id id
-                             :model model
-                             :tools tools
-                             :system-prompt system-prompt
-                             :store store
-                             :transcript transcript)))
+    (let ((session (benedict-session-create :id id
+                                            :model model
+                                            :tools tools
+                                            :system-prompt system-prompt
+                                            :store store
+                                            :transcript transcript)))
+      (benedict-eval-attach session :project-root benedict-test-root)
+      session)))
 
 (defun benedict-test-record-states (session)
   "Record SESSION's state transitions into a list and return the list cell.
@@ -262,6 +264,7 @@ so that concurrent sessions in one test do not pollute each other."
     benedict-continue-predicate-functions
     benedict-context-filter-functions
     benedict-request-filter-functions
+    benedict-request-prepare-functions
     benedict-tool-result-filter-functions
     benedict-tool-dispatch-functions
     benedict-http-result-filter-functions)

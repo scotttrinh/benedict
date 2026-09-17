@@ -1108,6 +1108,174 @@ running image saying so, from inside the call that did it."
           (should (equal (plist-get block :text) "A"))
           (should-not (plist-get block :signature)))))))
 
+(ert-deftest benedict-core-request-preparation-may-resume-asynchronously ()
+  "A preparation continuation delays dispatch and owns the final request."
+  (benedict-test-with-clean-registries
+    (benedict-test-with-manual-defer
+      (let* ((script (benedict-provider-fake-script '(((:text "done")))))
+             (model (benedict-provider-fake-model script))
+             (session (benedict-session-create :model model))
+             (resume nil))
+        (benedict-session-add-hook
+         session 'benedict-request-prepare-functions
+         (lambda (_request next _fail)
+           (setq resume next)
+           nil))
+        (benedict-session-submit session "go")
+        (benedict-test-drain)
+        (should (functionp resume))
+        (should-not (benedict-provider-fake-requests script))
+        (funcall resume
+                 (list :entries (benedict-session-path session)
+                       :system-prompt nil :tools nil :model model
+                       :session session :prepared t))
+        (benedict-test-drain)
+        (let ((request (car (benedict-provider-fake-requests script))))
+          (should (plist-get request :prepared))
+          (should (eq (benedict-session-state session) 'idle)))))))
+
+(ert-deftest benedict-core-request-preparation-abort-cancels-and-rejects-late-resume ()
+  "Abort cancels suspended preparation and its captured NEXT becomes stale."
+  (benedict-test-with-clean-registries
+    (benedict-test-with-manual-defer
+      (let* ((script (benedict-provider-fake-script '(((:text "unused")))))
+             (session (benedict-session-create
+                       :model (benedict-provider-fake-model script)))
+             (resume nil)
+             (reject nil)
+             (cancelled 0))
+        (benedict-session-add-hook
+         session 'benedict-request-prepare-functions
+         (lambda (_request next fail)
+           (setq resume next reject fail)
+           (lambda () (cl-incf cancelled))))
+        (benedict-session-submit session "go")
+        (benedict-test-drain)
+        (benedict-session-abort session)
+        (benedict-test-drain)
+        (should (= cancelled 1))
+        (funcall resume '(:invalid t))
+        (funcall resume '(:invalid-again t))
+        (funcall reject '(error "stale failure"))
+        (benedict-test-drain)
+        (should-not (benedict-provider-fake-requests script))
+        (should (eq (benedict-session-stop-reason session) 'aborted))))))
+
+(ert-deftest benedict-core-request-preparation-sync-next-is-once-only ()
+  "A synchronous preparer may call NEXT once; duplicates are ignored."
+  (benedict-test-with-clean-registries
+    (benedict-test-with-manual-defer
+      (let* ((script (benedict-provider-fake-script '(((:text "done")))))
+             (session (benedict-session-create
+                       :model (benedict-provider-fake-model script))))
+        (benedict-session-add-hook
+         session 'benedict-request-prepare-functions
+         (lambda (request next _fail)
+           (funcall next request)
+           (funcall next request)))
+        (benedict-session-submit session "go")
+        (benedict-test-drain)
+        (should (= (length (benedict-provider-fake-requests script)) 1))))))
+
+(ert-deftest benedict-core-request-preparation-upstream-error-cancels-held-stage ()
+  "An upstream error after synchronous NEXT cancels downstream held work."
+  (benedict-test-with-clean-registries
+    (benedict-test-with-manual-defer
+      (let* ((script (benedict-provider-fake-script '(((:text "unused")))))
+             (session (benedict-session-create
+                       :model (benedict-provider-fake-model script)))
+             (cancelled 0))
+        (benedict-session-add-hook
+         session 'benedict-request-prepare-functions
+         (lambda (request next _fail)
+           (funcall next request)
+           (error "upstream preparation failed"))
+         -10)
+        (benedict-session-add-hook
+         session 'benedict-request-prepare-functions
+         (lambda (_request _next _fail)
+           (lambda () (cl-incf cancelled)))
+         10)
+        (benedict-session-submit session "go")
+        (benedict-test-drain)
+        (should (= cancelled 1))
+        (should-not (benedict-provider-fake-requests script))
+        (should (eq (benedict-session-stop-reason session) 'error))
+        (should (string-match-p
+                 "upstream preparation failed"
+                 (error-message-string (benedict-session-last-error session))))))))
+
+(ert-deftest benedict-core-request-preparation-may-fail-asynchronously-once ()
+  "A retained FAIL owns terminal failure; later NEXT and FAIL are stale."
+  (benedict-test-with-clean-registries
+    (benedict-test-with-manual-defer
+      (let* ((script (benedict-provider-fake-script '(((:text "unused")))))
+             (session (benedict-session-create
+                       :model (benedict-provider-fake-model script)))
+             (next nil)
+             (fail nil))
+        (benedict-session-add-hook
+         session 'benedict-request-prepare-functions
+         (lambda (_request resume reject)
+           (setq next resume fail reject)
+           nil))
+        (benedict-session-submit session "go")
+        (benedict-test-drain)
+        (funcall fail '(error "delayed preparation failure"))
+        (funcall next '(:late t))
+        (funcall fail '(error "duplicate"))
+        (benedict-test-drain)
+        (should-not (benedict-provider-fake-requests script))
+        (should (eq (benedict-session-stop-reason session) 'error))
+        (should (string-match-p
+                 "delayed preparation failure"
+                 (error-message-string (benedict-session-last-error session))))))))
+
+(ert-deftest benedict-core-request-preparation-reentrant-abort-cancels-returned-work ()
+  "A cancel thunk returned after reentrant abort is still invoked exactly once."
+  (benedict-test-with-clean-registries
+    (benedict-test-with-manual-defer
+      (let* ((script (benedict-provider-fake-script '(((:text "unused")))))
+             (session (benedict-session-create
+                       :model (benedict-provider-fake-model script)))
+             (cancelled 0))
+        (benedict-session-add-hook
+         session 'benedict-request-prepare-functions
+         (lambda (_request _next _fail)
+           (benedict-session-abort benedict-current-session)
+           (lambda () (cl-incf cancelled))))
+        (benedict-session-submit session "go")
+        (benedict-test-drain)
+        (should (= cancelled 1))
+        (should-not (benedict-provider-fake-requests script))
+        (should (eq (benedict-session-stop-reason session) 'aborted))))))
+
+(ert-deftest benedict-core-request-preparation-upstream-abort-cancels-held-stage ()
+  "Abort after synchronous NEXT cancels downstream work before owner install."
+  (benedict-test-with-clean-registries
+    (benedict-test-with-manual-defer
+      (let* ((script (benedict-provider-fake-script '(((:text "unused")))))
+             (session (benedict-session-create
+                       :model (benedict-provider-fake-model script)))
+             (cancelled 0))
+        (benedict-session-add-hook
+         session 'benedict-request-prepare-functions
+         (lambda (request next _fail)
+           (funcall next request)
+           (benedict-session-abort benedict-current-session)
+           nil)
+         -10)
+        (benedict-session-add-hook
+         session 'benedict-request-prepare-functions
+         (lambda (_request _next _fail)
+           (lambda () (cl-incf cancelled)))
+         10)
+        (benedict-session-submit session "go")
+        (benedict-test-drain)
+        (should (= cancelled 1))
+        (should-not (benedict-provider-fake-requests script))
+        (should (eq (benedict-session-stop-reason session) 'aborted))))))
+
 (provide 'benedict-core-test)
 
 ;;; benedict-core-test.el ends here

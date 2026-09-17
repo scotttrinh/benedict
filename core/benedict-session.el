@@ -65,8 +65,7 @@
 ;;;; The current session
 
 (defvar benedict-current-session nil
-  "The session bound during a hook invocation, resumed dispatch-chain step,
-or tool-handler entry, or nil outside those dynamic boundaries.
+  "Session bound at Benedict extension boundaries, or nil outside them.
 
 Bound dynamically around every hook, filter, dispatch-chain step, and handler
 entry.  Observation hooks receive the session directly.  Transform and
@@ -198,6 +197,23 @@ The transcript itself is not modified; this shapes one request.")
 Each returns a replacement request plist and is passed the previous
 function's output.  REQUEST is the canonical plist described by
 `benedict-provider-stream', not a wire payload.")
+
+(defvar benedict-request-prepare-functions nil
+  "Asynchronous filter chain preparing a canonical request before dispatch.
+
+Each function receives (REQUEST NEXT FAIL).  It may call NEXT immediately with
+a replacement request, retain NEXT and call it later, or call FAIL with Elisp
+condition data.  It may return a cancellation thunk for work it started.  NEXT
+and FAIL share one once-only completion: the first call wins.  A cancellation
+thunk is called when the run is aborted or otherwise invalidated while that
+function is holding the chain.  Return nil when there is no work to cancel;
+returning a retained NEXT or FAIL continuation is invalid because any returned
+function is treated as cancellation.
+
+Use this hook for work that must finish before a provider request, such as
+model-assisted compaction.  Ordinary synchronous context and request shaping
+belongs in `benedict-context-filter-functions' and
+`benedict-request-filter-functions'.  The kernel supplies no compaction policy.")
 
 (defvar benedict-tool-result-filter-functions nil
   "Functions that transform a tool result, as (RESULT INVOCATION).
@@ -586,7 +602,7 @@ list that actually runs."
 The default global value of HOOK comes first, then SESSION's own additions.
 SESSION may be nil, which returns the default global list alone.  The
 global value is read with `default-value', never from the active buffer;
-the `t' marker that `add-hook' uses for a buffer-local list is discarded.
+the t marker that `add-hook' uses for a buffer-local list is discarded.
 Session scope is the session hook table, never the current buffer.  There is
 no cross-scope depth sort.  Session-local hooks compose scoped policy; they do
 not establish an isolation boundary against image-wide hooks, advice, variables,
@@ -673,6 +689,92 @@ while VALID-P returns non-nil (or, when omitted, for the lifetime of the chain).
                                           (setq consumed t)
                                           (funcall step (cdr remaining) next)))))))))))
       (funcall step functions invocation))))
+
+(defun benedict-hook-prepare (session request done fail &optional valid-p)
+  "Prepare REQUEST asynchronously for SESSION, then call DONE with the result.
+
+Run `benedict-request-prepare-functions' as a continuation chain.  FAIL is
+called with condition data when a function signals, including after an
+asynchronous resume.  VALID-P, when non-nil, is checked before each step.
+
+Return an idempotent cancellation thunk.  It cancels the currently suspended
+function when that function returned a thunk.  Every NEXT continuation and the
+DONE and FAIL paths are consumed at most once; late or duplicate callbacks are
+no-ops."
+  (let ((functions (benedict-session-hook-functions
+                    session 'benedict-request-prepare-functions))
+        (cancelled nil)
+        (finished nil)
+        (current-stage nil)
+        (current-cancel nil))
+    (letrec
+        ((valid (lambda ()
+                  (and (not cancelled)
+                       (not finished)
+                       (or (null valid-p) (funcall valid-p)))))
+         (reject (lambda (condition)
+                   (when (funcall valid)
+                     (let ((cancel current-cancel))
+                       (setq finished t current-cancel nil current-stage nil)
+                       (when cancel
+                         (condition-case nil
+                             (funcall cancel)
+                           (error nil))))
+                     (funcall fail condition))))
+         (step
+          (lambda (remaining current)
+            (when (funcall valid)
+              (if (null remaining)
+                  (condition-case condition
+                      (progn
+                        (setq finished t current-cancel nil current-stage nil)
+                        (funcall done current))
+                    (error
+                     (setq finished nil)
+                     (funcall reject condition)))
+                (let ((stage (cons nil nil))
+                      (consumed nil)
+                      (returned nil))
+                  (setq current-stage stage current-cancel nil)
+                  (condition-case condition
+                      (setq returned
+                            (let ((benedict-current-session session))
+                              (funcall
+                               (car remaining) current
+                               (lambda (next)
+                                 (when (and (not consumed) (funcall valid))
+                                   (setq consumed t)
+                                   (when (eq current-stage stage)
+                                     (setq current-stage nil current-cancel nil))
+                                   (funcall step (cdr remaining) next)))
+                               (lambda (condition)
+                                 (when (and (not consumed) (funcall valid))
+                                   (setq consumed t)
+                                   (funcall reject condition))))))
+                    (error (funcall reject condition)))
+                  ;; A synchronous NEXT may already have advanced to another
+                  ;; stage.  Do not overwrite that stage's cancellation thunk.
+                  (when (and (eq current-stage stage)
+                             (not consumed)
+                             (functionp returned)
+                             (funcall valid))
+                    (setq current-cancel returned))
+                  ;; The hook may abort the run reentrantly before returning
+                  ;; its cancellation thunk.  In that case the outer owner
+                  ;; could not have installed our aggregate cancel thunk yet.
+                  (when (and (functionp returned)
+                             (not consumed)
+                             (not (funcall valid)))
+                    (condition-case nil
+                        (funcall returned)
+                      (error nil)))))))))
+      (funcall step functions request)
+      (lambda ()
+        (unless cancelled
+          (setq cancelled t finished t current-stage nil)
+          (when-let ((cancel current-cancel))
+            (setq current-cancel nil)
+            (funcall cancel)))))))
 
 (provide 'benedict-session)
 

@@ -90,7 +90,8 @@
             # shell so the second never ran at all.
             status=0
             ${eask}/bin/eask lint checkdoc "$@" || status=1
-            ${eask}/bin/eask lint package  "$@" || status=1
+            ${eask}/bin/eask exec ${emacs}/bin/emacs --batch -L packages \
+              -l scripts/lint-packages.el -f benedict-package-lint-batch || status=1
             exit $status
           '');
         };

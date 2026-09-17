@@ -153,7 +153,19 @@ Assume the extension file will be loaded more than once.
 
 =defun= replaces a function definition.  Benedict's keyed registrations
 replace the prior value.  =add-hook= with the same named function does not add a
-duplicate.  These properties are the reload mechanism.
+duplicate.  These properties cover resource-free extensions.  An extension
+that owns hooks it may remove, timers, processes, watches, or captured
+continuations must expose idempotent =install=/=uninstall= functions.  A
+session-owned resource should likewise expose =attach=/=detach=.  Reloading a
+file does not remove a hook deleted from the new source and does not stop a
+resource created by the old definition, so uninstall before reloading such an
+extension.
+
+Capturing a tool object retains that object despite later registry replacement;
+it does not freeze a handler's named function definition.  A handler stored as
+a symbol resolves through that symbol when called, so redefining the function
+can change an invocation from an already-open request.  Use a closure handler
+when an immutable implementation snapshot is required.
 
 * Verify the result
 
@@ -176,12 +188,31 @@ This guide is a map, not a second API reference.  Use =describe-function= and
 examples are in =test/benedict-extension-contract-test.el= in the repository;
 tests are not included in the installed package.
 
+* Package artifacts
+
+The root Eask is the aggregate development environment.  Build the actual
+independent package artifacts with:
+
+#+begin_src sh
+emacs -Q --batch -L packages -l scripts/build-packages.el \
+  --eval '(benedict-package-build-all "dist")'
+#+end_src
+
+This writes ordinary package.el tarballs in dependency order.  Install them
+with =M-x package-install-file= in that order when working entirely offline, or
+publish them to a package archive and let package.el resolve the declared
+=Package-Requires=.  The =benedict= tarball contains only the kernel and this
+guide; transport, auth, wire adapters, services, extensions, and frontends are
+separate artifacts.  In an installed image, =(benedict-extension-guide)=
+returns this guide's path.
+
 | Capability | Public interface | Lifetime and ownership |
 |------------+------------------+-----------------------|
 | Session-local tool | =benedict-session-create :tools= with a tool object or selection function | Resolved for each request; offered tool objects are borrowed read-only. |
 | Session-local policy | =benedict-session-add-hook= / =benedict-session-remove-hook= | Global hooks run first, then the session-local list; scope is not isolation. |
 | Extension state | =benedict-session-get= / =benedict-session-put= | Owned by the extension and lives with the session. |
 | Request transformation | =benedict-request-filter-functions= | Return a replacement canonical request plist, never wire JSON. |
+| Asynchronous request preparation | =benedict-request-prepare-functions= | Call =next= with a canonical request or =fail= with condition data; return a cancel thunk for held work. |
 | Tool interception | =benedict-tool-dispatch-functions= | Call =next= at most once, or retain it for a later callback. |
 | Context shaping | =benedict-context-filter-functions= | Return canonical entries; compaction is a non-destructive fork. |
 | Persistence | Store observation hooks plus =benedict-session-note= | The store is opaque; notes carry declarative state for reconstruction. |
@@ -234,6 +265,24 @@ timers.  Capture the session explicitly when installing asynchronous work:
                  (lambda ()
                    (benedict-session-put session :watch-fired t)))))
 #+end_src
+
+*Final-operation approval.* Routing and approval that depend on each other
+belong in one cooperating dispatch function.  First compute the final
+invocation, show that exact snapshot to the authorizer, and pass that same
+snapshot to =next= only after approval.  This is composition among trusted
+extensions, not an isolation boundary: a later filter, advice, or arbitrary
+Elisp can still replace the tool or handler.
+
+The =eval-elisp= tool carries that same honesty.  In-process evaluation has the
+authority of the Emacs image, including access to hooks and approval state.  A
+subordinate Emacs separates process state and failure, but restricts neither
+filesystem nor network access unless an external sandbox does so.
+
+*Eval execution context.* Attach eval deliberately with
+=(benedict-eval-attach session :project-root ROOT :target-buffer BUFFER)=.
+The root and optional buffer are captured at attachment time.  Nil BUFFER uses
+an isolated temporary buffer; a captured buffer that is later killed makes the
+tool fail instead of silently targeting whichever buffer is current.
 
 *Declarative-state reconstruction.* Store extension configuration as a
 context note, then rebuild hooks and properties from that note after loading
@@ -307,6 +356,6 @@ immediate abort response is not needed:
 promises of the current base: native OAuth in the shared resolver (the
 descriptor and headless interfaces exist, but resolution reports unsupported
 today); real skill discovery; automatic session assembly; UI model selection;
-first-party coding tools; the packaging split; and transparent asynchronous
-same-run compaction.  Current extensions compose the published interfaces
-without assuming any of those capabilities.
+first-party coding tools; and a first-party compaction policy.  The package
+split and generic asynchronous preparation seam are present; the kernel does
+not choose when or how to summarize.

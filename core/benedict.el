@@ -4,7 +4,7 @@
 
 ;; Author: Scott Trinh <scott@scotttrinh.com>
 ;; Version: 0.1.0
-;; Package-Requires: ((emacs "29.1") (markdown-mode "2.5") (vui "1.3.0"))
+;; Package-Requires: ((emacs "29.1"))
 ;; Keywords: tools, convenience, ai
 ;; URL: https://github.com/scotttrinh/benedict
 
@@ -17,14 +17,6 @@
 ;; execution environment; for most, that hatch is `bash'.  Benedict's is `eval'
 ;; and the environment is the running Emacs image, so self-extension is a form
 ;; evaluation rather than a file write plus a reload.
-;;
-;; The two frontend dependencies above are a packaging compromise, not a claim
-;; about this file: nothing in core/, support/, api/, providers/, or ext/ touches
-;; either one, and the boundaries test is what keeps that true.  SPEC-001 12.2
-;; wants `benedict' to require only Emacs and curl, with ui/ living in a separate
-;; `benedict-distro' -- but there is one package today and one manifest with it,
-;; so a kernel-only install currently pulls a render library it never loads.
-;; That cost is the concrete argument for making the 12.2 split real.
 ;;
 ;; This file is deliberately a LEAF: it requires nothing else from the project.
 ;; Every other Benedict module requires it for the customization group and the
@@ -48,6 +40,10 @@
 
 (define-error 'benedict-error
   "Benedict encountered an error")
+
+(defun benedict-extension-guide ()
+  "Return the installed extension guide path, or nil when unavailable."
+  (locate-file "extending-benedict.org" load-path))
 
 (autoload 'benedict-chat-revert "benedict-chat" nil t)
 (autoload 'benedict-chat-send "benedict-chat" nil t)

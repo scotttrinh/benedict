@@ -69,6 +69,7 @@ call, a matching result, and a second turn that references it."
                     :model model-spec
                     :tools '(eval-elisp)
                     :system-prompt "You are a helpful assistant.")))
+      (benedict-eval-attach session :project-root default-directory)
       (benedict-session-submit session benedict-live-smoke--prompt)
       (benedict-live-smoke--drain session started)
       (benedict-live-smoke--report session))))

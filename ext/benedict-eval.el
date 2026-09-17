@@ -3,6 +3,8 @@
 ;; Copyright (C) 2026 Scott Trinh
 
 ;; Author: Scott Trinh <scott@scotttrinh.com>
+;; Version: 0.1.0
+;; Package-Requires: ((emacs "29.1") (benedict "0.1.0"))
 ;; Keywords: tools, convenience, ai
 ;; URL: https://github.com/scotttrinh/benedict
 
@@ -46,6 +48,7 @@
 (require 'subr-x)
 (require 'benedict)
 (require 'benedict-tool)
+(require 'benedict-session)
 
 ;;;; Errors
 
@@ -64,6 +67,50 @@ reports it: the model cannot tell that it is missing something and will
 reason from the fragment.  nil returns everything."
   :type '(choice (const :tag "No limit" nil) integer)
   :group 'benedict)
+
+;;;; Execution context
+
+(cl-defstruct (benedict-eval-context
+               (:constructor benedict-eval-context--create)
+               (:copier nil))
+  "Captured execution context for `benedict-eval-run'."
+  (project-root nil
+                :documentation "Absolute directory used as `default-directory'.")
+  (target-buffer nil
+                 :documentation "Captured live buffer to evaluate in, or nil for an isolated temporary buffer."))
+
+(cl-defun benedict-eval-context-create (&key project-root target-buffer)
+  "Capture and return an eval context for PROJECT-ROOT and TARGET-BUFFER.
+
+PROJECT-ROOT is made absolute now, rather than when a later tool call runs.
+TARGET-BUFFER may be a live buffer or nil.  Nil deliberately selects a fresh
+temporary buffer for each evaluation.  Signal `benedict-eval-error' for an
+invalid root or a buffer that is already dead."
+  (unless (and (stringp project-root) (file-name-absolute-p project-root))
+    (signal 'benedict-eval-error
+            (list "Eval project root must be an absolute directory")))
+  (when (and target-buffer (not (buffer-live-p target-buffer)))
+    (signal 'benedict-eval-error (list "Eval target buffer is not live")))
+  (benedict-eval-context--create
+   :project-root (file-name-as-directory (expand-file-name project-root))
+   :target-buffer target-buffer))
+
+(cl-defun benedict-eval-attach (session &key project-root target-buffer)
+  "Attach a captured eval context to SESSION and return it.
+
+PROJECT-ROOT and TARGET-BUFFER have the meanings documented by
+`benedict-eval-context-create'.  Later tool calls never consult the ambient
+current buffer or `default-directory'."
+  (let ((context (benedict-eval-context-create
+                  :project-root project-root :target-buffer target-buffer)))
+    (benedict-session-put session :benedict-eval-context context)
+    context))
+
+(defun benedict-eval-detach (session)
+  "Remove SESSION's eval context and return the previous context."
+  (let ((context (benedict-session-get session :benedict-eval-context)))
+    (benedict-session-put session :benedict-eval-context nil)
+    context))
 
 ;;;; Reading
 
@@ -149,8 +196,10 @@ of the data; truncation here is explicit and says how much it dropped."
 
 ;;;; Evaluating
 
-(defun benedict-eval--run (source)
-  "Evaluate SOURCE, a string holding one Emacs Lisp form.
+(defun benedict-eval-run (source context)
+  "Evaluate SOURCE in captured CONTEXT and return a tool result.
+
+SOURCE is a string holding one Emacs Lisp form.
 Return a `benedict-tool-result-value' carrying the printed value, plus
 anything the form wrote to standard output or logged with `message'.
 
@@ -158,8 +207,12 @@ Never signals: a form that fails becomes a failed result explaining why,
 alongside whatever output it managed to produce first.  A tool that broke
 has to tell the model what happened so it can try something else.
 
-Evaluates with lexical binding, in whatever buffer is current."
-  (let* ((log (messages-buffer))
+Evaluates with lexical binding.  CONTEXT supplies the project root and an
+optional captured target buffer.  If that buffer has since been killed, return
+a failed result without evaluating SOURCE."
+  (if (not (benedict-eval-context-p context))
+      (benedict-tool-result-error "Error: Invalid eval execution context")
+    (let* ((log (messages-buffer))
          ;; A marker rather than a position: `message-log-max' truncates the
          ;; log from the top, which would leave a recorded integer pointing
          ;; into the middle of some older message.
@@ -168,15 +221,23 @@ Evaluates with lexical binding, in whatever buffer is current."
          (value nil)
          (failure nil))
     (unwind-protect
-        (progn
-          (condition-case error
-              (let* ((form (benedict-eval--read source))
-                     (standard-output output))
-                (setq value (benedict-eval--print (eval form t))))
-            ;; This file's own errors already carry prose addressed to the
-            ;; model; anything else is reported as Emacs describes it.
-            (benedict-eval-error (setq failure (cadr error)))
-            (error (setq failure (error-message-string error))))
+        (let ((target (benedict-eval-context-target-buffer context))
+              (root (benedict-eval-context-project-root context)))
+          (if (and target (not (buffer-live-p target)))
+              (setq failure "Captured eval target buffer was killed")
+            (let ((work-buffer (or target
+                                   (generate-new-buffer " *benedict-eval-context*"))))
+              (unwind-protect
+                  (with-current-buffer work-buffer
+                    (let ((default-directory root))
+                      (condition-case error
+                          (let* ((form (benedict-eval--read source))
+                                 (standard-output output))
+                            (setq value (benedict-eval--print (eval form t))))
+                        (benedict-eval-error (setq failure (cadr error)))
+                        (error (setq failure (error-message-string error))))))
+                (when (and (null target) (buffer-live-p work-buffer))
+                  (kill-buffer work-buffer)))))
           (let ((written (with-current-buffer output (buffer-string)))
                 (logged (with-current-buffer log
                           (buffer-substring-no-properties mark (point-max)))))
@@ -187,13 +248,31 @@ Evaluates with lexical binding, in whatever buffer is current."
                :content (benedict-eval--content
                          (benedict-eval--truncate value) written logged)))))
       (set-marker mark nil)
-      (kill-buffer output))))
+      (kill-buffer output)))))
+
+(defun benedict-eval--run (source)
+  "Evaluate SOURCE using an explicit standalone context captured now.
+
+Compatibility helper for callers outside a session.  It captures the caller's
+current buffer and `default-directory' before evaluation; session tool calls
+use `benedict-eval-attach' instead."
+  (benedict-eval-run
+   source
+   (benedict-eval-context-create
+    :project-root default-directory :target-buffer (current-buffer))))
 
 ;;;; The tool
 
 (defun benedict-eval--handler (invocation)
   "Evaluate INVOCATION's `form' argument and return the result."
-  (benedict-eval--run (benedict-tool-arg invocation :form)))
+  (let ((source (benedict-tool-arg invocation :form)))
+    (if (null benedict-current-session)
+        (benedict-eval--run source)
+      (if-let ((context (benedict-session-get
+                         benedict-current-session :benedict-eval-context)))
+          (benedict-eval-run source context)
+        (benedict-tool-result-error
+         "No eval execution context is attached to this session; call `benedict-eval-attach' with an explicit project root and optional target buffer")))))
 
 (benedict-deftool eval-elisp
   :label "Evaluate Elisp"

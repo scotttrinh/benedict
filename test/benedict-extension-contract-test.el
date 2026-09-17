@@ -114,6 +114,52 @@
                 (should (equal (plist-get block :content) (nth 1 case))))
               (should (equal (car executions) (nth 2 case))))))))))
 
+(defun benedict-contract-client-final-operation-gate (invocation next)
+  "Route INVOCATION, then retain approval for that exact operation."
+  (let* ((route (benedict-session-get benedict-current-session :contract-route))
+         (final (if route (funcall route invocation) invocation)))
+    (benedict-session-put benedict-current-session :contract-approved-operation final)
+    (benedict-session-put
+     benedict-current-session :contract-final-approval
+     (lambda (allow)
+       (funcall next
+                (if allow final
+                  (benedict-tool-blocked final "Denied final operation")))))))
+
+(ert-deftest benedict-extension-contract-approval-covers-final-routed-operation ()
+  "A cooperating policy composes routing before approval of one snapshot."
+  (benedict-test-with-clean-registries
+    (benedict-test-with-manual-defer
+      (let* ((executed nil)
+             (source (benedict-tool-create
+                      :id 'contract-source :parameters nil :sync t
+                      :handler (lambda (_invocation)
+                                 (setq executed 'source)
+                                 (benedict-tool-result :content "source"))))
+             (routed (benedict-tool-create
+                      :id 'contract-routed :parameters nil :sync t
+                      :handler (lambda (_invocation)
+                                 (setq executed 'routed)
+                                 (benedict-tool-result :content "routed"))))
+             (session (benedict-test-session
+                       '(((:tool-call contract-source nil)) ((:text "done")))
+                       :tools (list source))))
+        (benedict-session-put
+         session :contract-route
+         (lambda (invocation)
+           (benedict-invocation-with invocation :tool routed)))
+        (benedict-session-add-hook
+         session 'benedict-tool-dispatch-functions
+         #'benedict-contract-client-final-operation-gate)
+        (benedict-session-submit session "go")
+        (benedict-test-drain)
+        (let ((approved (benedict-session-get
+                         session :contract-approved-operation)))
+          (should (eq (benedict-invocation-tool approved) routed)))
+        (funcall (benedict-session-get session :contract-final-approval) t)
+        (benedict-test-drain)
+        (should (eq executed 'routed))))))
+
 (defun benedict-contract-client-on-state (session _old new)
   "Cancel SESSION's test-owned work when NEW is stopping."
   (when (eq new 'stopping)

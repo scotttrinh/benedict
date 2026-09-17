@@ -462,6 +462,7 @@ for the moves nothing else reports.
 |---|---|
 | `benedict-context-filter-functions` | `(entries session) -> entries` |
 | `benedict-request-filter-functions` | `(request model session) -> request` |
+| `benedict-request-prepare-functions` | `(request next fail) -> cancel-thunk-or-nil` |
 | `benedict-tool-result-filter-functions` | `(result invocation) -> result` |
 
 **Async intercept** — continuation-passing chain:
@@ -471,6 +472,12 @@ for the moves nothing else reports.
 | `benedict-tool-dispatch-functions` | `(invocation next)` |
 
 The dispatch chain is the load-bearing one. See §6.4.
+
+Request preparation runs after synchronous context and request filters and
+before provider dispatch.  NEXT and FAIL share once-only ownership, are bound
+to the active run and generation, and become inert after abort.  A preparer may
+return a cancellation thunk for held work.  The kernel provides this lifecycle
+seam but no summarization or compaction policy.
 
 Hook failures are terminal when caught by the kernel.  A tool handler failure
 before DONE yields one failed tool result; a downstream result-filter failure
@@ -634,6 +641,10 @@ every extension that walks the transcript. Supporting it from the start adds an
 | A/B comparison | Two branches from one fork point |
 | Non-destructive compaction | §5.6 |
 
+"Undo" here is conversation-only: it changes which transcript branch is sent
+to the model.  It does not reverse buffer edits, files, definitions, subprocess
+effects, network calls, or any other tool side effect.
+
 ### 5.4 Log format
 
 A log contains one `read`-able s-expression per line. It has three record types,
@@ -737,10 +748,11 @@ Compaction uses both hooks for different purposes:
 
 | Hook | Role | Fires when |
 |---|---|---|
-| `benedict-context-filter-functions` | Primary. Compact in place, run continues. | Estimated context exceeds a soft threshold (default 70% of the model's window) |
+| `benedict-request-prepare-functions` | Generate or await a summary, fork, and resume with the replacement request. | Estimated context exceeds a soft threshold (default 70% of the model's window) |
+| `benedict-context-filter-functions` | Synchronously reconstruct an existing compacted context from durable metadata. | A later request or resumed session sees a compaction marker. |
 | `benedict-continue-predicate-functions` | Safety net. Stop the run cleanly. | A hard limit is hit, or compaction itself cannot free enough |
 
-The context filter lets the run continue after adding a visible compaction
+The preparation chain lets the run continue after adding a visible compaction
 marker. The continuation predicate stops the run with a reason when compaction
 cannot make the next request fit. Thresholds are configurable; the two distinct
 paths are required.
@@ -933,9 +945,11 @@ Example — an approval policy as an extension:
 
 **Durability caveat.** A continuation is in-memory. If Emacs exits while a run is
 suspended on an approval, the continuation is lost. The transcript is intact
-(P3), so recovery is: reopen the session, observe the un-answered tool call,
-resubmit. This is the same behavior as every other harness and is not worth
-engineering around.
+(P3), but an unanswered tool call has status unknown: it may not have started,
+or it may have completed with side effects before its result was recorded.
+`benedict-recovery-unknown-tool-calls` reports those calls on the active path.
+Recovery never retries them implicitly; the relevant extension or user must
+reconcile the outside world before choosing whether to resubmit.
 
 ### 6.5 Built-in tool set
 
@@ -948,6 +962,14 @@ The distro ships five tools. Deliberately small.
 | `write-file` | Whole-file write. |
 | `edit-file` | Anchored string replacement, returns a structured diff. |
 | `describe` | `describe-function` / `describe-variable` / `apropos` as data. |
+
+`eval-elisp` is extension-owned and requires an explicit execution context for
+session use. `benedict-eval-attach` captures an absolute project root and an
+optional target buffer. Nil target means a fresh temporary buffer; a target
+killed before execution produces a failed tool result rather than falling back
+to the ambient current buffer. The project root is dynamically bound as
+`default-directory` for evaluation and does not mutate the target buffer's
+buffer-local value.
 
 `eval-elisp` takes **one** form. Several are the caller's `progn`, which also
 makes it explicit which value comes back, and trailing input is refused before
@@ -1726,8 +1748,8 @@ elisp using ordinary Emacs mechanisms.
 
 ### 9.2 Reload by idempotence
 
-Reloading is `load-file`. There is no unregister protocol, because every
-registration primitive is idempotent:
+Reloading is `load-file`. Resource-free definitions and registrations are
+idempotent:
 
 - `defun` — redefinition replaces.
 - `add-hook` with a named function symbol — no-op if already present.
@@ -1735,8 +1757,17 @@ registration primitive is idempotent:
 - `benedict-defprovider` / `benedict-defapi` — keyed by id, replaces.
 
 The rule for extension authors: **never `add-hook` a lambda.** Always a named
-function. That one convention is the entire reload story, and it is worth stating
-in `docs/extending-benedict.org` in bold.
+function.  Extensions owning timers, processes, watches, removable hooks, or
+other resources expose idempotent `install`/`uninstall`; session resources use
+`attach`/`detach`. Reloading does not remove registrations deleted from the new
+file and cannot clean up resources captured by an old closure. Existing store,
+retry, and frontend functions are the reference convention; no lifecycle
+manager is added.
+
+Request construction captures the tool object, not the implementation behind a
+handler symbol. If that symbol is redefined before execution, the invocation
+calls the new definition. An extension needing an immutable implementation
+snapshot uses a closure handler deliberately.
 
 ### 9.3 Capabilities
 
@@ -2139,10 +2170,15 @@ Ship as separate packages once the shape settles:
 
 | Package | Contains | Depends on |
 |---|---|---|
-| `benedict` | `core/`, `support/` | Emacs 29.1, `curl` (D18) |
-| `benedict-distro` | `ext/`, `ui/`, `skills/` | `benedict` |
-| `benedict-vercel` | `api/openai-responses`, `providers/vercel` | `benedict` |
-| `benedict-anthropic` | `api/anthropic-messages`, `providers/anthropic` | `benedict` |
+| `benedict` | `core/` | Emacs 29.1 |
+| `benedict-transport` | shared logging and HTTP support | `benedict`, system `curl` (D18) |
+| `benedict-auth` | credential resolution | `benedict-transport` |
+| `benedict-api` | protocol-neutral lowering and stream composition | `benedict-transport`, `benedict-auth` |
+| `benedict-openai-responses` | reusable OpenAI Responses adapter | `benedict-api` |
+| `benedict-vercel` | Vercel service catalog | `benedict-openai-responses` |
+| `benedict-eval`, `-retry`, `-store`, `-recovery` | one first-party extension each | declared lower packages only |
+| `benedict-ui`, `benedict-headless` | independently installable frontends | `benedict` plus their declared UI/policy dependencies |
+| `benedict-distro` | dependency aggregation for first-party extensions/UI | the packages above |
 
 A user who wants the kernel and nothing else installs `benedict`. The default
 experience is `benedict-distro`. Provider packages are independent, which is the
@@ -2154,19 +2190,11 @@ no vocabulary for one. `benedict-http` must therefore fail with a message naming
 whatever `make-process` signals; a missing binary is the one dependency failure
 a user can act on immediately.
 
-Until the split is worth the friction, a single package with these boundaries
-enforced by discipline and dependency tests is acceptable. The boundaries must be
-real in the dependency graph even when they are not yet real in the package
-manifest.
-
-Phase 5 put a price on that "until". The frontend needs `vui` and
-`markdown-mode`, and one package has one manifest, so those two now sit in
-`core/benedict.el`'s `Package-Requires` — where they are false as a description
-of that file and of every layer below `ui/`. `package.el` has no vocabulary for a
-per-directory dependency, so a kernel-only install now pulls a render library it
-will never load. Nothing is broken and the dependency graph is still honest (the
-boundaries test sees to that), but the manifest is not, and that is the first
-concrete cost the split would remove rather than a hypothetical one.
+`packages/benedict-packages.el` is the artifact manifest and
+`scripts/build-packages.el` builds ordinary package tarballs.  The root Eask is
+the aggregate development environment, not the runtime manifest.  Artifact
+tests install the kernel alone and load every package from staged artifact
+contents, so source-tree load paths cannot hide undeclared files.
 
 ### 12.3 Distribution
 
@@ -2338,14 +2366,17 @@ advantage of the medium. It is mitigated structurally:
 - **P3, write-through durability.** Every entry hits disk as it is created, so a
   corrupted image loses at most the in-flight turn.
 - **Sessions are resumable.** Restart, reload the log, continue.
-- **Sandboxing is available when wanted.** A dispatch filter can route
-  `eval-elisp` to a subordinate Emacs (§6.4). This is an extension, and the
-  kernel never learns it exists.
+- **Process separation is available when wanted.** A dispatch filter can route
+  `eval-elisp` to a subordinate Emacs (§6.4). This protects the parent image
+  from some crashes and mutations. It is not a filesystem, network, credential,
+  or operating-system sandbox unless the extension launches it inside one.
 
-The posture is pi's: unrestricted by default, isolation available by
-configuration. The difference is that Benedict's isolation boundary is a
-subordinate Emacs process rather than a container, and it is reachable through
-the same dispatch chain that implements approvals.
+In-process `eval-elisp` has the authority of the Emacs image.  That includes
+access to approval hooks and policy state, so no permission extension can claim
+to confine arbitrary in-process Elisp.  Dispatch approval is useful mediation
+for cooperating tools. Coupled routing and approval compute the final
+invocation first, authorize that exact snapshot, and execute the same snapshot;
+later arbitrary hooks or advice remain trusted code, not a security boundary.
 
 ---
 
@@ -2435,9 +2466,10 @@ states the never-`add-hook`-a-lambda rule in bold (§9.2), gives §9.5's depth
 convention, and then hands off to `describe-function` and `apropos` (§10.2).
 The current base does not promise native OAuth in the shared resolver (the
 descriptor and headless interfaces exist, but resolution reports unsupported),
-real skill discovery, automatic session assembly, UI model selection, first-party
-coding tools, the packaging split, or transparent asynchronous same-run
-compaction. Those remain future extension work.
+real skill discovery, automatic session assembly, UI model selection,
+first-party coding tools, or a compaction policy.  The package split and generic
+asynchronous same-run request-preparation seam are complete; summary selection
+and generation remain extension work.
 
 *Exit:* the self-extension loop of §10.1 completes end to end — ask the agent for
 a capability, and it reads the guide, introspects the API, writes the tool,

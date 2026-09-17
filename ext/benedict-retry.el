@@ -2,6 +2,12 @@
 
 ;; Copyright (C) 2026 Scott Trinh
 
+;; Author: Scott Trinh <scott@scotttrinh.com>
+;; Version: 0.1.0
+;; Package-Requires: ((emacs "29.1") (benedict "0.1.0") (benedict-transport "0.1.0"))
+;; Keywords: tools, convenience, ai
+;; URL: https://github.com/scotttrinh/benedict
+
 ;;; Commentary:
 
 ;; Optional retry policy above the session state machine.  A failed attempt is

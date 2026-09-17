@@ -24,7 +24,8 @@
     ("api" "core" "support")
     ("providers" "core" "support" "api")
     ("ext" "core" "support" "api" "providers")
-    ("ui" "core" "support" "ext"))
+    ("ui" "core" "support" "ext")
+    ("distro" "core" "support" "api" "providers" "ext" "ui"))
   "Alist of LAYER to the layers LAYER may `require' from, itself excluded.
 
 Dependency direction is strictly downward.  The kernel in core/ requires

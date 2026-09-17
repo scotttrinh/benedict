@@ -35,6 +35,8 @@ api/        wire protocol adapters
 providers/  service catalog entries
 ext/        distro extensions (store, eval, files, approvals, ...)
 ui/         chat frontend and render components
+distro/     aggregate package entry point (no implementation policy)
+packages/   first-party package artifact manifest
 skills/     agent-facing skill files
 test/       ERT suites
 ```

@@ -53,6 +53,7 @@
 (require 'benedict-provider)
 (require 'benedict-message)
 (require 'benedict-api-transform)
+(require 'benedict-api-stream)
 
 ;;;; Configuration
 

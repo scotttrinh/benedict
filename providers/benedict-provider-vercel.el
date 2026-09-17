@@ -41,6 +41,7 @@
 (require 'benedict-provider)
 (require 'benedict-http)
 (require 'benedict-auth)
+(require 'benedict-api-openai-responses)
 
 ;;;; Configuration
 

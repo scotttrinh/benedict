@@ -188,6 +188,36 @@
              (lambda (value) (setq result value)))
     (should (benedict-tool-result-value-error-p result))))
 
+(ert-deftest benedict-eval-context-binds-project-without-changing-target ()
+  "Evaluation sees the captured root without mutating the target buffer."
+  (let ((buffer (generate-new-buffer " *benedict-eval-target*")))
+    (unwind-protect
+        (with-current-buffer buffer
+          (setq default-directory "/tmp/")
+          (let* ((context (benedict-eval-context-create
+                           :project-root benedict-test-root
+                           :target-buffer buffer))
+                 (result (benedict-eval-run "default-directory" context)))
+            (should (equal (read (benedict-tool-result-value-content result))
+                           benedict-test-root))
+            (should (equal default-directory "/tmp/"))))
+      (kill-buffer buffer))))
+
+(ert-deftest benedict-eval-killed-target-fails-without-retargeting ()
+  "A dead captured target does not fall back to the ambient current buffer."
+  (let* ((buffer (generate-new-buffer " *benedict-eval-dead*"))
+         (context (benedict-eval-context-create
+                   :project-root benedict-test-root :target-buffer buffer))
+         (benedict-eval-test--dead-target-side-effect nil))
+    (kill-buffer buffer)
+    (let ((result (benedict-eval-run
+                   "(setq benedict-eval-test--dead-target-side-effect t)"
+                   context)))
+      (should (benedict-tool-result-value-error-p result))
+      (should (string-match-p "target buffer was killed"
+                              (benedict-tool-result-value-content result)))
+      (should-not benedict-eval-test--dead-target-side-effect))))
+
 (provide 'benedict-eval-test)
 
 ;;; benedict-eval-test.el ends here

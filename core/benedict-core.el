@@ -101,7 +101,7 @@ thunk is a no-op rather than taking the idle branch and reviving queued work."
   "Arrange for queued input after SESSION's run has cleanly cleared.
 
 The deferred thunk belongs to one terminal boundary of one session: it retains
-SESSION's terminal EPOCH and terminal REASON, so a later run on that session
+SESSION's TERMINAL-EPOCH and terminal REASON, so a later run on that session
 invalidates it while unrelated sessions cannot."
   (funcall benedict-core-defer-function
            (lambda ()
@@ -134,6 +134,10 @@ a stale token is discarded.  Tokens are globally monotonic across runs.")
                  :documentation "Non-nil while a provider stream is open.")
   (stream-cancel nil
                  :documentation "Thunk that asks the provider to stop, or nil.")
+  (preparation-active nil
+                      :documentation "Non-nil while asynchronous request preparation is pending.")
+  (preparation-cancel nil
+                      :documentation "Thunk cancelling request preparation, or nil.")
   (streaming-entry nil
                    :documentation "The partially-built assistant entry, or nil.
 Mutated in place by stream events and not appended to the transcript
@@ -183,13 +187,13 @@ generation, so a stale continuation cannot act on a replacement run."
 (defun benedict-core--record-error (session condition)
   "Preserve the first caught Elisp CONDITION for SESSION's active run.
 
-CONDITION is the condition-case data list.  The copy prevents later mutation
+CONDITION is the `condition-case' data list.  The copy prevents later mutation
 from changing the diagnostic exposed by `benedict-session-last-error'."
   (unless (benedict-session-last-error session)
     (setf (benedict-session-last-error session) (copy-tree condition))))
 
 (defun benedict-core--safe-hook-run (session hook &rest args)
-  "Run each HOOK observer once, returning its first caught condition.
+  "Run each HOOK observer for SESSION once, returning the first condition.
 
 Later observers still run after an earlier observer signals, which keeps
 terminal cleanup bounded and gives every observer one notification attempt."
@@ -221,8 +225,15 @@ one best-effort turn-end notification before run-end cleanup."
         (condition-case cancel-error
             (funcall cancel)
           (error (benedict-core--record-error session cancel-error))))
+      (when-let ((cancel (benedict-run-preparation-cancel run)))
+        (setf (benedict-run-preparation-cancel run) nil)
+        (condition-case cancel-error
+            (funcall cancel)
+          (error (benedict-core--record-error session cancel-error))))
       (setf (benedict-run-stream-active run) nil
-            (benedict-run-stream-cancel run) nil)
+            (benedict-run-stream-cancel run) nil
+            (benedict-run-preparation-active run) nil
+            (benedict-run-preparation-cancel run) nil)
       (when-let ((entry (benedict-run-streaming-entry run)))
         (setf (benedict-run-streaming-entry run) nil)
         (benedict-core--tag-origin session entry)
@@ -387,17 +398,26 @@ no-op because that run is already ending."
         (error (setq transition-error error)))
       (if transition-error
           (benedict-core--fail-run session transition-error)
-        (when-let* ((run (benedict-session-run session)))
-          (setf (benedict-run-generation run)
-                (cl-incf benedict-core--generation-counter))
-          (when-let* ((cancel (benedict-run-stream-cancel run)))
-            (setf (benedict-run-stream-cancel run) nil)
-            (condition-case error
-                (funcall cancel)
-              (error
-               (benedict-core--record-error session error)
-               (setf (benedict-session-stop-reason session) 'error)))))
-        (benedict-core--defer session))))
+        (progn
+          (when-let* ((run (benedict-session-run session)))
+            (setf (benedict-run-generation run)
+                  (cl-incf benedict-core--generation-counter))
+            (when-let* ((cancel (benedict-run-stream-cancel run)))
+              (setf (benedict-run-stream-cancel run) nil)
+              (condition-case error
+                  (funcall cancel)
+                (error
+                 (benedict-core--record-error session error)
+                 (setf (benedict-session-stop-reason session) 'error))))
+            (when-let* ((cancel (benedict-run-preparation-cancel run)))
+              (setf (benedict-run-preparation-cancel run) nil
+                    (benedict-run-preparation-active run) nil)
+              (condition-case error
+                  (funcall cancel)
+                (error
+                 (benedict-core--record-error session error)
+                 (setf (benedict-session-stop-reason session) 'error)))))
+          (benedict-core--defer session)))))
   (benedict-session-state session))
 
 (defun benedict-core--start-run (session)
@@ -580,7 +600,7 @@ Does nothing when a stream is already open, so re-entering the reducer in
   (benedict-session-state session))
 
 (defun benedict-core--cancel-invalid-request (session cancel)
-  "Cancel a provider request that was invalidated before dispatch returned."
+  "Call CANCEL for a request invalidated on SESSION before dispatch returned."
   (condition-case error
       (funcall cancel)
     (error
@@ -588,7 +608,7 @@ Does nothing when a stream is already open, so re-entering the reducer in
      (setf (benedict-session-stop-reason session) 'error))))
 
 (defun benedict-core--open-stream (session run generation)
-  "Build and send SESSION's next request under GENERATION.  Return nil.
+  "Build and send SESSION's next request for RUN under GENERATION.  Return nil.
 
 Events arriving under a superseded GENERATION are discarded, which is how
 an aborted stream stops mattering without the provider having to
@@ -602,28 +622,46 @@ keeps one error path rather than two."
         (benedict-run-offered-tools run) nil)
   (condition-case error
       (when (benedict-core--request-owned-p session run generation)
-        (let* ((request (benedict-core--build-request session))
-               (model (plist-get request :model))
-               (tools (plist-get request :tools))
-               (origin (list :provider (benedict-model-provider model)
-                             :api (benedict-model-api model)
-                             :model (let ((id (benedict-model-id model)))
-                                      (if (stringp id) (copy-sequence id) id)))))
-          (when (benedict-core--request-owned-p session run generation)
-            (setf (benedict-run-origin run) origin
-                  (benedict-run-offered-tools run) tools)
-            (when (benedict-core--request-owned-p session run generation)
-              (let ((cancel
-                     (benedict-provider-stream
-                      model request
-                      (lambda (event)
-                        (benedict-core--receive session generation event)))))
-                (if (and (benedict-core--request-owned-p session run generation)
-                         (benedict-run-stream-active-p run))
-                    (setf (benedict-run-stream-cancel run) cancel)
-                  (when (and (benedict-run-stream-active-p run)
-                             (functionp cancel))
-                    (benedict-core--cancel-invalid-request session cancel))))))))
+        (let ((request (benedict-core--build-request session)))
+          (setf (benedict-run-preparation-active run) t)
+          (let ((cancel
+                 (benedict-hook-prepare
+                  session request
+                  (lambda (prepared)
+                    (when (and (benedict-core--request-owned-p
+                                session run generation)
+                               (benedict-run-preparation-active run))
+                      (setf (benedict-run-preparation-active run) nil
+                            (benedict-run-preparation-cancel run) nil)
+                      (condition-case prepare-error
+                          (benedict-core--dispatch-prepared-request
+                           session run generation prepared)
+                        (error
+                         (benedict-core--record-error session prepare-error)
+                         (benedict-core--receive
+                          session generation
+                          (list :type :error :reason 'error
+                                :message (error-message-string prepare-error)))))))
+                  (lambda (condition)
+                    (when (and (benedict-core--request-owned-p
+                                session run generation)
+                               (benedict-run-preparation-active run))
+                      (setf (benedict-run-preparation-active run) nil
+                            (benedict-run-preparation-cancel run) nil)
+                      (benedict-core--record-error session condition)
+                      (benedict-core--receive
+                       session generation
+                       (list :type :error :reason 'error
+                             :message (error-message-string condition)))))
+                  (lambda ()
+                    (benedict-core--request-owned-p session run generation)))))
+            (when (and (benedict-run-preparation-active run)
+                       (benedict-core--request-owned-p session run generation))
+              (setf (benedict-run-preparation-cancel run) cancel))
+            (unless (and (benedict-run-preparation-active run)
+                         (benedict-core--request-owned-p session run generation))
+              (when (functionp cancel)
+                (benedict-core--cancel-invalid-request session cancel))))))
     (error
      (benedict-core--record-error session error)
      (when (benedict-core--request-owned-p session run generation)
@@ -631,6 +669,34 @@ keeps one error path rather than two."
         session generation
         (list :type :error :reason 'error
               :message (error-message-string error))))))
+  nil)
+
+(defun benedict-core--dispatch-prepared-request (session run generation request)
+  "Validate and dispatch SESSION's prepared REQUEST owned by RUN and GENERATION."
+  (setq request (copy-sequence request))
+  (plist-put request :tools
+             (benedict-core--normalize-tools (plist-get request :tools)))
+  (benedict-core--validate-request request)
+  (let* ((model (plist-get request :model))
+         (tools (plist-get request :tools))
+         (origin (list :provider (benedict-model-provider model)
+                       :api (benedict-model-api model)
+                       :model (let ((id (benedict-model-id model)))
+                                (if (stringp id) (copy-sequence id) id)))))
+    (when (benedict-core--request-owned-p session run generation)
+      (setf (benedict-run-origin run) origin
+            (benedict-run-offered-tools run) tools)
+      (let ((cancel
+             (benedict-provider-stream
+              model request
+              (lambda (event)
+                (benedict-core--receive session generation event)))))
+        (if (and (benedict-core--request-owned-p session run generation)
+                 (benedict-run-stream-active-p run))
+            (setf (benedict-run-stream-cancel run) cancel)
+          (when (and (benedict-run-stream-active-p run)
+                     (functionp cancel))
+            (benedict-core--cancel-invalid-request session cancel))))))
   nil)
 
 ;;;; Stream events
@@ -906,7 +972,7 @@ signalled."
   (benedict-session-state session))
 
 (defun benedict-core--tool-done (session operation invocation result)
-  "Record RESULT for OPERATION's INVOCATION and advance, at most once.
+  "Record RESULT for SESSION's OPERATION and INVOCATION, then advance once.
 
 The operation identity and generation are checked before consuming the result
 callback and after every extension boundary.  A consumed or stale callback is a
